@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "dftracer": {
+      "enabled": false
+    },
+    "phronix": {
+      "type": "local",
+      "command": [
+        "phronix-mcp-server",
+        "--no-setup",
+        "--quiet"
+      ],
+      "enabled": true
+    }
+  }
+}

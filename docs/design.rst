@@ -1,0 +1,1052 @@
+==========================
+phronix — design document
+==========================
+
+:Status: living document, kept in step with the code
+:Audience: someone who will change phronix, or judge whether to trust it
+
+.. contents::
+   :local:
+   :depth: 2
+
+
+What phronix is
+===============
+
+phronix is a framework for agents that get better at a codebase over time
+instead of starting from zero every session. It rests on one claim:
+
+   An agent's knowledge should be **durable, retrievable, and checkable**.
+
+Three mechanisms follow from that, and everything in the codebase is one of
+them or serves one of them.
+
+**Self-research.** Before attempting unfamiliar work, find out how the work
+should be done — externally, not only from the code in front of you — and turn
+the answer into infrastructure rather than into an answer.
+
+**Self-learning.** After doing work, record what generalises: a lesson into a
+skill, a durable fact into memory, a deterministic procedure into code.
+
+**Self-healing.** When something is wrong — a broken tool, a failed approach —
+fix the thing itself rather than working around it, and record what was ruled
+out so the next session does not re-derive it.
+
+The unifying discipline is **predictor/corrector**. Learning and healing are
+*predictions*: "this is how it works", "this fix will hold". A corrector is a
+deterministic check that says whether the prediction still holds — same verdict
+on every machine, forever, with no model in the loop. A claim nobody can
+falsify is a liability in a shared knowledge base, because it gets trusted long
+after it stops being true.
+
+
+Why the knowledge is a database, not notes
+==========================================
+
+The tempting design is a folder of markdown notes an agent greps. It fails in
+a specific way: notes accrete, retrieval returns whole documents, context fills
+with things that are almost relevant, and nobody can tell whether an entry is
+still true.
+
+phronix instead treats knowledge as a small relational database expressed in
+markdown, with stable keys, a catalogue, and typed relations.
+
+Skills: one subject, labelled blocks
+------------------------------------
+
+A **skill** is one subject and only one. It has two files:
+
+``SKILL.md``
+   The Index, plus labelled blocks: ``I*`` instructions, ``R*`` rules, ``X*``
+   references. This is what *skill search* returns — how to do the thing.
+
+``LESSONS.md``
+   ``P*`` pitfalls and ``L*`` lessons. This is what *memory search* returns —
+   what went wrong before.
+
+The split is not tidiness. "How do I do this?" and "what went wrong last time?"
+are different questions asked at different moments; keeping them in one file
+means every retrieval of either drags in the other, and the file grows until no
+part of it can be loaded alone.
+
+Labels (``I3``, ``R2``) are **stable keys**. They are allocated from the highest
+number in use and never recycled, because a reused label silently redirects
+every existing cross-reference to different content — the exact failure stable
+keys exist to prevent. Cross-references are wiki-links with a label, so
+``[[phronix-privacy#R4]]`` is a foreign key into another skill's row.
+
+The Index is a generated catalogue: label, section, and a ``covers`` phrase.
+It is regenerated on every write, so the catalogue cannot drift from the file.
+
+Enforced constraints
+--------------------
+
+Structure that is merely requested is structure that decays. These are checked
+at write time:
+
+``BLOCK_LIMITS``
+   ``rule`` 1000 characters, ``instruction``/``reference`` 1400, ``lesson``/
+   ``pitfall`` 3000. Over-long blocks are **rejected**, with a message naming
+   the limit and the remedy, not truncated — a silently cut body is a
+   half-sentence presented as complete knowledge.
+
+   This limit exists because of a measured failure: a run wrote a 12 KB skill
+   whose correct fix sat as a sub-bullet inside one instruction. Three later
+   attempts retrieved that skill and none acted on it. The signal was present
+   and its length destroyed it.
+
+One subject per skill
+   Enforced socially rather than mechanically, but the retrieval design makes
+   violations expensive: a skill covering two subjects matches both and returns
+   the wrong blocks for each.
+
+
+Retrieval: index first, then blocks
+===================================
+
+``phronix.skills.search`` runs in two phases.
+
+1. **Index.** Score each skill's subject, description and Index rows. This
+   answers "which subject is this question about?" without block bodies voting.
+2. **Expand and match.** Fold the matched rows' ``covers`` text into the query,
+   then score blocks with the expanded terms. Index rows describe the subject
+   in the skill's own vocabulary, which is usually not the asker's; that
+   expansion bridges the two.
+
+Only ``covers`` is scored, never the ``section`` column — it holds one of three
+fixed values, so scoring it made every query containing "rule" or "reference"
+match the entire library.
+
+Relevance is weighted by rarity
+-------------------------------
+
+A match must account for at least ``MIN_TERM_COVERAGE`` (0.30) of a query's
+*discriminating power*, where each term is weighted by inverse document
+frequency.
+
+Plain term counting fails in both directions, and both were observed:
+
+* "pylint recursive mode ignoring ignore-paths configuration" matched five
+  framework skills on the single generic word **"mode"** and looked like a hit;
+* "redact usernames and home paths before writing" matched ``phronix-privacy``
+  on 2 of 6 terms and looked like a miss.
+
+Rarity separates them: "mode" appears in most skills and weighs ~0.1; "usernames"
+appears in one and weighs ~2.6. Measured separation on real queries is wide —
+irrelevant domain queries land at 0.14–0.17, genuinely relevant ones at
+0.62–1.00.
+
+**Returning nothing is a feature.** An empty result tells an agent it is the
+first to meet this problem — true, useful, and cheap. Five irrelevant skills
+tell it the system has knowledge, cost thousands of tokens of context to
+disprove, and teach it that searching is not worth doing.
+
+
+Layers: where knowledge lives
+=============================
+
+Three layers, resolved highest-first, each holding the same
+``CONTENT_DIRS``: ``skills``, ``agents``, ``memory``, ``capabilities``,
+``verifiers``, ``research``.
+
+============  ===========================  =============================================
+layer         location                     role
+============  ===========================  =============================================
+bundled       inside the installed wheel   what phronix ships with
+user          ``~/.phronix``               learned across this person's projects
+project       ``<repo>/.phronix``          learned by this repository; committed
+============  ===========================  =============================================
+
+A higher layer shadows a lower one wholesale by name, rather than merging block
+by block: partial merges produce documents no author ever wrote, and debugging
+them means reasoning about three files at once.
+
+Writes go to the project layer by default, so knowledge travels with the code it
+is about, in the same commit and the same review. ``resolve_write_layer`` guards
+against a phronix checkout installed in editable mode capturing another
+project's learning.
+
+
+Capabilities: deterministic work becomes code
+=============================================
+
+A **capability** is an MCP tool authored at runtime and stored in a layer, not
+in the wheel — an installed wheel is read-only, and learning that could only be
+written into it would not be learning.
+
+The rule is simple: *a deterministic procedure described in prose is a procedure
+that will be performed differently next time.* If a step has one right answer
+for given inputs, it becomes code via ``capability_new``, and prose describes
+only the decisions.
+
+
+Verification: the corrector half
+================================
+
+Every learned thing is a prediction; a verifier is its corrector. Verifiers are
+deterministic Python, and the five facets are the contract:
+
+===========  ================================================================
+facet        what it establishes
+===========  ================================================================
+assumptions  the preconditions the claim needs (gating)
+inputs       what it operates on is present and well-formed (gating)
+constraints  limits that must hold
+invariants   properties that must not change
+outputs      what it produces is what it promised
+===========  ================================================================
+
+``assumptions`` and ``inputs`` are **gating**: when they fail the verdict is
+``inconclusive``, not ``fail``. A check that could not run has not found a
+defect, and reporting one would train people to ignore verdicts.
+
+Statuses are ``pass``, ``fail``, ``inconclusive``, ``error``, aggregated
+worst-first as ``fail`` > ``error`` > ``inconclusive`` > ``pass``. ``error`` is
+kept distinct from ``fail`` because a broken verifier and a broken claim need
+different responses.
+
+``verify_coverage`` reports what has *no* verifier at all, since the most
+dangerous claim is the one nobody thought to check.
+
+
+Self-research
+=============
+
+The step that goes missing when an agent is capable enough to start
+immediately. Observed: given an unfamiliar bug, an agent opens the file it first
+suspects, writes a plausible fix, fails, and — with a learning loop attached —
+records steadily more detailed notes about that same file. Three attempts, one
+location, and the real fix one line away in a module nobody opened.
+
+Gate, then strategy
+-------------------
+
+``research_assess`` is deterministic: it counts matching blocks in the
+catalogue, so "do I already know this?" is a lookup rather than a matter of the
+model's confidence — which is the signal that is wrong in exactly the case that
+matters. Fewer than ``MIN_BLOCKS_FOR_COVERAGE`` (2) blocks is a ``gap``.
+
+On a gap, the strategy runs **in this order**, and the order is the substance:
+
+1. **Characterise the subject** — library defect, tool usage, algorithm/format,
+   or environment problem. Each sends you somewhere different.
+2. **Search outside the checkout, before reading the code.** For a defect: the
+   issue as filed, whether it was fixed upstream, the commit that fixed it. For
+   a tool: its documentation and ``--help``, the exact option, its default and
+   interactions, then a worked example.
+3. **Ground it locally** — locate each candidate's code path *at this version*
+   and confirm the code matches what the source implies.
+4. **Measure.**
+
+Reading the code first anchors the agent to whichever file it opened, after
+which every search becomes a search for confirmation.
+
+The stages, and which of them may be cut short
+----------------------------------------------
+
+A research pass is a fixed sequence of agent invocations, each with its own
+budget. The first pass explores; every later one diagnoses.
+
+==================  ======  ==========================================================
+stage               budget  what it is for                                            
+==================  ======  ==========================================================
+``survey``          180     what is already known, here and upstream                  
+``plan``            600     the figure of merit, the corpus and its split, the aspects
+``aspect`` ×N       540     investigate one question — *and try what it turns up*     
+``aspect-record``   420     file what an aspect found; a guarded clock, not a budget  
+``aspect-recheck``  150     confirm a settled finding still applies at this version   
+``collect``         480     three investigations become one account                   
+``propose``         600     candidate approaches, two to four, genuinely different    
+``tune`` ×N         600     measure on train+validate, refine, measure again          
+``evaluate`` ×N     240     score on the held-out set, once, changing nothing         
+``execution-plan``  600     write the plan, build its tools; the skill comes out      
+``diagnose``        600     *retries only*: reproduce, refine, re-measure             
+==================  ======  ==========================================================
+
+``survey``            180  what is already known, here and upstream
+``plan``              600  the figure of merit, the corpus and its split, the aspects
+``aspect`` ×N         540  investigate one question — *and try what it turns up*
+``aspect-record``     420  file what an aspect found; unbudgeted work, guarded clock
+``aspect-recheck``    150  confirm a settled finding still applies at this version
+``collect``           480  three investigations become one account
+``propose``           600  candidate approaches, two to four, genuinely different
+``tune`` ×N           600  measure on train+validate, refine, measure again
+``evaluate`` ×N       240  score on the held-out set, once, changing nothing
+``execution-plan``    600  write the plan and build its tools; the skill comes out
+``diagnose``          600  *retries only*: reproduce the failure, refine, re-measure
+=================  ======  ==========================================================
+
+The parallel stages — ``aspect``, ``tune``, ``evaluate`` — explore. Three run at
+once and one cut short costs that branch and nothing else.
+
+The rest is connective tissue, and ``MUST_FINISH_STAGES`` marks it: ``plan``
+decides what the investigation will even look at, ``collect`` is where three
+investigations become one account, ``propose`` turns that account into
+candidates, ``diagnose`` is a retry's whole job, and ``execution-plan`` writes
+the skill that is the entire durable output. Truncating one of those does not
+lose a branch, it loses the flow — a ``collect`` cut half way discards what three
+investigators spent 700 seconds finding, and ``propose`` then works from a
+partial summary. Their ceilings are hang-guards, not work budgets, and
+``status.sh`` reports a truncated one as a defect rather than as normal.
+
+The figure of merit, fixed in advance
+-------------------------------------
+
+``research_define_fom(topic, name, direction, target, measure)`` declares the one
+number that decides, before any approach is compared. A criterion chosen after
+the results are in is a justification, not a test. ``measure`` is mandatory: a
+figure of merit nobody can re-derive cannot be checked, and an unfalsifiable
+criterion lends the appearance of rigour to an unmeasured choice.
+
+It cannot be renamed once anything is measured against it. ``rank_approaches``
+reads each approach's metric *by name*, so renaming the criterion silently
+unscores every measurement taken under the old one: those approaches then sort
+below candidates with worse numbers and below candidates nobody measured at all.
+
+Measured, across three consecutive runs of pylint-7080: a refinement carrying
+the correct fix scored 1.0 under ``recursive_discovery_ignore_accuracy``, a
+later stage redeclared the metric as ``files_correctly_filtered``, and the
+refinement ranked below a 0.5. The attempt implemented something else and failed
+the same way each time. ``define_fom`` now refuses the rename and names the
+approaches that would be unscored; re-declaring the same metric stays
+idempotent, and changing it before anything is measured is still free.
+
+Approaches are potential until the tests say otherwise
+------------------------------------------------------
+
+Every approach is recorded with a ``source`` and enters as ``potential``. It
+becomes ``working`` only when the task actually passes with it, and
+``falsified`` when it was built and measured and did not work. **No status is
+reachable by argument.**
+
+This replaced an earlier design that ranked predicted scores and spent the
+attempt on the winner. That design failed invisibly: two runs of the same task,
+same model, same prompts, each asserted the top score for a *different*
+approach, each was trivially its own argmax, and the corrector reported ``pass``
+for both — while only one of the patches fixed anything. An argmax over
+predictions returns whatever the agent already believed.
+
+So candidates are **built in parallel**, one agent each, in separate containers
+and checkouts, and judged by the same evaluator. The one that passes is marked
+``working``; the rest are ``falsified`` and never spend an agent again.
+
+A failure names an approach, and ``research_add_approach`` then refuses that
+name outright. Prompt-level discouragement was not enough: one task re-proposed
+a single wrong idea across four attempts, each round rediscovering that it did
+not work, because nothing on the write path could tell "not tried yet" from
+"tried and lost".
+
+Refinement: right idea, wrong extent
+------------------------------------
+
+Blanket refusal turned out to be too blunt in the other direction. A pylint task
+failed with the ignore check added to exactly the right function, on exactly the
+right line, and no path normalisation — so ``./ignored_subdirectory/failing.py``
+never matched an anchored pattern. The idea was right and one call short, and
+banning the name sent the next attempt looking elsewhere, away from an answer it
+was a line from having.
+
+Two failures wear the same status and the test output tells them apart:
+
+* the change never ran, or ran and the behaviour was untouched — the idea is
+  wrong, and the refusal is correct;
+* the change ran, in the right place, and missed a specific case — the idea is
+  right, and what it needs is the missing case, not a replacement.
+
+``research_refine_approach(topic, key, diagnosis, change)`` takes the second
+path. It records a **new** approach with its own key, linked to the parent by
+``refines``, the parent marked ``superseded_by``. Deliberately expensive to
+call: the ``diagnosis`` must say what the failure output actually showed and the
+``change`` what will be different, both checked for substance, because without
+them this is the rename the refusal exists to stop.
+
+A revision starts **unmeasured**. Inheriting the parent's metrics would let a
+score obtained by the version that failed rank the version that replaced it,
+which is the one comparison this must not allow.
+
+And refinement is bounded — ``MAX_REFINEMENTS`` is 2. "Nearly right, one more
+tweak" is available forever if nothing stops it, and an unbounded version of
+this becomes the failure it was built to fix: one idea consuming every remaining
+attempt. Past the bound the diagnosis is what is wrong, not the implementation.
+
+Aspects try what they find
+--------------------------
+
+The aspect stage investigates in parallel, one agent per independent question.
+It used to be read-only, which meant every candidate reached the ranking as a
+*prediction* and the first real measurement happened two stages later.
+
+That failed in a specific, repeatable way: a research pass would end with its
+top-ranked approach scoring **0.0** and every other candidate unmeasured — so
+the attempt implemented the only thing carrying a number, and the number said it
+did not work. ``research_choose`` already refuses to select on predictions; the
+flow simply had nowhere earlier to produce anything better.
+
+So each aspect now gets its own git worktree and is told to change the code and
+see: run the **train** and **validate** instances, record trials, and record the
+approach with ``measurement`` naming the commands behind the numbers. An idea
+that falls short is refined and measured again rather than abandoned. This is
+the cheapest point in the flow to produce a measured candidate — the agent is
+already in the code, and the corpus was declared by ``plan`` before aspects
+started.
+
+The worktree is what makes it safe. Three concurrent agents editing one checkout
+each measure a mixture of everybody's edits; and the aspects must not touch the
+tree the attempt is diffed from. One helper builds them for aspects and
+evaluators alike, symlinking ``.opencode`` in — without it the agent comes up
+with no phronix tools at all and cannot record a trial, which fails quietly as
+"scores that turn out to be predictions".
+
+Tuning and scoring are different stages, on different instances
+---------------------------------------------------------------
+
+Refinement is only useful where it cannot corrupt the measurement. Putting it in
+the evaluation stage was the obvious choice and the wrong one: an approach
+adjusted in response to the held-out set has been tuned on that set, and nothing
+downstream can falsify anything afterwards.
+
+So the two are separate stages over one corpus, split 80:20:
+
+``tune``
+   Runs **train + validate** (80%) in a private worktree. Measures, and when
+   instances fail, refines — ``research_refine_approach``, apply, re-measure,
+   up to ``MAX_REFINEMENTS``. Failing here refutes nothing: train is where
+   approaches are discovered and validate is where they are tuned, so a failure
+   is unfinished work.
+
+``evaluate``
+   Runs **test** (20%) once, on whatever tuning left behind, and may change
+   nothing. ``final_revision`` resolves the refinement lineage so the score
+   lands on the version tuning produced rather than the one it started from —
+   otherwise the improvement is measured away and the stage is worthless while
+   appearing to work.
+
+``MIN_CORPUS_INSTANCES`` is 20, and ``split`` warns below it. At twenty the
+unseen set is four cases; at ten it is two, and two cases can be passed by
+accident — which then reads as ``confirmed`` and licenses writing the approach
+up as knowledge. The corpus must also be diverse across the declared axes,
+negative cases included: a change that ignores everything passes every positive
+case there is.
+
+An approach IS a pipeline
+-------------------------
+
+An approach is a *way of solving the problem*, and the honest expression of a
+way is a sequence of steps. Recorded as a name and a paragraph, it can only be
+argued about; recorded as a pipeline it can be run, measured, refined and — if
+it wins — shipped.
+
+So the flow carries pipelines rather than descriptions:
+
+* ``propose`` records each candidate with ``research_record_pipeline``;
+* ``tune`` runs those steps to measure the approach, and re-records the pipeline
+  it actually executed — the one stage that knows the steps are real rather than
+  imagined;
+* ``evaluate`` scores the pipeline against held-out data;
+* ``execution-plan`` calls ``research_adopt_pipeline``, promoting the winner's
+  own steps to be the plan, and builds a capability for every deterministic
+  step **across every live approach** — not only the winner's.
+
+That last point is what makes the fallbacks real. The alternates are the path a
+retry takes, and a fallback whose steps have no tools is prose the next attempt
+must interpret at the exact moment the cheap answer has already failed. The
+skill therefore carries the leading pipeline in full and the next three as one
+line per step, ranked by the same metric — compact by construction, because four
+pipelines in full would exceed the block limit and be rejected, which is how a
+fallback silently stops existing.
+
+Adopting rather than rewriting matters for the same reason the figure of merit
+is fixed in advance: a plan written fresh at the end of research is a fourth
+version of something already established three times, and it is the version
+nobody measured.
+
+The solution is a sequence of steps, and each step wants to be a tool
+---------------------------------------------------------------------
+
+What research delivers is a **method**, not an answer. A diff solves one
+instance; a skill is filed under a subject and has to solve the next one too.
+So ``research_write_plan`` records the ordered steps that solve this *class* of
+problem — "find every place the value is compared against the pattern", not
+"edit line 604" — and the playbook renders them into the skill as a numbered
+pipeline.
+
+Each step is tagged, and the tag decides what it becomes:
+
+``deterministic``
+   Same inputs, same outputs, every time. It gets a capability built for it with
+   ``capability_new`` and appears in the skill as ``tool_name(...)`` — the next
+   attempt calls it. Locating call sites, normalising a path, running the
+   corpus: these are tools, and each one built is work no future attempt pays
+   for again.
+
+``judgement``
+   A real decision that needs a model. Kept few and labelled as such, so a step
+   that needs a person is never mistaken for infrastructure nobody built.
+
+Measured, the first time an attempt ran a plan built this way:
+
+.. code-block:: text
+
+   skill_load(pylint-dev)
+   verify_recursive_ignore_paths(.)        reproduce
+   apply_ignore_paths_recursive_fix(.)     apply
+   verify_recursive_ignore_paths(.)        confirm
+   run_ignore_paths_regression_tests(.)    regressions
+
+**7 steps, 1,136 generated tokens.** The same task, two runs earlier, following
+prose: 51 steps and 3.2M cache-read tokens.
+
+The preference for tools is economic, not aesthetic. A capability costs one tool
+call and behaves identically forever; an instruction is read, interpreted and
+acted on afresh by every task that loads the skill. Measured on pylint-7080: an
+attempt following prose reached the correct edit in six steps and spent
+forty-five more around it, at ~54k tokens of working context per step. The
+corrector enforces the split — a deterministic step with no capability fails
+``invariants`` as ``N deterministic step(s) have no capability``, because a plan
+that reads as automated while every attempt still does the work by hand is the
+failure this distinction exists to catch.
+
+The measured change travels as evidence
+---------------------------------------
+
+The point of researching before an attempt is that the attempt becomes cheap.
+It was not: research would reach the right answer and the attempt would then
+rebuild it. Measured on pylint-7080 — the skill directed the correct edit in six
+steps, and the attempt spent forty-five more around it at ~54k tokens of working
+context per step. Re-deriving what research already made is the largest
+avoidable cost in a researched attempt.
+
+The tuning stage already produces the artefact: a candidate applied in a private
+worktree and run against the corpus. That worktree was then discarded. Now the
+harness captures ``git diff`` from it and ``record_change`` writes it to
+``research/changes/<topic>-<key>.patch``, referenced from the approach as
+``change_patch`` with ``change_files`` and ``change_lines`` describing its shape.
+
+It is evidence, not the method: proof the approach was really applied and
+measured, and a reference when a step turns out ambiguous. The attempt is
+pointed at the steps, never told to replay a diff.
+
+**A file, not an inline field.** Inlining a 4 KB patch would put it in the
+approach, in the skill, in every quote of the skill and in every subsequent turn
+of the conversation — paying for the change repeatedly in order to avoid
+deriving it once. As a path it costs nothing: the playbook marks the candidate
+**patch on file**, the attempt runs ``git apply`` and goes straight to
+verifying, and the diff never enters anyone's context.
+
+Captured by the harness rather than written out by an agent, so what the attempt
+applies is the change that was *measured* and not a description of it that may
+differ in exactly the detail that mattered. ``CHANGE_LIMIT`` (4000 characters)
+refuses anything larger: a diff that big is a working tree with debris in it
+rather than a fix.
+
+The solution is fetched a block at a time
+-----------------------------------------
+
+The skill an attempt loads is re-read on every step it takes: each api call
+carries the whole conversation again, so a block loaded once and never used
+costs its tokens once per *step*, and these attempts run to dozens. Measured: a
+working context of ~54k re-read 72 times came to 4.3M cache-read tokens against
+23.7k actually generated.
+
+So the attempt does not load the solution skill whole. It queries the knowledge
+graph for the block it needs and fetches that section:
+
+.. code-block:: text
+
+   graph_query(question="steps to solve <topic>")   locate
+   graph_get_node(node=...)                         fetch that section only
+
+A heading node resolves to exactly its markdown section, so ``Steps to solve X``
+comes back without the evaluation notes, the fallbacks, the aspects
+investigated, or everything tried and refuted — all of which the skill also
+holds, and none of which is needed to start. The fallback block is fetched the
+same way, and only when the leading approach has actually failed.
+
+``execution-plan`` calls ``graph_ensure`` immediately after writing the skill,
+because that is the moment it changed; without it the first query pays for a
+rebuild or misses the block entirely. ``skill_load`` remains as a fallback, and
+an attempt that needs it is told to say so — a graph miss is a defect worth
+knowing about rather than a silent doubling of context.
+
+A retry repairs in parallel, then reconciles
+--------------------------------------------
+
+A retry has the same shape as a research pass because it has the same problem:
+several agents work in parallel on separate approaches, and what each learns
+about the failing case bears on the others.
+
+``diagnose``
+   Reproduce the failure as a deterministic case, add it to the corpus as a
+   held-out instance, and refine every live approach the case defeats — that set
+   of revisions *is* the repair plan.
+
+``tune`` ×N (parallel)
+   One agent per revision, each in its own worktree, working on a pipeline that
+   already exists against a corpus that already exists.
+
+``collect`` (barrier)
+   Reconcile. Did the repairs converge — two agents making the same change for
+   the same reason is evidence about the *cause*, not coincidence. Did any
+   contradict another. Does any now cover a case another still misses.
+
+``evaluate`` ×N (parallel)
+   Score on the held-out set, changing nothing.
+
+The barrier is the point: fusing tune into evaluate here would score each
+revision before anybody had reconciled what the repairs found, and the case that
+defeated the last attempt is precisely what every candidate now has to answer.
+Nothing is re-explored — no survey, no aspects, no fresh proposals — because
+that is the expensive half of research and a retry already has its results.
+
+A retry diagnoses; it does not research again
+---------------------------------------------
+
+The revision pass before a retry used to re-run ``propose`` — the whole
+candidate space, a second time. So a pass holding a specific failure output
+spent its budget re-deriving alternatives instead of reading the one piece of
+evidence the first pass did not have. Measured: an attempt failed by a missing
+path normalisation, and the revision answered with four fresh candidates rather
+than the one-line fix to the approach that had everything else right.
+
+Retries now run a ``diagnose`` stage instead, and it is must-finish. Its order
+matters:
+
+1. **Build the failing case first**, as a script, in a fixed scratch location.
+   It must fail *the way the recorded output says* against the current checkout.
+   A reproduction that passes means the reading of the failure is wrong, and
+   everything built on it will be too.
+2. **Classify**: did the change engage? Right-and-incomplete goes to
+   ``research_refine_approach``; wrong-idea goes to a genuinely different
+   candidate.
+3. **Leave the test behind.** The reproduction path is recorded with the
+   revision, and the attempt prompt tells the next attempt to run it: it must
+   fail before the change and pass after, and the attempt may not report done
+   while it still fails.
+
+The reproduction is the part that makes this a corrector rather than a note. The
+failed attempt had its own reproduction and it *passed* — the case it built was
+easier than the case it was judged on, which is precisely how it shipped a fix
+that did not work. Encountering a different problem on the next attempt is a
+fine outcome. Failing the same way twice is the one that is ruled out.
+
+The plan, split by determinism
+------------------------------
+
+``research_write_plan`` requires every step tagged ``deterministic`` or
+``judgement``. Deterministic steps become capabilities; judgement steps become
+skill blocks. An untagged step is rejected rather than defaulted — defaulting to
+judgement turns mechanical work into prose that drifts, and defaulting to
+deterministic promises a repeatability the step cannot deliver.
+
+``research_verify`` is the corrector, with an extra facet beyond the standard
+five:
+
+``evidence``
+   Fails when no approach records where it came from, and fails when *every*
+   approach came from reading the local checkout. A set of approaches derived
+   entirely from the file in front of you is not research; it is one guess
+   written several ways, and in the record it is indistinguishable from genuine
+   investigation.
+
+
+Agents
+======
+
+Agents are defined once in harness-neutral YAML and rendered per harness:
+
+==========  ==========================================
+harness     rendered to
+==========  ==========================================
+claude      ``.claude/agents/<name>.md``
+opencode    ``.opencode/agents/<name>.md``
+copilot     ``.github/agents/<name>.agent.md``
+codex       ``.codex/agents/<name>.toml``
+==========  ==========================================
+
+An agent declares a **capability level** (``level_1``–``level_4``), never a model
+id. The indirection is what lets one definition run on four harnesses and makes
+a model upgrade a one-line edit in ``workspace/models.yaml`` rather than a sweep
+through every template.
+
+The shipped agents:
+
+==============================  ==============================================
+agent                           role
+==============================  ==============================================
+``phronix-router``              entry point; scopes skills and tools per task
+``phronix-researcher``          works out how an uncovered task should be done
+``phronix-healer``              diagnoses and fixes, then records what it learned
+``phronix-learner``             turns a finished session into durable knowledge
+``phronix-verifier``            builds and runs correctors
+``phronix-capability-builder``  turns procedures into MCP tools
+``phronix-planner``             decomposes work
+``phronix-privacy-guard``       keeps shared knowledge free of identifying detail
+==============================  ==============================================
+
+Tool lists are allowlists (``'*': deny`` plus named tools). This is right for
+delegated specialists and decides what a *primary* agent can do at all — the
+router has no ``Bash``/``Edit``/``Write``, so launching it as primary cannot
+change a line of code.
+
+
+Complexity: choosing the model level
+====================================
+
+As skills and agents grow, the work an agent does changes, and the model it
+needs changes with it. ``complexity_assess`` scores an agent from its own
+definition:
+
+============================  ======  ====================================
+signal                        weight  direction
+============================  ======  ====================================
+``reasoning_demand``          +0.30   rules and instructions to weigh
+``failure_surface``           +0.25   recorded ways it goes wrong
+``unverified_fraction``       +0.20   claims with no corrector
+``integration_breadth``       +0.15   systems it must touch
+``instruction_load``          +0.10   how much it must hold at once
+``tool_coverage``             −0.25   deterministic tools *reduce* difficulty
+============================  ======  ====================================
+
+The negative weight is the point: work done by an MCP tool is work the model no
+longer has to reason through, so building capabilities should *lower* the level
+an agent needs. Bands map the score to ``level_1``–``level_3`` (0.25/0.45/0.70),
+with a declared ``intrinsic`` floor for agents whose job is inherently hard
+regardless of tooling.
+
+
+Two kinds of capability, and no duplicates
+------------------------------------------
+
+Capabilities come from two places and are treated differently.
+
+**Solution tools** are the deterministic steps of a pipeline —
+``apply_ignore_paths_fix``, ``run_recursive_discovery``. They are task-shaped by
+design, built by ``execution-plan`` for every live approach rather than only the
+winner's, because the fallbacks are the path a retry takes and a fallback whose
+steps have no tools is prose to interpret at exactly the moment the cheap answer
+has already failed.
+
+**Method tools** carry the ``probe_`` prefix and know nothing about any task:
+set a fixture up in a given shape, run one area's tests and parse what failed,
+apply a candidate and report the figure of merit. They are built at the *end* of
+a research pass, when it knows which steps it actually repeated — building them
+mid-investigation interrupts the investigation, and before the pass ends a
+"reusable" tool is a guess.
+
+The prefix decides what a ``--fresh`` run inherits. Fresh withholds what earlier
+runs *learned*, not what they *built*: skills, research and solution tools stay
+behind, ``probe_`` tools come through. Excluding them would make "from scratch"
+mean "without tools", which is a claim about tooling rather than about learning,
+and would leave every run re-deriving the same shell scripting. A prefix rather
+than a metadata field because it is visible everywhere it matters — in the tool
+list the agent sees, in the file name, and in the seeding decision — so a
+capability that quietly encoded a task's answer under it would be visible in
+review for the same reason.
+
+**Neither kind may be built twice.** Because solution tools are task-shaped, a
+step in one task's pipeline is often a step in another's, authored under a
+different name by a pass that could not see the first. ``capability_new``
+fingerprints the module with docstrings, comments and the tool's own name
+stripped, so two versions differing only in naming and prose collapse to one
+value, and refuses a duplicate — returning the existing name to use instead.
+Three copies of one procedure have to be maintained, verified and chosen
+between, and choosing is a decision nobody meant to hand the next attempt.
+
+Privacy
+=======
+
+Everything phronix persists is committed and shared, so redaction happens on the
+write path, not as a later audit: usernames, home paths, hostnames, emails, job
+ids. ``privacy_scan`` verifies deterministically, and ``privacy_add_pattern``
+teaches the redactor a leak class it does not know.
+
+Fixtures that must contain a realistic identifier carry an explicit exemption
+marker, so "this file is allowed to look like a leak" is a recorded decision
+rather than an exception in the scanner.
+
+
+Profiling
+=========
+
+OTLP-shaped telemetry with an MLflow sink: a parent run per session, a nested
+run per step, tokens and model level per step. The purpose is answering "what
+did this cost, and where" with measurements rather than impressions.
+
+
+The MCP surface
+===============
+
+51 tools across 12 services. ``context_service`` is registered first
+deliberately — tool order influences what a model reaches for, and retrieval
+should be the first thing it sees.
+
+=====================  ==========================================================
+service                tools
+=====================  ==========================================================
+context                ``context_skills`` / ``context_memory`` / ``context_for_task``
+skills                 ``skill_list`` / ``skill_index`` / ``skill_search`` /
+                       ``skill_load`` / ``skill_create`` / ``skill_write`` /
+                       ``skill_write_lesson``
+authoring              ``skill_define`` / ``agent_define`` (declarative, idempotent)
+memory                 ``memory_list`` / ``memory_recall`` / ``memory_read`` /
+                       ``memory_write``
+graph                  ``graph_ensure`` / ``graph_query`` / ``graph_get_node``
+research               ``research_assess`` / ``research_define_fom`` /
+                       ``research_add_approach`` / ``research_refine_approach`` /
+                       ``research_choose`` / ``research_rank`` /
+                       ``research_write_plan`` / ``research_playbook`` /
+                       ``research_add_instances`` / ``research_split`` /
+                       ``research_record_trial`` / ``research_evaluate_approach`` /
+                       ``research_record_achieved`` / ``research_prior`` /
+                       ``research_approach`` / ``research_ruled_out`` /
+                       ``research_verify`` / ``research_status``
+privacy                ``privacy_scan`` / ``privacy_redact`` /
+                       ``privacy_suspects`` / ``privacy_add_pattern``
+capability             ``capability_list`` / ``capability_new``
+verification           ``verify_list`` / ``verify_run`` / ``verify_coverage`` /
+                       ``verify_new``
+complexity             ``complexity_assess`` / ``complexity_reassess`` /
+                       ``complexity_impact``
+profiling              ``profile_bind`` / ``profile_step_begin`` /
+                       ``profile_step_end`` / ``profile_status`` / ``profile_report``
+sync                   ``agents_sync`` / ``permissions_sync`` / ``hooks_sync`` /
+                       ``skills_sync`` / ``phronix_status``
+=====================  ==========================================================
+
+
+Deployment
+==========
+
+``phronix deploy`` is idempotent and reversible. It creates the project layer,
+inserts a *marked block* into ``CLAUDE.md`` / ``AGENTS.md`` /
+``.github/copilot-instructions.md`` rather than overwriting them, repoints Claude
+Code's per-project memory at the committed store, and adds rendered artefacts to
+``.gitignore``. Anything that would destroy existing content reports ``conflict``
+and does nothing.
+
+``phronix deploy --check`` diffs against a scratch deployment and reports what
+would change, without touching the tree.
+
+
+The benchmark
+=============
+
+phronix claims agents improve with use. That claim is worth only as much as the
+measurement behind it, so the benchmark lives in ``tests/benchmark/`` and is
+built to be able to *disconfirm* the claim.
+
+Arms
+----
+
+===========================  =========================================
+arm                          what it is
+===========================  =========================================
+``mini``                     mini-swe-agent, the reference
+``opencode-bare``            opencode with no phronix — the baseline
+``opencode-phronix-frozen``  full scaffolding, store mounted read-only
+``opencode-phronix``         full scaffolding, store read-write
+===========================  =========================================
+
+The frozen arm is the control: identical scaffolding, identical tools,
+``:ro`` at the mount. ``bare → frozen`` is the cost of the scaffold;
+``frozen → learning`` is the claim. Read-only at the mount rather than by
+convention, because an arm that *could* write is not a control.
+
+Per-task flow
+-------------
+
+1. **research** (before attempt 1; a *diagnose* pass before each retry)
+2. **candidates** built in parallel, one agent each, own container and checkout
+3. **evaluate** each patch in a pristine container
+4. **record** locations and scores into the ledger — by the harness, not by an
+   agent, since both are facts on disk
+5. **learn** with the verdict in hand
+6. **retry**, which must not re-edit a falsified location without new evidence
+
+Fairness rules
+--------------
+
+* **Identical prompts**, except scaffolding the arm genuinely deploys.
+* **Test feedback goes to every arm**: the failure output is the task's own
+  product, not something phronix brings. What differs is *memory* — phronix
+  distils it into a stored lesson that survives into later tasks; the baseline
+  gets it in-context and loses it.
+* **The reference patch and the test patch never reach an agent.** Maintainer
+  hints and grading-test names are available behind ``--with-hints`` and
+  ``--reveal-target-tests``, both off by default, both printed loudly and
+  recorded in the manifest, because published SWE-bench numbers exclude them.
+
+Failures that end the run
+-------------------------
+
+Most things that go wrong are results: a task fails, a patch regresses, an
+approach is refuted. Two are not, and both share a shape — every row produced
+after them *looks like a result*, so the run keeps reporting numbers that mean
+nothing.
+
+``ResearchCollapsed``
+   A phronix research pass produced no tool calls at all. The agent never
+   started — bad command, dead endpoint, missing binary — and the arm silently
+   degrades into a plain agent with extra scaffolding while every number it
+   produces is attributed to phronix.
+
+``EnvironmentGone``
+   Two consecutive tasks could not get a container. Measured: a flux allocation
+   hit its 24h wall limit mid-run, and each remaining task spent two attempts
+   rediscovering it. The rows read ``fail``, 0 steps, 0 tokens — and one of them
+   held a real patch that was simply never judged, which is worse than a missing
+   row because it reads as a measured failure of the arm.
+
+One task without a container is bad luck; two in a row is the host. Neither
+exception is swallowed by the per-attempt handler ("a crashed attempt is data")
+or the per-arm one ("one arm failing must not void the others").
+
+The test runner must exist before anything means anything
+---------------------------------------------------------
+
+Three faults made whole instances unjudgeable while looking like bad patches:
+
+* **No pytest in the image.** sympy's testbed environments ship without it, so
+  every test scored not-passed. Now installed into the *container* — never the
+  host venv, because the instance pins the dependency versions its tests are
+  written against — from a wheelhouse mounted at ``/wheels``, so scoring a test
+  never depends on the network.
+* **Ids that cannot match.** SWE-bench stores sympy's ids as bare function
+  names while pytest prints full node ids, so every sympy instance scored 0 of
+  30 on tests that had just printed ``PASSED``.
+* **Fixtures handed to pytest as tests.** flask-4992's test patch adds
+  ``tests/static/config.toml``; pytest given a data file collects nothing at
+  all. Test files now come from the test patch, filtered to test modules.
+
+A run producing no per-test outcome at all is a ``runner_failed`` verdict, not a
+score: no patch can make the tests fail to *run*. It is not cached as
+pre-existing breakage and it does not consume retries.
+
+``phronix-bench baseline`` runs every task's tests unpatched — no agent, no
+tokens — and reports what the environment does. It caught all three above, and
+it is cheap enough to run before any unfamiliar task list.
+
+Pre-existing failures
+---------------------
+
+SWE-bench assumes the instance image reproduces the original environment so that
+every ``PASS_TO_PASS`` test passes before the fix. That assumption does not
+always hold. Measured here: ``pylint-7080``'s ``test_stdin[/mymodule.py]`` fails
+at base commit, and two ``toml_config`` tests fail on a ``tomlkit`` version skew.
+
+Since ``resolved`` requires all ``PASS_TO_PASS`` to pass, one pre-existing
+failure made the instance **unresolvable by any patch, including the official
+one** — an agent produced the upstream fix byte for byte and scored ``fail``.
+
+So the harness measures the unpatched repository once per instance, caches it,
+and discounts already-broken tests, reporting them as ``pre_existing_failures``.
+Never silently: an unexplained exclusion is how a benchmark starts flattering
+itself.
+
+Metrics
+-------
+
+``tries``
+   attempts until pass, and steps per attempt.
+``learning rate``
+   two numbers, because either alone misleads: the OLS slope of ``resolved``
+   against task index *and* the reuse rate — the fraction of tasks retrieving a
+   skill an **earlier** task wrote. A positive slope with zero reuse is ordering
+   luck, not learning, and the report says so.
+``tokens``
+   measured from the harness's event stream, including the research and
+   learning passes. Hiding those would make phronix look cheaper than it is.
+``time and cost``
+   split three ways per attempt — solving, research, learning — because
+   research runs *inside* the attempt's wall clock (it needs the exported
+   checkout) and the combined number reported a six-step attempt as taking
+   seventeen minutes when sixteen of them were research. The baseline it is
+   compared against has neither, so only the solve figure is comparable.
+   Reported as ``solve_s`` / ``research_s`` and ``cost_usd`` /
+   ``research_cost_usd``: "phronix costs more" and "phronix's *research* costs
+   more" are different claims, and only the split can tell them apart.
+
+Verdicts are deliberately conservative: ``learning_demonstrated``,
+``learning_suggested``, ``improvement_unexplained``, ``no_learning``,
+``uncontrolled``, ``no_data``.
+
+Observability
+-------------
+
+Each arm writes ``trace.log`` (human, tail-able) and ``trace.jsonl``. It records
+every phronix tool call *and every rejected one*, the research record after each
+pass, what each attempt changed and scored, whether an attempt was **better or
+worse** than the previous one, and what reached the store by block title.
+
+This exists because of a specific failure: a run reported plausible results for
+hours while the phronix arm called no phronix tools at all, and no summary could
+have shown it. That detector counts tool calls in **both** harnesses' stream
+shapes — opencode's flat ``part.tool`` and Claude Code's ``tool_use`` blocks
+nested in an assistant message. Reading only the first meant every Claude
+research pass reported zero calls while its trace showed a dozen, so the alarm
+for research that never ran was firing on healthy passes and would have been
+invisible on a real one.
+
+
+Design rules that earned their place
+====================================
+
+Each of these was learned by being violated.
+
+**Probe by doing.** ``can_store_images`` pulls a real image rather than checking
+filesystem type or xattr support — every cheaper proxy was either wrong or
+right-for-the-wrong-reason, which is worse because it looks authoritative.
+
+**A near-miss must not discard knowledge.** ``skill_write(kind="lesson")`` is
+routed to LESSONS.md, not rejected. The old error message named the correct tool
+— the call knew where the content belonged and refused to put it there — and a
+run's only piece of learning was lost to it.
+
+**A failing corrector is a verdict, not a puzzle.** When a verifier fails after
+a change, the attempt has two doors and prose is not one of them: revise the
+change, or — with concrete evidence the check itself is wrong — fix it with
+``verify_new`` and record why with ``skill_write_lesson``. Measured: an attempt
+made the correct edit in six steps, its verifier failed on a path with a leading
+``./``, and it spent forty more steps establishing that the fix "works when
+targeting ``src`` directly" — rediscovering the verifier's point and dismissing
+it. The task then failed on exactly that case, ~3M cache-read tokens later, and
+nothing was healed or recorded because neither was reachable from where the
+agent stood.
+
+**Report the reason, not just the outcome.** The evaluator runs with
+``--tb=short`` and extracts the failure detail, because "which test failed"
+without "why" turns a retry into a re-roll of the same dice.
+
+**Reporting must never break the run.** Every tracer method is wrapped: a
+formatting bug once raised through the attempt loop and recorded two attempts as
+``0 steps, 0 tokens``, which reads exactly like an agent that ran and did
+nothing.
+
+**One definition per decision.** ``choose`` and the corrector share one ranking
+function; when they had separate ones, the corrector failed choices that were
+correct under the chooser's own rule.
+
+**Fail fast when the environment is gone.** A preflight check refuses to start
+against an unreachable container host, and repeated isolation failures end a
+task. An expired allocation once produced six tasks of empty results that looked
+like agent failures.
+
+
+Where the design is still weak
+==============================
+
+Stated plainly, because a design document that only lists strengths is
+marketing.
+
+* **Falsification is per-task.** An approach falsified on one instance does not
+  yet stop a later task proposing the same shape elsewhere.
+* **Plans skew deterministic.** Research repeatedly tags every step
+  ``deterministic``, including ones that plainly need judgement — which suggests
+  the tag is being applied to satisfy the corrector rather than to describe the
+  work.
+* **Label stability versus history-independence** cannot both hold. Stability
+  was chosen; a rebuilt store can therefore allocate different labels than an
+  incrementally grown one.
+* **Cost.** Research plus parallel candidates plus a learning pass is several
+  agent invocations per task. It buys measured knowledge instead of guesses, but
+  the trade is real and the benchmark counts every token of it.

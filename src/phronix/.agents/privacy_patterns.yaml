@@ -1,0 +1,37 @@
+# Redaction rules the privacy guard has LEARNED — data, not code.
+#
+# The built-in rules live in phronix/privacy.py. This file holds the corner cases
+# those miss, discovered by `privacy_suspects` and persisted with
+# `privacy_add_pattern`. Keeping them as data means a new rule ships to everyone
+# who gets this layer without a code change or a release.
+#
+# Each entry:
+#   regex           Python regex matching the identifying text
+#   replacement     what to substitute — a shell variable a reader can resolve
+#                   ($USER) or an angle-bracket placeholder (<token>)
+#   reason          WHY this identifies someone. Required in practice: a rule with
+#                   no rationale never gets revisited, so it is either followed
+#                   forever or deleted by someone who cannot tell if it matters.
+#   structure_safe  false if the rule changes a path's component count. Those
+#                   rules are skipped for .patch/.diff files, where they would
+#                   break `patch -pN`.
+#
+# Every layer's copy of this file is merged, so a project can add a rule for its
+# own internal hostnames without shipping it upstream first.
+
+patterns:
+  - regex: '\bslack\.com/archives/[A-Z0-9]+/p\d+'
+    replacement: '<slack-permalink>'
+    reason: >-
+      A Slack permalink resolves to a specific message in a specific private
+      workspace, which identifies both the organisation and, usually, the person
+      who wrote it.
+    structure_safe: true
+
+  - regex: '(?<![\w.-])[a-z0-9-]+\.internal\b'
+    replacement: '<internal-host>'
+    reason: >-
+      A .internal hostname names a machine on a private network. It is useless to
+      anyone outside that network and identifies the infrastructure to anyone who
+      is inside it.
+    structure_safe: true

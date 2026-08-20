@@ -1,0 +1,36 @@
+# SWE-bench lite — 30 instances, seed 0, stratified by repo
+# checksum 84e167363a24
+# Order is significant: the learning arm's task N benefits from 1..N-1,
+# so every arm must run this sequence exactly as written.
+# repositories: astropy/astropy, django/django, matplotlib/matplotlib, mwaskom/seaborn, pallets/flask, psf/requests, pydata/xarray, pylint-dev/pylint, pytest-dev/pytest, scikit-learn/scikit-learn, sphinx-doc/sphinx, sympy/sympy
+
+django__django-13551
+matplotlib__matplotlib-24970
+scikit-learn__scikit-learn-25570
+pylint-dev__pylint-7080
+pallets__flask-5063
+sympy__sympy-24066
+pydata__xarray-4094
+pytest-dev__pytest-5495
+sphinx-doc__sphinx-10451
+mwaskom__seaborn-2848
+astropy__astropy-14995
+psf__requests-1963
+django__django-16139
+matplotlib__matplotlib-25079
+scikit-learn__scikit-learn-13496
+pylint-dev__pylint-5859
+pallets__flask-4045
+sympy__sympy-21847
+pydata__xarray-3364
+pytest-dev__pytest-5413
+sphinx-doc__sphinx-8627
+mwaskom__seaborn-3407
+astropy__astropy-7746
+psf__requests-3362
+django__django-16527
+matplotlib__matplotlib-25498
+scikit-learn__scikit-learn-13584
+pylint-dev__pylint-7228
+pallets__flask-4992
+sympy__sympy-17630

@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phronix"
+dynamic = ["version"]
+description = "A self-learning, self-healing agentic framework: capabilities first, then intelligence, then agents"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Hariharan Devarajan" }]
+keywords = ["agents", "mcp", "skills", "self-learning", "claude-code", "opencode", "codex", "copilot"]
+# The knowledge-graph dependency (graphifyy) requires >=3.10, and the codebase
+# uses PEP 604 unions in a few signatures.
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=0.1.0",
+    "pyyaml>=6.0",
+    # Codebase knowledge graph (tree-sitter AST extraction + markdown headings).
+    # Agents query the graph to LOCATE code and skill sections instead of
+    # reading whole files into context. PyPI name is `graphifyy`; its CLI is
+    # `graphify`. Not optional: context economy is a core framework promise,
+    # and graph_query degrading to "unavailable" silently would push every
+    # agent back to whole-file reads.
+    "graphifyy>=0.9.11",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=24.0.0",
+    "flake8>=7.0.0",
+]
+# Session profiling: MLflow tracking + UI for per-step cost, tokens, timing and
+# retries. Optional because the OTLP collector is stdlib-only — without MLflow the
+# profile is still captured, aggregated and written to disk, it just has no UI.
+mlflow = [
+    "mlflow>=2.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/hariharan-devarajan/phronix"
+Source = "https://github.com/hariharan-devarajan/phronix"
+
+[project.scripts]
+# One umbrella CLI (`phronix <subcommand>`) plus direct entry points, so the
+# same operations are reachable whether a user thinks in terms of a single tool
+# or of individual installers (and so shell completion on `phronix-` discovers
+# them).
+phronix                     = "phronix.cli:main"
+phronix_stack               = "phronix.stack:main"
+phronix-profile-collector   = "phronix.profiling.collector:main"
+phronix-mcp-server          = "phronix.mcp_server:main"
+phronix-install-skills      = "phronix.skills:main"
+phronix-install-agents      = "phronix.agents:main"
+phronix-bootstrap-workspace = "phronix.bootstrap:main"
+phronix-configure-mcp       = "phronix.mcp_setup:main"
+phronix-configure-harness   = "phronix.harness_models:main"
+phronix-sync-permissions    = "phronix.permissions:main"
+phronix-sync-hooks          = "phronix.hooks:main"
+phronix-contribute          = "phronix.contribute:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Everything the framework LEARNS lives under .agents/ and must ship in the
+# wheel — a dotted directory is not auto-included, and each extension needs its
+# own glob. A missing glob here is not a build error; it is a package that
+# installs and then behaves as if it had never learned anything.
+[tool.setuptools.package-data]
+"phronix" = [
+    # The content directories a layer holds.
+    ".agents/skills/**/*.md",
+    ".agents/skills/**/*.yaml",
+    ".agents/agents/*.yaml",
+    ".agents/memory/*.md",
+    ".agents/capabilities/*.py",
+    ".agents/capabilities/*.md",
+    ".agents/verifiers/*.py",
+    ".agents/verifiers/*.md",
+    ".agents/research/*.json",
+    # Layer-root files. A `**` glob still has to cross a directory, so anything
+    # sitting directly in .agents/ needs naming here.
+    ".agents/privacy_patterns.yaml",
+    # Per-layer configuration (the model menu and the permission policy).
+    ".agents/workspace/*.yaml",
+    ".agents/workspace/**/*.md",
+    ".agents/workspace/**/*.json",
+    ".agents/workspace/**/*.jsonc",
+    ".agents/workspace/**/*.yaml",
+    ".agents/workspace/**/*.toml",
+    # The stack launcher is bash and carries no extension: it is invoked as a
+    # command, not sourced. Named explicitly since no glob above matches it.
+    "phronix_stack",
+]
+
+[tool.setuptools_scm]
+local_scheme = "no-local-version"
+write_to = "src/phronix/_version.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

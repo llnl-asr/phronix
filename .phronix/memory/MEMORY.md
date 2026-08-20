@@ -1,0 +1,78 @@
+# Memory Index
+
+
+One line per memory. Bodies live in the linked files.
+
+- [cli-conditional-column-automatic](cli-conditional-column-automatic.md) — Automatic detection pattern for conditional CLI table columns vs user flags
+- [cli-sorting-source-vs-rows](cli-sorting-source-vs-rows.md) — Choosing between sorting source objects vs row lists when adding sortable columns
+- [config-option-normalization-pattern](config-option-normalization-pattern.md) — Pattern matching divergence across modes often due to inconsistent normalization
+- [defensive-path-normalization](defensive-path-normalization.md) — Path comparison functions must normalize internally, not rely on callers
+- [duplicate-pattern-matching-pitfall](duplicate-pattern-matching-pitfall.md) — Pattern matching logic duplication requires fixing all locations, not just shared utility
+- [flask-4045-error-message-format](flask-4045-error-message-format.md) — Flask PR #4045 error message format: "'parameter' may not contain a dot '.' character." with specific formatting conventions
+- [flask-4045-implementation](flask-4045-implementation.md) — Flask issue #4045 fix: blueprint name dot validation implementation and rationale
+- [flask-4045-incomplete-fix-analysis](flask-4045-incomplete-fix-analysis.md) — Flask issue #4045 attempt 1 failed: name-only validation passed 1/2 target tests, missing endpoint validation changes from AssertionError to ValueError
+- [flask-4045-minimal-fix-insufficient](flask-4045-minimal-fix-insufficient.md) — Flask #4045: minimal fix (name-only ValueError) passed 1/2 tests; complete fix needs all three validations changed
+- [flask-4045-three-validations](flask-4045-three-validations.md) — Flask PR #4045 updated three validations (name, endpoint, view_func) from assert to ValueError for consistency
+- [flask-4045-validation-correct-test-fails](flask-4045-validation-correct-test-fails.md) — Blueprint name validation correct but target test still fails - root cause unclear, needs investigation of test vs validation mismatch
+- [flask-blueprint-dot-separator-semantics](flask-blueprint-dot-separator-semantics.md) — Flask blueprint naming: dot character is structural separator in blueprint.endpoint notation, not allowed in blueprint names
+- [flask-blueprint-error-pattern-at-base](flask-blueprint-error-pattern-at-base.md) — At Flask base commit d8c37f43724c, blueprint validation uses AssertionError pattern
+- [flask-blueprint-name-dot-validation-research](flask-blueprint-name-dot-validation-research.md) — Flask blueprint name validation: dots forbidden due to nested blueprint notation ambiguity (issue #4041, PR #4045)
+- [flask-blueprint-validation-insertion-point](flask-blueprint-validation-insertion-point.md) — Flask Blueprint.__init__() validation placement: after super().__init__() line 190, before self.name assignment line 191
+- [flask-blueprint-validation-pattern](flask-blueprint-validation-pattern.md) — Flask Blueprint input validation pattern: use ValueError in __init__ not registration, following fail-fast principle
+- [flask-cli-dynamic-column-pattern](flask-cli-dynamic-column-pattern.md) — Pattern for extending Flask CLI table output with dynamic column count using list-based rows
+- [flask-cli-format-string-escaping](flask-cli-format-string-escaping.md) — Flask CLI format string pattern using double-brace escaping vs modern f-string approach
+- [flask-domain-display-pattern](flask-domain-display-pattern.md) — Correct fallback pattern for combining Flask rule.subdomain with SERVER_NAME config
+- [flask-dotted-blueprint-names-existing-tests](flask-dotted-blueprint-names-existing-tests.md) — Flask codebase has existing tests that create blueprints with dotted names, requiring migration before dot validation can be enforced
+- [flask-endpoint-validation-valueerror](flask-endpoint-validation-valueerror.md) — Flask PR #4045 changed both blueprint name and endpoint dot validation from AssertionError to ValueError
+- [flask-routes-approach-ranking-insight](flask-routes-approach-ranking-insight.md) — Top-ranked research approach may not satisfy hidden test constraints without explicit constraint checking
+- [flask-routes-column-order-regression](flask-routes-column-order-regression.md) — Adding Domain/Subdomain/Host as first column in Flask routes output broke existing tests
+- [flask-routes-domain-edge-cases](flask-routes-domain-edge-cases.md) — Edge cases for displaying domain/subdomain in Flask routes CLI output
+- [flask-routes-header-naming](flask-routes-header-naming.md) — Flask routes target tests expect "Subdomain" or "Host" headers, not generic "Domain"
+- [flask-routes-missing-target-tests](flask-routes-missing-target-tests.md) — Flask routes target tests test_subdomain and test_host don't exist in source tree
+- [flask-routes-subdomain-research](flask-routes-subdomain-research.md) — Research completed for Flask routes CLI subdomain display enhancement (issue 5063)
+- [flask-routes-subdomain-validated-approach](flask-routes-subdomain-validated-approach.md) — Flask routes subdomain/host display: validated working implementation (attempt 2 success)
+- [flask-server-name-format](flask-server-name-format.md) — Flask SERVER_NAME config format and behavior for subdomain matching
+- [flask-subdomain-concatenation](flask-subdomain-concatenation.md) — Flask blueprint nested subdomain concatenation pattern and display rules
+- [os-walk-path-prefix-preservation](os-walk-path-prefix-preservation.md) — os.walk() preserves input path prefix in all yielded paths
+- [pattern-construction-dual-branch-fix](pattern-construction-dual-branch-fix.md) — Pattern construction bugs in conditional branches often require fixing all branches, not just the commonly-used one
+- [pylint-fixme-punctuation-note-tags](pylint-fixme-punctuation-note-tags.md) — Pylint fixme checker regex word boundary fails for punctuation-only note tags
+- [pylint-ignore-paths-normalization](pylint-ignore-paths-normalization.md) — Pylint ignore-paths fails when paths not normalized before regex matching
+- [pylint-pr-7080-fix](pylint-pr-7080-fix.md) — PR #7080 fixed pylint ignore-paths with --recursive by normalizing in _is_ignored_file
+- [python-assert-vs-valueerror-validation](python-assert-vs-valueerror-validation.md) — Use ValueError for input validation, never assert - asserts disabled with python -O, proper for API contracts not debugging
+- [python-valueerror-vs-assert-api-validation](python-valueerror-vs-assert-api-validation.md) — Use ValueError for user input validation never assert - asserts disabled with python -O unsuitable for API contracts
+- [regex-word-boundary-punctuation-pitfall](regex-word-boundary-punctuation-pitfall.md) — Regex \b word boundary fails for punctuation-only patterns because it requires transition between \w and \W characters
+- [research-playbook-prevented-retry-waste](research-playbook-prevented-retry-waste.md) — Research playbook with measured FOM prevented attempt 2 from repeating attempt 1's incomplete fix by ranking complete solution first
+- [sympy-21847-fix-correct-env-broken](sympy-21847-fix-correct-env-broken.md) — sympy__sympy-21847: Code fix is correct (verified manually), grading failure is pytest missing in testbed - install pytest first
+- [sympy-24066-attempt3-analysis](sympy-24066-attempt3-analysis.md) — Attempt 3 of sympy__sympy-24066: code fix was correct but test_issue_24062 was missing
+- [sympy-24066-attempt4-research-findings](sympy-24066-attempt4-research-findings.md) — sympy__sympy-24066 attempt 4: Deep investigation revealed why prior "confirmed" fix failed - edge cases with multi-arg functions, arbitrary dims[0] return, and misleading passing tests
+- [sympy-24066-target-test-missing](sympy-24066-target-test-missing.md) — sympy__sympy-24066: target test test_issue_24062 does not exist in repository, pytest module missing prevents test execution
+- [sympy-24066-test-name-confusion](sympy-24066-test-name-confusion.md) — sympy__sympy-24066: Target test name `test_issue_24062` does not exist - task number is 24066, related test is test_issue_20288
+- [sympy-dimensions-type-not-value](sympy-dimensions-type-not-value.md) — Transcendental function return dimensions are type-based, not value-dependent
+- [sympy-function-handler-dimension-bug-location](sympy-function-handler-dimension-bug-location.md) — Bug location in SymPy UnitSystem._collect_factor_and_dimension Function handler - returns argument dimension instead of Dimension(1)
+- [sympy-function-handler-original-vs-attempt1](sympy-function-handler-original-vs-attempt1.md) — SymPy Function handler original bug was unpacking all arg dimensions in return, attempt 1 kept the unpacking bug
+- [sympy-function-handler-return-tuple-bug](sympy-function-handler-return-tuple-bug.md) — SymPy _collect_factor_and_dimension Function handler must return exactly a 2-tuple, not unpack multiple dimensions
+- [sympy-issue-20288-incomplete-fix](sympy-issue-20288-incomplete-fix.md) — SymPy issue #20288 fix (commit b3d17030b8) was incomplete: fixed only syntax, not semantic dimension validation for transcendental functions
+- [sympy-itermonomials-documentation-vs-implementation](sympy-itermonomials-documentation-vs-implementation.md) — SymPy itermonomials: documentation and docstring examples correctly specify total_degree check, implementation incorrectly uses max individual power
+- [sympy-itermonomials-dual-branch-fix](sympy-itermonomials-dual-branch-fix.md) — SymPy itermonomials bug affects both commutative (line 130) and non-commutative (line 142) branches - both must be fixed identically
+- [sympy-itermonomials-generate-filter-pattern](sympy-itermonomials-generate-filter-pattern.md) — SymPy itermonomials uses generate-then-filter pattern: generates all combinations via built-in, then filters by degree constraint
+- [sympy-itermonomials-max-vs-sum-bug](sympy-itermonomials-max-vs-sum-bug.md) — SymPy itermonomials bug: max(powers.values()) checks maximum individual power instead of total degree, causing missing monomials when min_degrees=max_degrees
+- [sympy-itermonomials-missing-upper-bound](sympy-itermonomials-missing-upper-bound.md) — SymPy itermonomials buggy filter checks only min_degree, omits max_degree upper bound check entirely
+- [sympy-itermonomials-single-variable-mask](sympy-itermonomials-single-variable-mask.md) — Single-variable itermonomials tests pass with max/sum bug because max equals sum for one variable - bug requires multi-variable tests to detect
+- [sympy-itermonomials-test-coverage-gap](sympy-itermonomials-test-coverage-gap.md) — SymPy itermonomials test suite lacks coverage for min_degree > 1 with multiple variables, allowing max/sum bug to persist undetected
+- [sympy-ph-test-symbolic-simplification](sympy-ph-test-symbolic-simplification.md) — SymPy pH test case demonstrates symbolic simplification occurs before dimension checking in _collect_factor_and_dimension
+- [sympy-pytest-module-missing](sympy-pytest-module-missing.md) — SymPy task attempts fail with "No module named pytest" despite correct fixes - pytest not installed in testbed environment
+- [sympy-symbolic-simplification-before-dimensions](sympy-symbolic-simplification-before-dimensions.md) — SymPy symbolic simplification of exp(-log(x)) to 1/x happens before dimension checking - not an exception to transcendental rules
+- [sympy-test-harness-pytest-dependency](sympy-test-harness-pytest-dependency.md) — SymPy task judging failed due to missing pytest module in testbed environment, causing correct fixes to appear as failures
+- [sympy-test-issue-20288-evidence](sympy-test-issue-20288-evidence.md) — SymPy test_issue_20288 confirms exp(dimensionless) should return Dimension(1)
+- [sympy-testbed-pytest-missing](sympy-testbed-pytest-missing.md) — SymPy task testbed is missing pytest module, causing all test runs to fail before executing actual tests
+- [sympy-transcendental-dimension-uniform](sympy-transcendental-dimension-uniform.md) — All transcendental functions have uniform dimension requirements - no function-specific variations
+- [sympy-transcendental-functions-dimensionless](sympy-transcendental-functions-dimensionless.md) — SymPy transcendental functions must accept only dimensionless arguments and return Dimension(1), based on mathematical Taylor series requirements
+- [sympy-units-dimensionless-function-fix](sympy-units-dimensionless-function-fix.md) — SymPy issue 24066: SI._collect_factor_and_dimension Function handler doesn't validate dimensionless arguments for transcendental functions
+- [sympy-units-pow-pattern-for-validation](sympy-units-pow-pattern-for-validation.md) — SymPy UnitSystem._collect_factor_and_dimension Pow handler establishes the pattern for dimension validation: check is_dimensionless() then set to 1
+- [task-test-name-mismatch](task-test-name-mismatch.md) — Task issue numbers may differ from target test issue numbers - verify both test names when numbers don't match
+- [test-harness-pytest-warnings-vs-failures](test-harness-pytest-warnings-vs-failures.md) — Pytest output "FAILURES" may show warnings not actual test failures - read judgement summary first
+- [test-ignore-path-recursive-current-dir](test-ignore-path-recursive-current-dir.md) — Test case that validates pylint --recursive=y with current directory as input
+- [transcendental-power-series-dimension-requirement](transcendental-power-series-dimension-requirement.md) — Mathematical foundation of why transcendental functions require dimensionless arguments and return dimensionless results
+- [validate-test-environment-before-claiming-fix](validate-test-environment-before-claiming-fix.md) — Before claiming a fix is complete, verify the test environment can actually execute tests
+- [verify-fix-absence](verify-fix-absence.md) — Verify fix is actually missing before applying backport or known solution
+- [werkzeug-rule-no-full-domain](werkzeug-rule-no-full-domain.md) — Werkzeug Rule objects have no built-in full domain property; manual combination required

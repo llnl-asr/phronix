@@ -1,0 +1,412 @@
+#!/usr/bin/env bash
+# phronix stack launcher — deploy the framework, run the daemons.
+#
+#   phronix_stack deploy    materialise everything from the package into this
+#                           project: skills, agents, hooks, permissions, MCP
+#                           config, instructions, the .phronix layer
+#   phronix_stack start     deploy, then start (or refresh) three daemons:
+#                             1. mlflow server    tracking + UI    (default :5001)
+#                             2. profile collector OTLP receiver   (default :4318)
+#                             3. phronix mcp-server the tool surface (default :5100)
+#   phronix_stack env       print eval-able exports; run BEFORE launching a harness
+#   phronix_stack status    what is up, what is stale, what the session cost
+#   phronix_stack stop      stop everything (the collector reports first)
+#   phronix_stack restart   unconditional stop + start
+#   phronix_stack logs NAME tail mlflow | collector | mcp
+#   phronix_stack clean     delete stale pid files and reap orphans
+#
+# EVERYTHING HERE IS IDEMPOTENT. `deploy` writes only files whose content
+# differs. `start` never launches a second copy of anything: for each service it
+# compares the running process against what the current configuration asks for —
+# same command, same port, same env, captured as a signature hash — and
+#
+#   * healthy and identical      -> left alone, nothing is bounced needlessly
+#   * healthy but configured differently, or dead, or not answering its port
+#                                -> stopped and started again
+#   * configured port held by a process that is not ours
+#                                -> started on a free port instead; the port
+#                                   actually used is persisted so status/stop/env
+#                                   (each a separate invocation) agree on it
+#
+# So `start` doubles as `refresh`: run it after editing config or reinstalling,
+# and only what actually changed gets restarted.
+#
+# The collector is deliberately exempt from config-only restarts. Its profile
+# lives in memory, and bouncing it mid-session discards the cost accounting for
+# every step so far.
+#
+# Point a harness at the stack by exporting the env BEFORE launching it:
+#
+#     eval "$(phronix_stack env)" && claude
+#
+# Without those OTEL_* variables the harness exports no telemetry, the collector
+# sees nothing, and the profile stays empty. The profile_* MCP tools still work;
+# they just report `disabled`.
+#
+# Every daemon self-limits to PHRONIX_STACK_MAX_AGE (default 8h) so a forgotten
+# `stop` cannot leave a process running indefinitely on a shared machine. Set it
+# to 0 for a session that deliberately needs to outlive that.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Project root: where .phronix lives. The console script passes it; running this
+# file directly falls back to the source layout (src/phronix/ -> ../..).
+ROOT="${PHRONIX_STACK_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+SELF="${PHRONIX_STACK_CMD:-$0}"
+BIN="${PHRONIX_STACK_BIN:-$(dirname "$(command -v python3)")}"
+PY="$BIN/python"
+[[ -x "$PY" ]] || PY="$(command -v python3)"
+
+# ── load .env, if the project has one ───────────────────────────────────────
+# A directly-launched daemon would otherwise never see the project's own
+# configuration. Anything already exported in the calling shell is overwritten by
+# a matching line in .env — export your overrides after sourcing it yourself.
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
+
+# ── configuration (override by exporting before invoking) ──────────────────
+HOST="${PHRONIX_STACK_HOST:-127.0.0.1}"
+MCP_PORT="${PHRONIX_MCP_PORT:-5100}"
+COLLECTOR_PORT="${PHRONIX_COLLECTOR_PORT:-4318}"
+MLFLOW_PORT="${PHRONIX_MLFLOW_PORT:-5001}"
+EXPERIMENT="${MLFLOW_EXPERIMENT_NAME:-phronix}"
+MAX_AGE="${PHRONIX_STACK_MAX_AGE:-8h}"
+
+STATE="${PHRONIX_STACK_STATE:-$ROOT/.phronix/.stack}"
+LOG_DIR="$STATE/logs"
+MLFLOW_DIR="$STATE/mlflow"
+MLFLOW_DB="$MLFLOW_DIR/mlflow.db"
+MLFLOW_ARTIFACTS="$MLFLOW_DIR/artifacts"
+PROFILE_DIR="$STATE/profiles"
+
+SERVICES=(mlflow collector mcp)
+
+mkdir -p "$STATE" "$LOG_DIR" "$MLFLOW_DIR" "$MLFLOW_ARTIFACTS" "$PROFILE_DIR"
+
+pid_file()  { echo "$STATE/$1.pid"; }
+sig_file()  { echo "$STATE/$1.sig"; }
+port_file() { echo "$STATE/$1.port"; }
+log_file()  { echo "$LOG_DIR/$1.log"; }
+
+_default_port() {
+  case "$1" in
+    mlflow)    echo "$MLFLOW_PORT" ;;
+    collector) echo "$COLLECTOR_PORT" ;;
+    mcp)       echo "$MCP_PORT" ;;
+  esac
+}
+
+# The port a service is ACTUALLY on. Persisted at start, because a fallback port
+# has to survive into the separate invocations that stop/status/env are.
+port_of() {
+  local f; f="$(port_file "$1")"
+  if [[ -s "$f" ]]; then cat "$f"; else _default_port "$1"; fi
+}
+
+mlflow_uri() { echo "sqlite:///$MLFLOW_DB"; }
+mlflow_url() { echo "http://$HOST:$(port_of mlflow)"; }
+
+pid_of() { cat "$(pid_file "$1")" 2>/dev/null || true; }
+
+is_up() {
+  local pid; pid="$(pid_of "$1")"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+port_open() {
+  "$PY" - "$HOST" "$1" <<'EOF' 2>/dev/null
+import socket, sys
+s = socket.socket(); s.settimeout(0.4)
+sys.exit(0 if s.connect_ex((sys.argv[1], int(sys.argv[2]))) == 0 else 1)
+EOF
+}
+
+wait_port() {
+  local port="$1" tries="${2:-40}"
+  for _ in $(seq "$tries"); do
+    port_open "$port" && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+find_free_port() {
+  "$PY" - <<'EOF'
+import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1]); s.close()
+EOF
+}
+
+signature() {
+  printf '%s' "$*" | "$PY" -c \
+    'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:16])'
+}
+
+# How to invoke one of our own entry points. Prefers the installed console
+# script; falls back to `python -m` so the stack also works from a source
+# checkout on PYTHONPATH, where the scripts do not exist. Without this the only
+# symptom is "No such file or directory" for a command the user never typed.
+entrypoint() {
+  local script="$1" module="$2"
+  if [[ -x "$BIN/$script" ]]; then
+    echo "$BIN/$script"
+  elif command -v "$script" >/dev/null 2>&1; then
+    command -v "$script"
+  else
+    echo "$PY -m $module"
+  fi
+}
+
+# Healthy AND configured the same way -> leave it alone.
+sig_matches() {
+  local name="$1" want="$2" f; f="$(sig_file "$name")"
+  [[ -s "$f" ]] && [[ "$(cat "$f")" == "$want" ]]
+}
+
+_spawn() {
+  local name="$1"; shift
+  local port="$1"; shift
+  : >"$(log_file "$name")"
+  if [[ "$MAX_AGE" != "0" ]]; then
+    # A hard stop, so a forgotten `stop` cannot leave this running for days.
+    setsid timeout --kill-after=30 "$MAX_AGE" "$@" \
+      >>"$(log_file "$name")" 2>&1 &
+  else
+    setsid "$@" >>"$(log_file "$name")" 2>&1 &
+  fi
+  local pid=$!
+  echo "$pid" >"$(pid_file "$name")"
+  echo "$port" >"$(port_file "$name")"
+}
+
+stop_daemon() {
+  local name="$1" pid; pid="$(pid_of "$name")"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    # Kill the process group: `timeout` wraps the real daemon, so signalling the
+    # recorded pid alone leaves the child holding the port.
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    for _ in $(seq 20); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.15
+    done
+    kill -0 "$pid" 2>/dev/null && { kill -KILL -- "-$pid" 2>/dev/null || true; }
+    echo "  stopped $name (pid $pid)"
+  fi
+  rm -f "$(pid_file "$name")" "$(sig_file "$name")" "$(port_file "$name")"
+}
+
+# Start a service unless an identical, healthy one is already running.
+ensure_daemon() {
+  local name="$1" want_sig="$2"; shift 2
+  local port; port="$(_default_port "$name")"
+
+  if is_up "$name" && sig_matches "$name" "$want_sig" && port_open "$(port_of "$name")"; then
+    echo "  = $name already running on $(port_of "$name") (pid $(pid_of "$name"))"
+    return 0
+  fi
+
+  # The collector holds the session profile in memory. Bouncing it for a config
+  # change would discard every step recorded so far, so a healthy collector is
+  # kept even when its signature has drifted.
+  if [[ "$name" == "collector" ]] && is_up "$name" && port_open "$(port_of "$name")"; then
+    echo "  = collector already running on $(port_of "$name") — kept (restarting it"
+    echo "    would discard the in-memory profile; use \`$SELF restart\` to force)"
+    return 0
+  fi
+
+  is_up "$name" && stop_daemon "$name"
+
+  # Someone else on our port: take a free one rather than fighting for it.
+  if port_open "$port"; then
+    local fallback; fallback="$(find_free_port)"
+    echo "  ! port $port is held by another process; using $fallback for $name"
+    port="$fallback"
+  fi
+
+  _spawn "$name" "$port" "$@" "$port"
+  echo "$want_sig" >"$(sig_file "$name")"
+
+  if wait_port "$port"; then
+    echo "  + $name on $port (pid $(pid_of "$name"))"
+  else
+    echo "  ! $name did not open $port — see $(log_file "$name")"
+    tail -n 15 "$(log_file "$name")" | sed 's/^/      /' || true
+    return 1
+  fi
+}
+
+# ── deploy ─────────────────────────────────────────────────────────────────
+
+cmd_deploy() {
+  local check_flag=""
+  [[ "${1:-}" == "--check" ]] && check_flag="--check"
+  echo "Deploying phronix into $ROOT"
+  "$PY" -m phronix.cli deploy --target "$ROOT" $check_flag
+}
+
+# ── start / stop / status ──────────────────────────────────────────────────
+
+cmd_start() {
+  cmd_deploy || return 1
+  echo
+  echo "Starting daemons"
+
+  local mlflow_sig collector_sig mcp_sig
+  mlflow_sig="$(signature "mlflow|$(mlflow_uri)|$MLFLOW_ARTIFACTS|$HOST|$MAX_AGE")"
+  collector_sig="$(signature "collector|$PROFILE_DIR|$(mlflow_uri)|$EXPERIMENT|$HOST|$MAX_AGE")"
+  mcp_sig="$(signature "mcp|$ROOT|$HOST|$MAX_AGE")"
+
+  if command -v "$BIN/mlflow" >/dev/null 2>&1 || command -v mlflow >/dev/null 2>&1; then
+    local mlflow_bin; mlflow_bin="$BIN/mlflow"
+    [[ -x "$mlflow_bin" ]] || mlflow_bin="$(command -v mlflow)"
+    ensure_daemon mlflow "$mlflow_sig" \
+      "$mlflow_bin" server \
+      --backend-store-uri "$(mlflow_uri)" \
+      --default-artifact-root "$MLFLOW_ARTIFACTS" \
+      --host "$HOST" --port || true
+  else
+    echo "  - mlflow not installed; skipping the tracking UI"
+    echo "    (\`pip install 'phronix[mlflow]'\` — profiles are still written to disk)"
+  fi
+
+  # shellcheck disable=SC2046  # word-splitting is intended: `python -m module`
+  ensure_daemon collector "$collector_sig" \
+    $(entrypoint phronix-profile-collector phronix.profiling.collector) \
+    --root "$PROFILE_DIR" --mlflow-uri "$(mlflow_uri)" \
+    --experiment "$EXPERIMENT" --host "$HOST" --port || true
+
+  # shellcheck disable=SC2046
+  ensure_daemon mcp "$mcp_sig" \
+    $(entrypoint phronix-mcp-server phronix.mcp_server) \
+    --transport http --target "$ROOT" --host "$HOST" --port || true
+
+  # Warm the knowledge graph so the first agent query does not pay the build.
+  ( "$PY" -m phronix.cli graph ensure >/dev/null 2>&1 && echo "  = knowledge graph warm" ) || \
+    echo "  - knowledge graph not warmed (graphify unavailable)"
+
+  echo
+  print_env
+  echo
+  echo "Point a harness at it:  eval \"\$($SELF env)\" && claude"
+}
+
+cmd_stop() {
+  echo "Stopping"
+  # Report before the collector dies, or the session's profile is lost with it.
+  if is_up collector; then
+    # The client reads PHRONIX_COLLECTOR_URL. Without exporting the port we
+    # actually bound, it queries the default and reports "no collector" for one
+    # that is running — which is exactly what persisting the port is for.
+    local collector_url
+    collector_url="http://$HOST:$(port_of collector)"
+    export PHRONIX_COLLECTOR_URL="$collector_url"
+    "$PY" -c "
+from phronix.profiling import client
+r = client.report(mlflow=True)
+print('  profile:', r.get('report') or r.get('error', 'none'))
+" 2>/dev/null || true
+  fi
+  local name
+  for name in "${SERVICES[@]}"; do stop_daemon "$name"; done
+  echo "Stopped."
+}
+
+cmd_status() {
+  echo "phronix stack — $ROOT"
+  echo
+  printf '  %-11s %-8s %-7s %-8s %s\n' SERVICE STATE PORT PID LOG
+  local name state pid port
+  for name in "${SERVICES[@]}"; do
+    pid="$(pid_of "$name")"; port="$(port_of "$name")"
+    if is_up "$name" && port_open "$port"; then state=up
+    elif is_up "$name";     then state=no-port
+    elif [[ -n "$pid" ]];   then state=stale
+    else                         state=down; fi
+    printf '  %-11s %-8s %-7s %-8s %s\n' "$name" "$state" "$port" "${pid:--}" "$(log_file "$name")"
+  done
+
+  echo
+  if is_up collector; then
+    local collector_url
+    collector_url="http://$HOST:$(port_of collector)"
+    export PHRONIX_COLLECTOR_URL="$collector_url"
+    "$PY" -c "
+import json
+from phronix.profiling import client
+s = client.status()
+if s.get('status') == 'ok':
+    t = s['totals']
+    print(f\"  run={s['run_id']}  steps={s['steps']}  \"
+          f\"cost=\${t['cost_usd']:.4f}  tokens={t['tokens_total']:,}  \"
+          f\"api={t['api_calls']}  tools={t['tool_calls']}\")
+    if s['open_steps']:
+        print('  open steps:', ', '.join(s['open_steps']))
+    if s['cross_check'].get('events_dropped'):
+        print('  WARNING:', s['cross_check']['note'])
+else:
+    print('  profile:', s.get('error', 'unavailable'))
+" 2>/dev/null || echo "  profile: unavailable"
+  else
+    echo "  profile: collector down"
+  fi
+  is_up mlflow && echo "  mlflow UI: $(mlflow_url)"
+  echo
+  "$PY" -m phronix.cli status 2>/dev/null | sed -n '3,12p' || true
+}
+
+print_env() {
+  cat <<EOF
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://$HOST:$(port_of collector)
+export OTEL_METRIC_EXPORT_INTERVAL=10000
+export OTEL_LOGS_EXPORT_INTERVAL=5000
+export PHRONIX_COLLECTOR_URL=http://$HOST:$(port_of collector)
+export PHRONIX_MCP_URL=http://$HOST:$(port_of mcp)/mcp
+export MLFLOW_TRACKING_URI=$(mlflow_uri)
+export PHRONIX_PROJECT_ROOT=$ROOT
+EOF
+}
+
+cmd_clean() {
+  local name pid
+  for name in "${SERVICES[@]}"; do
+    pid="$(pid_of "$name")"
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      echo "  removed stale pid file for $name (pid $pid)"
+      rm -f "$(pid_file "$name")" "$(sig_file "$name")" "$(port_file "$name")"
+    fi
+  done
+  echo "Clean."
+}
+
+cmd_logs() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || { echo "usage: $SELF logs mlflow|collector|mcp" >&2; return 2; }
+  tail -f "$(log_file "$name")"
+}
+
+usage() {
+  sed -n '2,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-}" in
+  deploy)  shift; cmd_deploy "$@" ;;
+  start)   shift; cmd_start ;;
+  stop)    shift; cmd_stop ;;
+  restart) shift; cmd_stop; echo; cmd_start ;;
+  status)  shift; cmd_status ;;
+  env)     shift; print_env ;;
+  logs)    shift; cmd_logs "$@" ;;
+  clean)   shift; cmd_clean ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "unknown command: $1" >&2; echo >&2; usage >&2; exit 2 ;;
+esac

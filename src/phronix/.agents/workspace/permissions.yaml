@@ -1,0 +1,160 @@
+# The harness-neutral permission policy — one document, four dialects.
+#
+# Rendered by phronix/permissions.py:
+#
+#   claude    -> .claude/settings.json  "permissions" (allow/deny).
+#                Deny wins over allow. Anything unlisted falls through to
+#                Claude's own "ask" default, so the `mode: ask` catch-all below
+#                is deliberately NOT rendered for claude — emitting it would
+#                change nothing. NOTE the dialect difference: Claude writes a
+#                single trailing `*` where this policy (and OpenCode) write
+#                `**`; `_claude_glob` converts, and without that conversion
+#                `Edit(.phronix/**)` silently matches nothing.
+#
+#   opencode  -> .opencode/opencode.jsonc  "permission" (glob map).
+#                Evaluated in order with LAST MATCH WINS — the reverse of
+#                Claude. The catch-all is therefore emitted FIRST and specific
+#                overrides after it; getting that backwards silently collapses
+#                the whole policy into "ask for everything".
+#
+#   copilot   -> not applicable. GitHub Copilot custom agents have no path- or
+#                command-scoped permission mechanism at all; the only boundary
+#                is the per-agent `tools:` allowlist that agent_templates.py
+#                already renders from each template.
+#
+#   codex     -> not settable from a repo-tracked file. Codex ignores
+#                sandbox_mode and approval_policy in project-scoped config as an
+#                anti-supply-chain measure, so rendered agents carry a fixed
+#                sandbox_mode instead and the trust level is left to the user's
+#                own ~/.codex/config.toml.
+#
+# Edit this file, then run `phronix sync permissions`.
+
+# ── path tiers, least to most specific ─────────────────────────────────────
+paths:
+  - glob: "**"
+    mode: ask
+
+  # The knowledge store is what agents are expected to grow. Requiring
+  # confirmation for every lesson written would make self-learning a chore the
+  # model learns to skip — and a self-learning framework whose learning step is
+  # annoying does not learn.
+  - glob: ".phronix/**"
+    mode: allow
+
+# Which tools take a filesystem PATH as their permission pattern, and how the
+# tiers above are rendered onto each.
+#
+#   tiers       every entry, catch-all included — the full write policy
+#   allow_only  just the `mode: allow` entries; anything unlisted falls through
+#               to the harness's own default for that tool
+#
+# `glob` and `grep` are deliberately absent. Verified against OpenCode's own
+# ask() call sites: they ask with the SEARCH pattern ("**/*.py", "TODO"), never
+# with a path, so a path glob there would never match and would only look like
+# coverage we do not have.
+path_scoped_tools:
+  edit: tiers
+  # allow_only, NOT tiers: reads are allow-by-default in OpenCode, so rendering
+  # the "**": ask catch-all here would make every read of the project's own
+  # source prompt. The allow tier is about letting agent work run unattended,
+  # not about clamping down on reading.
+  read: allow_only
+
+# ── never writable, regardless of tier ─────────────────────────────────────
+# Rendered as Write(...) deny entries for claude. OpenCode's edit tool has no
+# path outside the project tree to speak of, so this only affects claude.
+deny_write_prefixes:
+  - "/etc/*"
+  - "/usr/*"
+  - "/var/*"
+  - "/boot/*"
+  - "/root/*"
+  - "/home/*"
+  - "/tmp/*"
+
+bash:
+  deny:
+    # Privilege escalation. This machine class does not permit it, and an agent
+    # that tries is either confused or being driven somewhere it should not go.
+    - "sudo *"
+    - "sudo"
+    - "su *"
+    - "doas *"
+    # Destructive recursive removal outside the project.
+    - "rm -rf /"
+    - "rm -rf /*"
+    - "rm -rf ~*"
+    - "rm -rf $HOME*"
+    # Whole-filesystem scans. Slow enough to look like a hang, and on a shared
+    # filesystem they are antisocial rather than merely wasteful.
+    - "find /"
+    - "find /etc*"
+    - "find /var*"
+    - "find /home*"
+    - "find /root*"
+    - "find /tmp*"
+    - "find /opt*"
+    - "find /usr*"
+    # Piping a download straight into a shell. The content is unreviewable by
+    # construction, which is the whole objection.
+    - "curl * | sh"
+    - "curl * | bash"
+    - "wget * | sh"
+    - "wget * | bash"
+    # Permission changes that defeat the point of having any.
+    - "chmod -R 777 *"
+    - "chown -R *"
+  allow:
+    # Any command operating on the knowledge store — the counterpart of the
+    # `.phronix/**` path tier. OpenCode matches a bash rule against the whole
+    # command STRING (`*` -> `.*`, anchored), so this covers `git add
+    # .phronix/...` and the enumerated cases alike. Deny is rendered after this
+    # and last match wins, so `sudo ... .phronix/...` is still denied.
+    #
+    # Caveat, deliberately not papered over: a command whose cwd is inside the
+    # store but whose text never says ".phronix/" cannot match — bash rules see
+    # the command, not the cwd. Those still prompt.
+    - "* .phronix/*"
+    - "ls .phronix/*"
+    - "cat .phronix/*"
+    - "mkdir -p .phronix/*"
+    - "git add .phronix/*"
+    # Read-only inspection. Safe everywhere, and prompting for them is what
+    # makes an unattended run stall on nothing.
+    - "git status*"
+    - "git diff*"
+    - "git log*"
+    - "git show*"
+    - "git branch*"
+    - "ls *"
+    - "cat *"
+    - "head *"
+    - "tail *"
+    - "wc *"
+    - "which *"
+    - "echo *"
+    # The framework's own CLI. Every subcommand is either read-only or writes
+    # only into the store, which the path tier already permits.
+    - "phronix *"
+    - "phronix_stack *"
+
+# ── MCP tools ──────────────────────────────────────────────────────────────
+# "all_phronix" means: every mcp__phronix__<tool> the server registers,
+# discovered by permissions.py parsing the tool modules' AST rather than a
+# hand-maintained list (which drifts the moment a capability is added — and the
+# drift shows up as a permission prompt in the middle of an unattended run).
+#
+# Rendered per harness, because the dialects name MCP tools differently:
+#   claude   -> the discovered `mcp__phronix__<tool>` names, listed one by one
+#   opencode -> a single `phronix_*: allow` key. OpenCode's tool id is
+#               sanitize(server) + "_" + sanitize(tool), matched with the same
+#               anchored wildcard matcher it uses for patterns, so the glob
+#               covers every tool exactly.
+#
+#               NOTE: as of OpenCode 1.18.x only builtin tools have ask() call
+#               sites — MCP tool calls are not permission-gated at all, so this
+#               key is a schema-valid statement of intent with no effect today.
+#               It costs nothing and starts working the moment OpenCode adds a
+#               gate, or we add a catch-all deny.
+mcp_tools: all_phronix
