@@ -75,13 +75,50 @@ def register(mcp: Any) -> None:
         normal work — it also pulls in graph-located prose and tells you whether
         the subject has recorded pitfalls.
 
+        **An empty result falls through to the knowledge graph.** The index
+        search is in-process and answers in milliseconds; a graph query costs
+        three seconds because it shells out to `graphify`. That trade is wrong
+        on every call and right on this one — "nothing found" is the answer
+        most worth a second opinion, because the alternative is an agent
+        concluding the library has nothing and rediscovering what it holds.
+
+        The graph finds by structure and neighbourhood where the index finds by
+        rare terms, so it answers when the asker's vocabulary and the skill's
+        do not overlap — which is the case the index cannot cover by design.
+
         Returns JSON: {status, query, count, results: [{skill, subject, score,
-        index_matches, blocks}]}.
+        index_matches, blocks}], graph?}.
         """
         from phronix.skills import search
 
-        return json.dumps(search(query, max_results=max_results,
-                                 max_blocks=max_blocks), indent=2)
+        found = search(query, max_results=max_results, max_blocks=max_blocks)
+        if found.get("count"):
+            return json.dumps(found, indent=2)
+
+        try:
+            from phronix.knowledge_graph import query as graph_query
+
+            located = graph_query(query, scope="knowledge")
+        except Exception as exc:      # graphify absent, or a build that failed
+            found["graph"] = {"status": "unavailable", "reason": str(exc)[:160]}
+            # Told to the learner, not just to this caller. One agent seeing
+            # "graph unavailable" works around it and moves on; the learner is
+            # what notices it happening on every task and can fix the cause.
+            try:
+                from phronix.research import observe
+
+                observe(f"graph lookup fell through: {type(exc).__name__}",
+                        worked=False, kind="tooling", stage="skill_search",
+                        detail=f"query={query[:120]} :: {str(exc)[:240]}")
+            except Exception:
+                pass
+            return json.dumps(found, indent=2)
+
+        found["graph"] = located
+        found["next"] = ("the index found nothing; these are the graph's "
+                         "nearest nodes. `graph_get_node(node=...)` fetches one "
+                         "section rather than a whole skill.")
+        return json.dumps(found, indent=2)
 
     @mcp.tool()
     def skill_load(name: str, label: str = "", section: str = "",

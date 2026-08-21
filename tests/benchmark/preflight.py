@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from .arms import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_PROVIDER
+from .arms import (DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_PROVIDER,
+                   _needs_key)
 
 
 @dataclass
@@ -73,31 +74,37 @@ def check_api_key() -> Check:
         fix="export OPENAI_API_KEY=... (see dftracer-agents/.env.example)")
 
 
-def check_endpoint(base_url: str = DEFAULT_BASE_URL) -> Check:
-    """Reach the LivAI endpoint and confirm the model is served.
+def check_endpoint(base_url: str = DEFAULT_BASE_URL,
+                   model: str = DEFAULT_MODEL) -> Check:
+    """Reach the endpoint and confirm the model it will be asked for is served.
 
-    Checked before the run rather than assumed: a model name that the gateway
-    does not serve fails identically to a broken agent, and only at the first
-    API call of the first task.
+    Checked before the run rather than assumed: a model name the endpoint does
+    not serve fails identically to a broken agent, and only at the first API
+    call of the first task.
+
+    The model is a parameter because it used to be `DEFAULT_MODEL` regardless of
+    what the run had actually been given — so a run pointed at another endpoint
+    with another model checked for a model neither of them involved, and passed
+    or failed for reasons unrelated to the run about to start.
     """
     key = os.environ.get("OPENAI_API_KEY", "")
-    if not key:
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    if not key and _needs_key(base_url):
         return Check("endpoint", False, skipped=True,
                      detail="skipped — no API key", fix="set OPENAI_API_KEY first")
     try:
         import urllib.request
 
         request = urllib.request.Request(
-            f"{base_url.rstrip('/')}/models",
-            headers={"Authorization": f"Bearer {key}"})
+            f"{base_url.rstrip('/')}/models", headers=headers)
         with urllib.request.urlopen(request, timeout=20) as response:
             payload = json.loads(response.read())
         served = {m.get("id") for m in payload.get("data", [])}
-        present = DEFAULT_MODEL in served
+        present = model in served
         return Check(
             "endpoint", present,
             detail=(f"{base_url} serves {len(served)} models; "
-                    f"{DEFAULT_MODEL} {'present' if present else 'NOT present'}"),
+                    f"{model} {'present' if present else 'NOT present'}"),
             fix=(f"pick a served model with --model; nearest matches: "
                  f"{sorted(m for m in served if 'sonnet' in str(m).lower())}"
                  if not present else ""))
@@ -316,8 +323,15 @@ def check_image_store() -> Check:
 
 def run_all(pull: bool = False, live: bool = True,
             dataset_cache: Optional[Path] = None,
-            data_root: Optional[str] = None) -> List[Check]:
-    """Run every check. *live* enables the ones that cost tokens or bandwidth."""
+            data_root: Optional[str] = None,
+            base_url: str = DEFAULT_BASE_URL,
+            model: str = DEFAULT_MODEL) -> List[Check]:
+    """Run every check. *live* enables the ones that cost tokens or bandwidth.
+
+    The endpoint and model are passed through rather than defaulted, so the
+    check is about the run that is about to start rather than about whatever the
+    package ships as its default.
+    """
     checks = [
         check_data_root(data_root),
         check_image_store(),
@@ -331,7 +345,7 @@ def run_all(pull: bool = False, live: bool = True,
         check_image(pull=pull),
     ]
     if live:
-        checks.insert(1, check_endpoint())
+        checks.insert(1, check_endpoint(base_url, model))
         checks.insert(3, check_opencode_run())
     return checks
 

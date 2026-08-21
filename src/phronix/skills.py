@@ -26,6 +26,8 @@ directories for the two harnesses that read them from disk.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -81,8 +83,28 @@ did done should would could must need needs any all one two get got make made
 #: Three subsequent attempts retrieved that skill and none acted on it: the
 #: signal was there and the length destroyed it. A prompt asking for brevity did
 #: not prevent that, because nothing checked.
-BLOCK_LIMITS = {"instruction": 1400, "rule": 1000, "reference": 1400,
-                "lesson": 3000, "pitfall": 3000}
+def _tuned(key: str, fallback):
+    """A tuning value, falling back to what the code shipped with.
+
+    Read through a function rather than bound at import: the MCP server reloads
+    tuning on its refresh sweep, and a module-level constant would hold the
+    value the process started with.
+    """
+    try:
+        from phronix.tuning import get
+
+        return get(key, fallback)
+    except Exception:
+        return fallback
+
+
+BLOCK_LIMITS = {
+    "rule": _tuned("skills.block_limits.rule", 1000),
+    "instruction": _tuned("skills.block_limits.instruction", 1400),
+    "reference": _tuned("skills.block_limits.reference", 1400),
+    "lesson": _tuned("skills.block_limits.lesson", 3000),
+    "pitfall": _tuned("skills.block_limits.pitfall", 3000),
+}
 
 
 def _length_error(kind: str, title: str, body: str) -> Optional[Dict[str, Any]]:
@@ -110,6 +132,25 @@ def _length_error(kind: str, title: str, body: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def _is_learned(name: str) -> bool:
+    """Whether a skill was learned here rather than shipped in the package.
+
+    By layer, which is where the distinction actually lives: the bundled layer
+    is the installed package and everything else was written by a run. Asking
+    the layer beats any naming convention, because a learned skill about flask
+    is named for flask and nothing in the name says who wrote it.
+    """
+    try:
+        from phronix.layers import layers
+
+        for layer in layers():
+            if (Path(layer.root) / "skills" / name / "SKILL.md").is_file():
+                return layer.name != "bundled"
+    except Exception:
+        pass
+    return False
+
+
 def _log_retrieval(kind: str, query: str, names: List[str]) -> None:
     """Append a retrieval record when ``PHRONIX_RETRIEVAL_LOG`` names a file.
 
@@ -131,7 +172,21 @@ def _log_retrieval(kind: str, query: str, names: List[str]) -> None:
     if not path:
         return
     try:
-        record = {"at": time.time(), "kind": kind, "query": query[:200], "skills": names}
+        record = {"at": time.time(), "kind": kind, "query": query[:200],
+                  "skills": names,
+                  # Which phase asked. "Did the task use what was learned" is
+                  # really two questions — research may load a skill and then
+                  # hand the solve a plan that never mentions it — and a log
+                  # without this cannot tell them apart. Set by the caller that
+                  # launches the agent, so an unset value means "not run under
+                  # the benchmark" rather than "unknown phase".
+                  "phase": os.environ.get("PHRONIX_PHASE", ""),
+                  "stage": os.environ.get("PHRONIX_STAGE", ""),
+                  # Learned here, or shipped with the framework. Reuse of a
+                  # bundled skill says the library works; reuse of a learned one
+                  # says the LEARNING works, and only the second is what this
+                  # benchmark exists to measure.
+                  "learned": sorted(n for n in names if _is_learned(n))}
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
     except OSError:
@@ -186,7 +241,7 @@ def get(name: str) -> Optional[Dict[str, Any]]:
 #: separate those — one word that appears in every skill and one that appears in
 #: exactly one are not worth the same, and rarity is precisely what says which
 #: subject a question is about.
-MIN_TERM_COVERAGE = 0.30
+MIN_TERM_COVERAGE = _tuned("skills.min_term_coverage", 0.30)
 
 
 def _term_weights(skills: List[Dict[str, Any]], terms: List[str]) -> Dict[str, float]:
@@ -733,6 +788,41 @@ def _writable_copy(skill_name: str, filename: str, scaffold: str,
     return path, action, target
 
 
+@contextlib.contextmanager
+def _exclusive(path: Path):
+    """Hold an exclusive lock on *path* for a read-modify-write.
+
+    Skills are written by more than one thing at once. With tasks running
+    concurrently, two of them may write the same subject skill; and the
+    background learner writes lessons into skills while tasks are writing
+    blocks into them. The sequence here is read, allocate the next label from
+    what was read, then write — so two writers read the same file, both decide
+    the label is `I4`, and the second write erases the first.
+
+    That is worse than losing a block. The label is a stable key: everything
+    that already points at `[[skill#I4]]` now points at whichever body won, and
+    nothing anywhere records that it changed.
+
+    Advisory, on a sidecar file, because the lock must outlive any single open
+    of the file being rewritten.
+    """
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass                      # a filesystem without locks is still usable
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        handle.close()
+
+
 def write_block(skill: str, kind: str, title: str, body: str,
                 description: str = "", layer: Optional[str] = None,
                 replace: bool = False) -> Dict[str, Any]:
@@ -808,10 +898,11 @@ def write_block(skill: str, kind: str, title: str, body: str,
         # never recycling one: it still designates the same subject matter, and
         # every `[[skill#Xn]]` pointing at it stays correct.
         label = existing["label"]
-        text = upsert_block(path.read_text(encoding="utf-8", errors="replace"),
-                            BLOCK_KINDS[kind]["section"], label, clean_title,
-                            clean_body)
-        path.write_text(refresh_index(text))
+        with _exclusive(path):
+            text = upsert_block(
+                path.read_text(encoding="utf-8", errors="replace"),
+                BLOCK_KINDS[kind]["section"], label, clean_title, clean_body)
+            path.write_text(refresh_index(text))
         _mark_dirty(f"skill_write:{slug}:{label}")
         return {"status": "ok", "action": "refreshed", "skill": slug,
                 "label": label, "kind": kind, "file": str(path),
@@ -819,10 +910,15 @@ def write_block(skill: str, kind: str, title: str, body: str,
                 "verification": _verification_status(slug),
                 "complexity_impact": _complexity_impact(slug)}
 
-    label = next_label(parsed, kind)
-    text = upsert_block(path.read_text(encoding="utf-8", errors="replace"),
-                        BLOCK_KINDS[kind]["section"], label, clean_title, clean_body)
-    path.write_text(refresh_index(text))
+    # The label is allocated from the file as it is INSIDE the lock, not from
+    # the copy parsed earlier: between those two moments another writer may have
+    # taken the label this one was about to use.
+    with _exclusive(path):
+        current = path.read_text(encoding="utf-8", errors="replace")
+        label = next_label(parse_skill(path.parent), kind)
+        text = upsert_block(current, BLOCK_KINDS[kind]["section"], label,
+                            clean_title, clean_body)
+        path.write_text(refresh_index(text))
     _mark_dirty(f"skill_write:{slug}:{label}")
 
     return {"status": "ok", "action": action, "skill": slug, "label": label,

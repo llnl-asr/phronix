@@ -1,0 +1,1060 @@
+{
+  "achieved": null,
+  "approaches": [
+    {
+      "aspect": "",
+      "at": 1787207796.2562218,
+      "hypothesis": "these steps solve this class of problem",
+      "key": "A1",
+      "measured": false,
+      "measurement": "",
+      "metrics": {},
+      "name": "A1",
+      "pipeline": [
+        {
+          "capability": "",
+          "detail": "",
+          "kind": "deterministic",
+          "order": 1,
+          "skill": "",
+          "title": "Reproduce: build a scenario tree with a normal file and a nested subdir matched by an ignore-paths regex, run PyLinter._discover_files + expand_modules on it with various invocation forms (bare relative dir, '.', trailing slash) to confirm which forms bypass the filter"
+        },
+        {
+          "capability": "",
+          "detail": "",
+          "kind": "deterministic",
+          "order": 2,
+          "skill": "",
+          "title": "Locate every place a discovered/candidate path is compared against ignore_list_paths_re: pylint/lint/pylinter.py _discover_files (root check) and pylint/lint/expand_modules.py _is_ignored_file/_is_in_ignore_list_re (top-level arg check and subfilepath check)"
+        },
+        {
+          "capability": "",
+          "detail": "",
+          "kind": "judgement",
+          "order": 3,
+          "skill": "",
+          "title": "Determine why the regex fails to match: the string being tested still carries filesystem artifacts (leading './', OS-specific separators) that the anchored user-supplied pattern does not expect, because normalization (os.path.normpath) happens only after the ignore check, or not at all on some code paths"
+        },
+        {
+          "capability": "",
+          "detail": "",
+          "kind": "judgement",
+          "order": 4,
+          "skill": "",
+          "title": "Fix by normalizing the path (os.path.normpath, and converting to a consistent separator via the existing regexp_paths_csv dual-pattern compile) before every ignore_list_paths_re comparison, in both _discover_files and expand_modules, so the same file is judged the same way regardless of how it was reached (top-level arg, os.walk root, or package sub-walk)"
+        },
+        {
+          "capability": "",
+          "detail": "",
+          "kind": "deterministic",
+          "order": 5,
+          "skill": "",
+          "title": "Verify: re-run the reproduction scenarios (bare dir, '.', trailing slash, package-with-__init__ case) and confirm the ignored subdir's files are absent from expand_modules' result in all of them; also run pylint's existing ignore-paths/recursive test suite"
+        }
+      ],
+      "pipeline_at": 1787207796.2562273,
+      "source": "issue.md (bug report) + direct reproduction via pylint.lint.pylinter.PyLinter._discover_files and pylint.lint.expand_modules.expand_modules called on a scenario tree, confirming ignore-paths match failure is caused by un-normalized paths (e.g. leading './') reaching the ignore-list regex check before os.path.normpath is applied",
+      "status": "potential",
+      "summary": "the pipeline this research produced",
+      "tools": []
+    }
+  ],
+  "checkpoint": {
+    "at": 1787207987.9027417,
+    "established": 0,
+    "open": 1,
+    "ruled_out": 0,
+    "skill": "pylint-dev"
+  },
+  "chosen": null,
+  "corpus": {
+    "at": 1787207957.756305,
+    "dimensions": {
+      "depth": [
+        "shallow",
+        "deep"
+      ],
+      "invocation": [
+        "dir_arg",
+        "dot_arg"
+      ],
+      "match": [
+        "matches",
+        "no_match"
+      ],
+      "scenario": [
+        "ignore_paths_relative_recursive",
+        "ignore_paths_absolute_recursive",
+        "ignore_patterns_recursive",
+        "ignore_recursive",
+        "ignore_paths_multiple_patterns",
+        "ignore_paths_empty_list",
+        "ignore_paths_nested_dir",
+        "ignore_paths_no_match",
+        "ignore_paths_non_recursive_baseline",
+        "ignore_paths_toml_config",
+        "ignore_paths_rcfile_config",
+        "ignore_paths_cmdline_arg"
+      ]
+    },
+    "rationale": "",
+    "target": 150
+  },
+  "fom": {
+    "at": 1787207728.8563137,
+    "direction": "max",
+    "measure": "Build a temp directory tree with a top-level dir (no __init__.py) containing a normal .py file and a nested subdir (e.g. gen/) also without __init__.py containing .py files that should be excluded. Run pylint programmatically with --recursive=y and ignore-paths set to a pattern matching the nested subdir (e.g. '^dir/gen/.*$'), using pylint.lint.expand_modules.expand_modules and pylinter._discover_files directly (or via Run()). Count: (number of scenarios where files under the ignored subdir are absent from the discovered/expanded file list) / (total scenarios tried). Include a scenario with forward-slash pattern vs backslash path (simulating Windows via os.path with sep) if feasible, plus a plain relative-path scenario, since the bug is path-separator/anchoring dependent.",
+    "name": "recursive_ignore_paths_pass_rate",
+    "target": 1.0
+  },
+  "harvested": {
+    "at": 1787207987.6589613,
+    "blocks": 3,
+    "skill": "pylint-dev"
+  },
+  "instances": [
+    {
+      "at": 1787207894.4129133,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in recursive mode over a project whose ignored module sits at a top-level-file location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"top-level-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "recursive",
+        "target_location": "top-level-file"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-relative-recursive-top-level-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129245,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in recursive mode over a project whose ignored module sits at a nested-file location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "recursive",
+        "target_location": "nested-file"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-relative-recursive-nested-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129303,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in recursive mode over a project whose ignored module sits at a nested-package-init location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-package-init\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "recursive",
+        "target_location": "nested-package-init"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-relative-recursive-nested-package-init",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129355,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in non-recursive mode over a project whose ignored module sits at a top-level-file location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"top-level-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "non-recursive",
+        "target_location": "top-level-file"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-relative-non-recursive-top-level-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129405,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in non-recursive mode over a project whose ignored module sits at a nested-file location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "non-recursive",
+        "target_location": "nested-file"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-relative-non-recursive-nested-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129457,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in non-recursive mode over a project whose ignored module sits at a nested-package-init location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-package-init\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "non-recursive",
+        "target_location": "nested-package-init"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-relative-non-recursive-nested-package-init",
+      "source": ""
+    },
+    {
+      "at": 1787207894.412952,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in recursive mode over a project whose ignored module sits at a top-level-file location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"top-level-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "recursive",
+        "target_location": "top-level-file"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-absolute-recursive-top-level-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129565,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in recursive mode over a project whose ignored module sits at a nested-file location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "recursive",
+        "target_location": "nested-file"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-absolute-recursive-nested-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129615,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in recursive mode over a project whose ignored module sits at a nested-package-init location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-package-init\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "recursive",
+        "target_location": "nested-package-init"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-absolute-recursive-nested-package-init",
+      "source": ""
+    },
+    {
+      "at": 1787207894.412967,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in non-recursive mode over a project whose ignored module sits at a top-level-file location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"top-level-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "non-recursive",
+        "target_location": "top-level-file"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-absolute-non-recursive-top-level-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129722,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in non-recursive mode over a project whose ignored module sits at a nested-file location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "non-recursive",
+        "target_location": "nested-file"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-absolute-non-recursive-nested-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129784,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pylintrc, running pylint in non-recursive mode over a project whose ignored module sits at a nested-package-init location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-package-init\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pylintrc\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "non-recursive",
+        "target_location": "nested-package-init"
+      },
+      "expected": "",
+      "name": "pylintrc-ignore-absolute-non-recursive-nested-package-init",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129837,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in recursive mode over a project whose ignored module sits at a top-level-file location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"top-level-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "recursive",
+        "target_location": "top-level-file"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-relative-recursive-top-level-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129887,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in recursive mode over a project whose ignored module sits at a nested-file location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "recursive",
+        "target_location": "nested-file"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-relative-recursive-nested-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.412995,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in recursive mode over a project whose ignored module sits at a nested-package-init location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-package-init\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "recursive",
+        "target_location": "nested-package-init"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-relative-recursive-nested-package-init",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4129994,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in non-recursive mode over a project whose ignored module sits at a top-level-file location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"top-level-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "non-recursive",
+        "target_location": "top-level-file"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-relative-non-recursive-top-level-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4130049,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in non-recursive mode over a project whose ignored module sits at a nested-file location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "non-recursive",
+        "target_location": "nested-file"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-relative-non-recursive-nested-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.41301,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in non-recursive mode over a project whose ignored module sits at a nested-package-init location invoked with a relative target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-package-init\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"relative\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "relative",
+        "recursive_mode": "non-recursive",
+        "target_location": "nested-package-init"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-relative-non-recursive-nested-package-init",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4130144,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in recursive mode over a project whose ignored module sits at a top-level-file location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"top-level-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "recursive",
+        "target_location": "top-level-file"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-absolute-recursive-top-level-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4130192,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in recursive mode over a project whose ignored module sits at a nested-file location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "recursive",
+        "target_location": "nested-file"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-absolute-recursive-nested-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.413024,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in recursive mode over a project whose ignored module sits at a nested-package-init location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-package-init\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "recursive",
+        "target_location": "nested-package-init"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-absolute-recursive-nested-package-init",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4130282,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in non-recursive mode over a project whose ignored module sits at a top-level-file location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"top-level-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "non-recursive",
+        "target_location": "top-level-file"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-absolute-non-recursive-top-level-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4130335,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in non-recursive mode over a project whose ignored module sits at a nested-file location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-file\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "non-recursive",
+        "target_location": "nested-file"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-absolute-non-recursive-nested-file",
+      "source": ""
+    },
+    {
+      "at": 1787207894.4130394,
+      "behaviour": "With --ignore=ignore style basename ignoring configured via pyproject-toml, running pylint in non-recursive mode over a project whose ignored module sits at a nested-package-init location invoked with a absolute target path must not emit lint messages for the ignored module, and must still lint the non-ignored module normally.",
+      "command": "set -e\nWORK=$(mktemp -d)\nmkdir -p \"$WORK/src/gen\"\nprintf 'x = 1\\n' > \"$WORK/src/gen/about.py\"\nprintf 'y = 2\\n' > \"$WORK/src/main.py\"\nif [ \"nested-package-init\" = \"nested-package-init\" ]; then\n  touch \"$WORK/src/gen/__init__.py\"\nfi\nif [ \"pyproject-toml\" = \"pylintrc\" ]; then\n  printf '[MASTER]\\nignore=about.py\\n' > \"$WORK/.pylintrc\"\nelse\n  printf '[tool.pylint.MASTER]\\nignore = [\"about.py\"]\\n' > \"$WORK/pyproject.toml\"\nfi\nif [ \"absolute\" = \"absolute\" ]; then\n  TARGET=\"$WORK/src\"\nelse\n  TARGET=\"src\"\nfi\ncd \"$WORK\"\nif [ \"non-recursive\" = \"recursive\" ]; then\n  python -m pylint --recursive=y \"$TARGET\" > out.txt 2>&1 || true\nelse\n  python -m pylint \"$TARGET\" \"$TARGET/gen\" > out.txt 2>&1 || true\nfi\ngrep -q \"main.py\" out.txt && ! grep -q \"about.py\" out.txt",
+      "dimensions": {
+        "config_source": "pyproject-toml",
+        "ignore_option": "ignore",
+        "path_form": "absolute",
+        "recursive_mode": "non-recursive",
+        "target_location": "nested-package-init"
+      },
+      "expected": "",
+      "name": "pyproject-toml-ignore-absolute-non-recursive-nested-package-init",
+      "source": ""
+    },
+    {
+      "at": 1787207895.3861609,
+      "behaviour": "ignore-paths-nested-init, recursive=y, path_style=relative, dir_has_init=yes: with recursive=n, ignore-paths already excludes src/gen (happy, pre-existing behaviour). With recursive=y, pylint must also exclude src/gen from --recursive=y directory walk (sad, this is the bug in #7080) so neither files under src/gen nor a 'gen' module appear in output, while src/good.py is still linted.",
+      "command": "bash -c 'set -e; D=$(mktemp -d); mkdir -p \"$D/src/gen\"; if [ \"yes\" = \"yes\" ]; then touch \"$D/src/gen/__init__.py\"; fi; printf \"import os\\nx=1\\n\" > \"$D/src/gen/bad.py\"; printf \"import os\\ny=2\\n\" > \"$D/src/good.py\"; PATTERN=\"^src/gen/.*$\"; if [ \"relative\" = \"absolute\" ]; then PATTERN=\"^$D/src/gen/.*$\"; fi; printf \"[tool.pylint.MASTER]\\nignore-paths = [\\\"%s\\\"]\\n\" \"$PATTERN\" > \"$D/pyproject.toml\"; cd \"$D\"; OUT=$(python -m pylint --recursive=y src 2>&1 || true); echo \"$OUT\" | grep -q \"gen\" && echo FOUND_GEN || echo NO_GEN; echo \"$OUT\" | grep -q \"good\" && echo FOUND_GOOD || echo NO_GOOD; rm -rf \"$D\"'",
+      "dimensions": {
+        "dir_has_init": "yes",
+        "path_style": "relative",
+        "recursive": "y"
+      },
+      "expected": "",
+      "name": "yes-relative-y",
+      "source": ""
+    },
+    {
+      "at": 1787207895.38617,
+      "behaviour": "ignore-paths-nested-init, recursive=n, path_style=relative, dir_has_init=yes: with recursive=n, ignore-paths already excludes src/gen (happy, pre-existing behaviour). With recursive=y, pylint must also exclude src/gen from --recursive=y directory walk (sad, this is the bug in #7080) so neither files under src/gen nor a 'gen' module appear in output, while src/good.py is still linted.",
+      "command": "bash -c 'set -e; D=$(mktemp -d); mkdir -p \"$D/src/gen\"; if [ \"yes\" = \"yes\" ]; then touch \"$D/src/gen/__init__.py\"; fi; printf \"import os\\nx=1\\n\" > \"$D/src/gen/bad.py\"; printf \"import os\\ny=2\\n\" > \"$D/src/good.py\"; PATTERN=\"^src/gen/.*$\"; if [ \"relative\" = \"absolute\" ]; then PATTERN=\"^$D/src/gen/.*$\"; fi; printf \"[tool.pylint.MASTER]\\nignore-paths = [\\\"%s\\\"]\\n\" \"$PATTERN\" > \"$D/pyproject.toml\"; cd \"$D\"; OUT=$(python -m pylint --recursive=n src 2>&1 || true); echo \"$OUT\" | grep -q \"gen\" && echo FOUND_GEN || echo NO_GEN; echo \"$OUT\" | grep -q \"good\" && echo FOUND_GOOD || echo NO_GOOD; rm -rf \"$D\"'",
+      "dimensions": {
+        "dir_has_init": "yes",
+        "path_style": "relative",
+        "recursive": "n"
+      },
+      "expected": "",
+      "name": "yes-relative-n",
+      "source": ""
+    },
+    {
+      "at": 1787207895.3861763,
+      "behaviour": "ignore-paths-nested-init, recursive=y, path_style=absolute, dir_has_init=yes: with recursive=n, ignore-paths already excludes src/gen (happy, pre-existing behaviour). With recursive=y, pylint must also exclude src/gen from --recursive=y directory walk (sad, this is the bug in #7080) so neither files under src/gen nor a 'gen' module appear in output, while src/good.py is still linted.",
+      "command": "bash -c 'set -e; D=$(mktemp -d); mkdir -p \"$D/src/gen\"; if [ \"yes\" = \"yes\" ]; then touch \"$D/src/gen/__init__.py\"; fi; printf \"import os\\nx=1\\n\" > \"$D/src/gen/bad.py\"; printf \"import os\\ny=2\\n\" > \"$D/src/good.py\"; PATTERN=\"^src/gen/.*$\"; if [ \"absolute\" = \"absolute\" ]; then PATTERN=\"^$D/src/gen/.*$\"; fi; printf \"[tool.pylint.MASTER]\\nignore-paths = [\\\"%s\\\"]\\n\" \"$PATTERN\" > \"$D/pyproject.toml\"; cd \"$D\"; OUT=$(python -m pylint --recursive=y src 2>&1 || true); echo \"$OUT\" | grep -q \"gen\" && echo FOUND_GEN || echo NO_GEN; echo \"$OUT\" | grep -q \"good\" && echo FOUND_GOOD || echo NO_GOOD; rm -rf \"$D\"'",
+      "dimensions": {
+        "dir_has_init": "yes",
+        "path_style": "absolute",
+        "recursive": "y"
+      },
+      "expected": "",
+      "name": "yes-absolute-y",
+      "source": ""
+    },
+    {
+      "at": 1787207895.3861804,
+      "behaviour": "ignore-paths-nested-init, recursive=n, path_style=absolute, dir_has_init=yes: with recursive=n, ignore-paths already excludes src/gen (happy, pre-existing behaviour). With recursive=y, pylint must also exclude src/gen from --recursive=y directory walk (sad, this is the bug in #7080) so neither files under src/gen nor a 'gen' module appear in output, while src/good.py is still linted.",
+      "command": "bash -c 'set -e; D=$(mktemp -d); mkdir -p \"$D/src/gen\"; if [ \"yes\" = \"yes\" ]; then touch \"$D/src/gen/__init__.py\"; fi; printf \"import os\\nx=1\\n\" > \"$D/src/gen/bad.py\"; printf \"import os\\ny=2\\n\" > \"$D/src/good.py\"; PATTERN=\"^src/gen/.*$\"; if [ \"absolute\" = \"absolute\" ]; then PATTERN=\"^$D/src/gen/.*$\"; fi; printf \"[tool.pylint.MASTER]\\nignore-paths = [\\\"%s\\\"]\\n\" \"$PATTERN\" > \"$D/pyproject.toml\"; cd \"$D\"; OUT=$(python -m pylint --recursive=n src 2>&1 || true); echo \"$OUT\" | grep -q \"gen\" && echo FOUND_GEN || echo NO_GEN; echo \"$OUT\" | grep -q \"good\" && echo FOUND_GOOD || echo NO_GOOD; rm -rf \"$D\"'",
+      "dimensions": {
+        "dir_has_init": "yes",
+        "path_style": "absolute",
+        "recursive": "n"
+      },
+      "expected": "",
+      "name": "yes-absolute-n",
+      "source": ""
+    },
+    {
+      "at": 1787207895.3861861,
+      "behaviour": "ignore-paths-nested-init, recursive=y, path_style=relative, dir_has_init=no: with recursive=n, ignore-paths already excludes src/gen (happy, pre-existing behaviour). With recursive=y, pylint must also exclude src/gen from --recursive=y directory walk (sad, this is the bug in #7080) so neither files under src/gen nor a 'gen' module appear in output, while src/good.py is still linted.",
+      "command": "bash -c 'set -e; D=$(mktemp -d); mkdir -p \"$D/src/gen\"; if [ \"no\" = \"yes\" ]; then touch \"$D/src/gen/__init__.py\"; fi; printf \"import os\\nx=1\\n\" > \"$D/src/gen/bad.py\"; printf \"import os\\ny=2\\n\" > \"$D/src/good.py\"; PATTERN=\"^src/gen/.*$\"; if [ \"relative\" = \"absolute\" ]; then PATTERN=\"^$D/src/gen/.*$\"; fi; printf \"[tool.pylint.MASTER]\\nignore-paths = [\\\"%s\\\"]\\n\" \"$PATTERN\" > \"$D/pyproject.toml\"; cd \"$D\"; OUT=$(python -m pylint --recursive=y src 2>&1 || true); echo \"$OUT\" | grep -q \"gen\" && echo FOUND_GEN || echo NO_GEN; echo \"$OUT\" | grep -q \"good\" && echo FOUND_GOOD || echo NO_GOOD; rm -rf \"$D\"'",
+      "dimensions": {
+        "dir_has_init": "no",
+        "path_style": "relative",
+        "recursive": "y"
+      },
+      "expected": "",
+      "name": "no-relative-y",
+      "source": ""
+    },
+    {
+      "at": 1787207895.3861904,
+      "behaviour": "ignore-paths-nested-init, recursive=n, path_style=relative, dir_has_init=no: with recursive=n, ignore-paths already excludes src/gen (happy, pre-existing behaviour). With recursive=y, pylint must also exclude src/gen from --recursive=y directory walk (sad, this is the bug in #7080) so neither files under src/gen nor a 'gen' module appear in output, while src/good.py is still linted.",
+      "command": "bash -c 'set -e; D=$(mktemp -d); mkdir -p \"$D/src/gen\"; if [ \"no\" = \"yes\" ]; then touch \"$D/src/gen/__init__.py\"; fi; printf \"import os\\nx=1\\n\" > \"$D/src/gen/bad.py\"; printf \"import os\\ny=2\\n\" > \"$D/src/good.py\"; PATTERN=\"^src/gen/.*$\"; if [ \"relative\" = \"absolute\" ]; then PATTERN=\"^$D/src/gen/.*$\"; fi; printf \"[tool.pylint.MASTER]\\nignore-paths = [\\\"%s\\\"]\\n\" \"$PATTERN\" > \"$D/pyproject.toml\"; cd \"$D\"; OUT=$(python -m pylint --recursive=n src 2>&1 || true); echo \"$OUT\" | grep -q \"gen\" && echo FOUND_GEN || echo NO_GEN; echo \"$OUT\" | grep -q \"good\" && echo FOUND_GOOD || echo NO_GOOD; rm -rf \"$D\"'",
+      "dimensions": {
+        "dir_has_init": "no",
+        "path_style": "relative",
+        "recursive": "n"
+      },
+      "expected": "",
+      "name": "no-relative-n",
+      "source": ""
+    },
+    {
+      "at": 1787207895.3861954,
+      "behaviour": "ignore-paths-nested-init, recursive=y, path_style=absolute, dir_has_init=no: with recursive=n, ignore-paths already excludes src/gen (happy, pre-existing behaviour). With recursive=y, pylint must also exclude src/gen from --recursive=y directory walk (sad, this is the bug in #7080) so neither files under src/gen nor a 'gen' module appear in output, while src/good.py is still linted.",
+      "command": "bash -c 'set -e; D=$(mktemp -d); mkdir -p \"$D/src/gen\"; if [ \"no\" = \"yes\" ]; then touch \"$D/src/gen/__init__.py\"; fi; printf \"import os\\nx=1\\n\" > \"$D/src/gen/bad.py\"; printf \"import os\\ny=2\\n\" > \"$D/src/good.py\"; PATTERN=\"^src/gen/.*$\"; if [ \"absolute\" = \"absolute\" ]; then PATTERN=\"^$D/src/gen/.*$\"; fi; printf \"[tool.pylint.MASTER]\\nignore-paths = [\\\"%s\\\"]\\n\" \"$PATTERN\" > \"$D/pyproject.toml\"; cd \"$D\"; OUT=$(python -m pylint --recursive=y src 2>&1 || true); echo \"$OUT\" | grep -q \"gen\" && echo FOUND_GEN || echo NO_GEN; echo \"$OUT\" | grep -q \"good\" && echo FOUND_GOOD || echo NO_GOOD; rm -rf \"$D\"'",
+      "dimensions": {
+        "dir_has_init": "no",
+        "path_style": "absolute",
+        "recursive": "y"
+      },
+      "expected": "",
+      "name": "no-absolute-y",
+      "source": ""
+    },
+    {
+      "at": 1787207895.3861997,
+      "behaviour": "ignore-paths-nested-init, recursive=n, path_style=absolute, dir_has_init=no: with recursive=n, ignore-paths already excludes src/gen (happy, pre-existing behaviour). With recursive=y, pylint must also exclude src/gen from --recursive=y directory walk (sad, this is the bug in #7080) so neither files under src/gen nor a 'gen' module appear in output, while src/good.py is still linted.",
+      "command": "bash -c 'set -e; D=$(mktemp -d); mkdir -p \"$D/src/gen\"; if [ \"no\" = \"yes\" ]; then touch \"$D/src/gen/__init__.py\"; fi; printf \"import os\\nx=1\\n\" > \"$D/src/gen/bad.py\"; printf \"import os\\ny=2\\n\" > \"$D/src/good.py\"; PATTERN=\"^src/gen/.*$\"; if [ \"absolute\" = \"absolute\" ]; then PATTERN=\"^$D/src/gen/.*$\"; fi; printf \"[tool.pylint.MASTER]\\nignore-paths = [\\\"%s\\\"]\\n\" \"$PATTERN\" > \"$D/pyproject.toml\"; cd \"$D\"; OUT=$(python -m pylint --recursive=n src 2>&1 || true); echo \"$OUT\" | grep -q \"gen\" && echo FOUND_GEN || echo NO_GEN; echo \"$OUT\" | grep -q \"good\" && echo FOUND_GOOD || echo NO_GOOD; rm -rf \"$D\"'",
+      "dimensions": {
+        "dir_has_init": "no",
+        "path_style": "absolute",
+        "recursive": "n"
+      },
+      "expected": "",
+      "name": "no-absolute-n",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5387428,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_target' set via cli, and --recursive=y, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_target\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=y\"]\nif \"cli\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "cli",
+        "ignore_pattern_match": "matches_target",
+        "recursive_flag": "y",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "cli-matches-target-y-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5387526,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_target' set via cli, and --recursive=n, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_target\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=n\"]\nif \"cli\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "cli",
+        "ignore_pattern_match": "matches_target",
+        "recursive_flag": "n",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "cli-matches-target-n-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.53876,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'no_match' set via cli, and --recursive=y, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"no_match\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=y\"]\nif \"cli\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "cli",
+        "ignore_pattern_match": "no_match",
+        "recursive_flag": "y",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "cli-no-match-y-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5387661,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'no_match' set via cli, and --recursive=n, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"no_match\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=n\"]\nif \"cli\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "cli",
+        "ignore_pattern_match": "no_match",
+        "recursive_flag": "n",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "cli-no-match-n-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5387712,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_everything' set via cli, and --recursive=y, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_everything\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=y\"]\nif \"cli\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "cli",
+        "ignore_pattern_match": "matches_everything",
+        "recursive_flag": "y",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "cli-matches-everything-y-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.538779,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_everything' set via cli, and --recursive=n, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_everything\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=n\"]\nif \"cli\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "cli",
+        "ignore_pattern_match": "matches_everything",
+        "recursive_flag": "n",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "cli-matches-everything-n-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5387838,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_nothing' set via cli, and --recursive=y, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_nothing\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=y\"]\nif \"cli\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "cli",
+        "ignore_pattern_match": "matches_nothing",
+        "recursive_flag": "y",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "cli-matches-nothing-y-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5387878,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_nothing' set via cli, and --recursive=n, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_nothing\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=n\"]\nif \"cli\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "cli",
+        "ignore_pattern_match": "matches_nothing",
+        "recursive_flag": "n",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "cli-matches-nothing-n-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5387926,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_target' set via rcfile, and --recursive=y, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_target\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=y\"]\nif \"rcfile\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "rcfile",
+        "ignore_pattern_match": "matches_target",
+        "recursive_flag": "y",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "rcfile-matches-target-y-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.538797,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_target' set via rcfile, and --recursive=n, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_target\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=n\"]\nif \"rcfile\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "rcfile",
+        "ignore_pattern_match": "matches_target",
+        "recursive_flag": "n",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "rcfile-matches-target-n-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5388012,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'no_match' set via rcfile, and --recursive=y, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"no_match\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=y\"]\nif \"rcfile\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "rcfile",
+        "ignore_pattern_match": "no_match",
+        "recursive_flag": "y",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "rcfile-no-match-y-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5388083,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'no_match' set via rcfile, and --recursive=n, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"no_match\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=n\"]\nif \"rcfile\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "rcfile",
+        "ignore_pattern_match": "no_match",
+        "recursive_flag": "n",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "rcfile-no-match-n-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5388126,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_everything' set via rcfile, and --recursive=y, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_everything\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=y\"]\nif \"rcfile\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "rcfile",
+        "ignore_pattern_match": "matches_everything",
+        "recursive_flag": "y",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "rcfile-matches-everything-y-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.538816,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_everything' set via rcfile, and --recursive=n, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_everything\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=n\"]\nif \"rcfile\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "rcfile",
+        "ignore_pattern_match": "matches_everything",
+        "recursive_flag": "n",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "rcfile-matches-everything-n-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5388196,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_nothing' set via rcfile, and --recursive=y, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_nothing\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=y\"]\nif \"rcfile\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "rcfile",
+        "ignore_pattern_match": "matches_nothing",
+        "recursive_flag": "y",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "rcfile-matches-nothing-y-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207926.5388258,
+      "behaviour": "With target_type=single_file, ignore-paths pattern variant 'matches_nothing' set via rcfile, and --recursive=n, pylint invoked directly on a single .py file must apply ignore-paths correctly: the file's unused-import message is suppressed iff the pattern matches the file path, regardless of the recursive flag (single-file targets bypass directory recursion entirely, so this must hold both before and after any recursive-walk fix).",
+      "command": "python3 - <<'PY'\nimport os, re, sys, tempfile, subprocess\nwork = tempfile.mkdtemp(prefix=\"plx7080_\")\ntarget = os.path.join(work, \"gen_module.py\")\nwith open(target, \"w\") as f:\n    f.write(\"import os\\n\")\npatterns = {\n    \"matches_target\": r\"^.*gen_module\\.py$\",\n    \"no_match\": r\"^.*other_module\\.py$\",\n    \"matches_everything\": r\".*\",\n    \"matches_nothing\": r\"^$\",\n}\npattern = patterns[\"matches_nothing\"]\nshould_ignore = bool(re.match(pattern, target)) or bool(re.match(pattern, os.path.basename(target)))\nargs = [sys.executable, \"-m\", \"pylint\", \"--disable=all\", \"--enable=unused-import\",\n        \"--recursive=n\"]\nif \"rcfile\" == \"cli\":\n    args += [\"--ignore-paths\", pattern]\nelse:\n    rcpath = os.path.join(work, \"pylintrc\")\n    with open(rcpath, \"w\") as f:\n        f.write(\"[MASTER]\\nignore-paths=%s\\n\" % pattern)\n    args += [\"--rcfile\", rcpath]\nargs.append(target)\nproc = subprocess.run(args, capture_output=True, text=True, cwd=work)\nmatched = \"unused-import\" in proc.stdout\nok = (not matched) if should_ignore else matched\nsys.exit(0 if ok else 1)\nPY",
+      "dimensions": {
+        "config_source": "rcfile",
+        "ignore_pattern_match": "matches_nothing",
+        "recursive_flag": "n",
+        "target_type": "single_file"
+      },
+      "expected": "",
+      "name": "rcfile-matches-nothing-n-single-file",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6948838,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a anchored regex set through pyproject_toml, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/pyproject.toml\" <<'EOF'\n[tool.pylint.MASTER]\nignore-paths = [\"^pkg/gen_file\\.py$\"]\nEOF\ncd \"$D\" && python -m pylint --recursive=y pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pyproject_toml",
+        "ignore_target": "single_file",
+        "pattern_form": "anchored",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_anchored_pyproject_toml",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6948953,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a anchored regex set through pylintrc, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/.pylintrc\" <<'EOF'\n[MASTER]\nignore-paths=^pkg/gen_file\\.py$\nEOF\ncd \"$D\" && python -m pylint --recursive=y pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_target": "single_file",
+        "pattern_form": "anchored",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_anchored_pylintrc",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949005,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a anchored regex set through cli_flag, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncd \"$D\" && python -m pylint --recursive=y --ignore-paths='^pkg/gen_file\\.py$' pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "cli_flag",
+        "ignore_target": "single_file",
+        "pattern_form": "anchored",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_anchored_cli_flag",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949067,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a substring regex set through pyproject_toml, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/pyproject.toml\" <<'EOF'\n[tool.pylint.MASTER]\nignore-paths = [\"gen_file\"]\nEOF\ncd \"$D\" && python -m pylint --recursive=y pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pyproject_toml",
+        "ignore_target": "single_file",
+        "pattern_form": "substring",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_substring_pyproject_toml",
+      "source": ""
+    },
+    {
+      "at": 1787207958.694913,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a substring regex set through pylintrc, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/.pylintrc\" <<'EOF'\n[MASTER]\nignore-paths=gen_file\nEOF\ncd \"$D\" && python -m pylint --recursive=y pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_target": "single_file",
+        "pattern_form": "substring",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_substring_pylintrc",
+      "source": ""
+    },
+    {
+      "at": 1787207958.694918,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a substring regex set through cli_flag, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncd \"$D\" && python -m pylint --recursive=y --ignore-paths='gen_file' pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "cli_flag",
+        "ignore_target": "single_file",
+        "pattern_form": "substring",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_substring_cli_flag",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949234,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a dirwide regex set through pyproject_toml, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/pyproject.toml\" <<'EOF'\n[tool.pylint.MASTER]\nignore-paths = [\"^pkg/.*$\"]\nEOF\ncd \"$D\" && python -m pylint --recursive=y pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pyproject_toml",
+        "ignore_target": "single_file",
+        "pattern_form": "dirwide",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_dirwide_pyproject_toml",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949296,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a dirwide regex set through pylintrc, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/.pylintrc\" <<'EOF'\n[MASTER]\nignore-paths=^pkg/.*$\nEOF\ncd \"$D\" && python -m pylint --recursive=y pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_target": "single_file",
+        "pattern_form": "dirwide",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_dirwide_pylintrc",
+      "source": ""
+    },
+    {
+      "at": 1787207958.694933,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a dirwide regex set through cli_flag, pylint --recursive=y must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncd \"$D\" && python -m pylint --recursive=y --ignore-paths='^pkg/.*$' pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "cli_flag",
+        "ignore_target": "single_file",
+        "pattern_form": "dirwide",
+        "recursive_flag": "y"
+      },
+      "expected": "fail_before_fix",
+      "name": "w3_single_file_recy_dirwide_cli_flag",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949372,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a anchored regex set through pyproject_toml, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/pyproject.toml\" <<'EOF'\n[tool.pylint.MASTER]\nignore-paths = [\"^pkg/gen_file\\.py$\"]\nEOF\ncd \"$D\" && python -m pylint --recursive=n pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pyproject_toml",
+        "ignore_target": "single_file",
+        "pattern_form": "anchored",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_anchored_pyproject_toml",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949425,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a anchored regex set through pylintrc, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/.pylintrc\" <<'EOF'\n[MASTER]\nignore-paths=^pkg/gen_file\\.py$\nEOF\ncd \"$D\" && python -m pylint --recursive=n pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_target": "single_file",
+        "pattern_form": "anchored",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_anchored_pylintrc",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949475,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a anchored regex set through cli_flag, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncd \"$D\" && python -m pylint --recursive=n --ignore-paths='^pkg/gen_file\\.py$' pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "cli_flag",
+        "ignore_target": "single_file",
+        "pattern_form": "anchored",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_anchored_cli_flag",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949575,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a substring regex set through pyproject_toml, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/pyproject.toml\" <<'EOF'\n[tool.pylint.MASTER]\nignore-paths = [\"gen_file\"]\nEOF\ncd \"$D\" && python -m pylint --recursive=n pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pyproject_toml",
+        "ignore_target": "single_file",
+        "pattern_form": "substring",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_substring_pyproject_toml",
+      "source": ""
+    },
+    {
+      "at": 1787207958.694964,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a substring regex set through pylintrc, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/.pylintrc\" <<'EOF'\n[MASTER]\nignore-paths=gen_file\nEOF\ncd \"$D\" && python -m pylint --recursive=n pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_target": "single_file",
+        "pattern_form": "substring",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_substring_pylintrc",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949694,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a substring regex set through cli_flag, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncd \"$D\" && python -m pylint --recursive=n --ignore-paths='gen_file' pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "cli_flag",
+        "ignore_target": "single_file",
+        "pattern_form": "substring",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_substring_cli_flag",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949742,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a dirwide regex set through pyproject_toml, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/pyproject.toml\" <<'EOF'\n[tool.pylint.MASTER]\nignore-paths = [\"^pkg/.*$\"]\nEOF\ncd \"$D\" && python -m pylint --recursive=n pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pyproject_toml",
+        "ignore_target": "single_file",
+        "pattern_form": "dirwide",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_dirwide_pyproject_toml",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949806,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a dirwide regex set through pylintrc, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncat > \"$D/.pylintrc\" <<'EOF'\n[MASTER]\nignore-paths=^pkg/.*$\nEOF\ncd \"$D\" && python -m pylint --recursive=n pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "pylintrc",
+        "ignore_target": "single_file",
+        "pattern_form": "dirwide",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_dirwide_pylintrc",
+      "source": ""
+    },
+    {
+      "at": 1787207958.6949856,
+      "behaviour": "With ignore-paths matching a single file (pkg/gen_file.py) via a dirwide regex set through cli_flag, pylint --recursive=n must not report any messages for gen_file.py, while still linting pkg/module.py normally.",
+      "command": "set -e\nD=$(mktemp -d)\nmkdir -p \"$D/pkg\"\ncat > \"$D/pkg/gen_file.py\" <<'EOF'\nimport os,sys\nx=1\nEOF\ncat > \"$D/pkg/module.py\" <<'EOF'\n\"\"\"doc\"\"\"\n\n\ndef foo():\n    return 1\nEOF\ntouch \"$D/pkg/__init__.py\"\ncd \"$D\" && python -m pylint --recursive=n --ignore-paths='^pkg/.*$' pkg 2>&1 | grep -q \"gen_file.py\" && exit 1 || exit 0",
+      "dimensions": {
+        "config_source": "cli_flag",
+        "ignore_target": "single_file",
+        "pattern_form": "dirwide",
+        "recursive_flag": "n"
+      },
+      "expected": "pass_before_fix",
+      "name": "w3_single_file_recn_dirwide_cli_flag",
+      "source": ""
+    }
+  ],
+  "plan": [],
+  "slug": "pylint-dev-pylint-7080",
+  "topic": "pylint-dev__pylint-7080"
+}

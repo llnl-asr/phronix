@@ -1,6 +1,6 @@
 ---
 name: pylint-dev-pylint-5859
-description: The pylint-dev-pylint-5859 subject.
+description: The pylint-dev-pylint-5859 subject: fixing the W0511 fixme-tag regex trailing-\b bug for punctuation-only note tags.
 subject: pylint-dev-pylint-5859
 type: skill
 ---
@@ -9,66 +9,54 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `R1` | Rules | ChangeLog entry format for bug-fix patches |
-| `R2` | Rules | No existing test coverage for notes-rgx anywhere in repo |
-| `R3` | Rules | unittest_misc.py TestFixme: plain-tag matching tests to preserve |
-| `R4` | Rules | unittest_misc.py TestFixme: boundary/anti-false-positive tests to preserve |
-| `R5` | Rules | Root cause: \b fails on punctuation-only note tags |
-| `R6` | Rules | Why a plain lookahead beats \b here |
-| `X1` | References | misc.py open()/process_tokens() regex construction (source read in full) |
-| `X2` | References | Fix location: EncodingChecker.open() regex_string |
-
-
-
-
-
-
-
+| `R1` | Rules | Do not use full pylint CLI invocation in this venv/worktree |
+| `R2` | Rules | Do not remove/alter notes_rgx's shared trailing \b |
+| `R3` | Rules | Per-tag \b-vs-(?!\w) trick applies only to literal notes, not notes_rgx |
+| `R4` | Rules | fix-discover-files-match-root-with-trailing-sep does not apply here |
+| `R5` | Rules | switch-match-to-fullmatch is also a topic mismatch here |
+| `X2` | References | unittest_misc.py test_xxx_middle is unaffected by \b changes |
+| `X3` | References | pylint CLI does not run in this sandbox (Python 3.13 vs old pylint checkout) |
+| `X4` | References | Root cause: word-boundary \b in EncodingChecker note regex, and the confirmed fix |
 
 
 ## Instructions
 
 ## Rules
 
-### R1 — ChangeLog entry format for bug-fix patches
+### R1 — Do not use full pylint CLI invocation in this venv/worktree
 
-Add a bullet to the root `ChangeLog` file under the current unreleased "What's New in Pylint 2.13.0?" section, following the existing pattern: `* Fix(ed) ... using ``inline-code`` for checker/message names.` then a blank line, then `Closes #<issue>` (2-space indented to align under the bullet). Entries are flat — no "Bug fixes" subsection header; features/fixes/deprecations all live as bullets under the single version header. A doc/whatsnew/VERSION.rst entry is optional for small bug fixes (only required per contribute.rst for "changes other than small bugs"). No CI/hook was found enforcing this — it's a documented human convention (doc/development_guide/contribute.rst lines 78-97), not machine-checked.
+Running `python -m pylint ... --notes="YES,???"` end-to-end in this worktree/venv fails with `UnknownMessageError: No such message id or symbol 'c-extension-no-member'` raised during Run.__init__, before the checker under test is even reached. This is an environment/message-registry mismatch unrelated to any regex/notes fix. Use CheckerTestCase-style direct checker invocation instead (as tests/checkers/unittest_misc.py already does) — that path doesn't go through Run/PyLinter's msgs_store init and works fine.
 
-### R2 — No existing test coverage for notes-rgx anywhere in repo
+### R2 — Do not remove/alter notes_rgx's shared trailing \b
 
-Repo-wide grep for "notes-rgx\|notes_rgx" (excluding tmp/research) only matches the option declaration and open()/process_tokens() usage in pylint/checkers/misc.py itself — no test in tests/checkers/unittest_misc.py or tests/functional exercises notes-rgx, @set_config(notes_rgx=...), or the combined-regex branch `regex_string = rf"#\s*({notes}|{self.config.notes_rgx})\b"`. The fix therefore has no pre-existing regression test constraining notes-rgx's current behavior — it can be changed freely there. Do not assume this means notes-rgx is untested by the hidden grading tests though; task-brief.md explicitly warns not to assume absence of visible tests means absence of hidden target tests.
+In EncodingChecker.open() (pylint/checkers/misc.py), the regex is rf"#\s*({notes}|{notes_rgx})\b" — notes_rgx is spliced in raw, sharing one trailing \b with notes. When fixing the --notes punctuation-boundary bug (tags like "???" never matching), do NOT remove/weaken this \b for the notes_rgx branch.
 
-### R3 — unittest_misc.py TestFixme: plain-tag matching tests to preserve
+Why: tests/functional/f/fixme.rc sets notes-rgx=FIXME(?!.*ISSUE-\d+)|TO.*DO. fixme.py has "# Todoist API mentioned should not result in a message." which fixme.txt asserts must NOT be flagged. TO.*DO matches "Tod...do" inside "Todoist"; only the trailing \b (failing because "i" follows "do") stops it from matching. Removing \b there breaks this regression test.
 
-Any change to misc.py's process_tokens()/open() regex construction must preserve these tests:
-1. test_absent_codetag: @set_config(notes=[]), notes_rgx unset → no messages. Only checks notes, not notes_rgx, so broadening the early-return guard to also check notes_rgx does not break it.
-2. test_other_present_codetag: @set_config(notes=["CODETAG"]) → notes fully replaces the default list ("FIXME","XXX","TODO"), not appends.
-3. Plain tag matching + col_offset/args correctness (test_fixme_with_message, test_todo_without_message, test_xxx_without_space, test_without_space_fixme).
+### R3 — Per-tag \b-vs-(?!\w) trick applies only to literal notes, not notes_rgx
 
-### R4 — unittest_misc.py TestFixme: boundary/anti-false-positive tests to preserve
+notes_rgx is a free-form user regex — its "last matched character" is not statically known, so you cannot choose \b vs (?!\w) per-alternative for it the way you can for literal --notes tags (which pylint controls via re.escape). Fix only the notes branch; leave notes_rgx's construction/boundary untouched.
 
-Any change to misc.py's regex construction must also preserve:
-- test_xxx_middle: tag must be anchored right after `#\s*`, not found anywhere in the comment text.
-- test_dont_trigger_on_todoist: trailing `\b` must remain so "Todoist" doesn't match "TODO".
-- test_issue_2321_should_not_trigger / _should_trigger: detection uses tokenize.COMMENT tokens only, never text search over string literals.
+### R4 — fix-discover-files-match-root-with-trailing-sep does not apply here
 
-### R5 — Root cause: \b fails on punctuation-only note tags
+The approach fix-discover-files-match-root-with-trailing-sep targets pylint/lint/pylinter.py's _discover_files/ignore-paths code path (see [[discover-files#X50]] and [[pylint-discover-files-ignore-paths#X1]]), but this topic's (pylint-dev__pylint-5859) actual issue is misc.py's notes_rgx/EncodingChecker word-boundary failing on punctuation-only note tags like '???' — see [[pylint-dev-pylint-5859#X4]] for the real root cause and confirmed fix. These are unrelated code paths; reported 3x now (stages tune, tuning) as a mismatch. Same class of cross-task contamination already tracked for flask-5063 at [[pylint-discover-files-ignore-paths#X1]].
 
-`\b` only matches at a word/non-word transition. When a note tag is entirely punctuation (e.g. `???`) and is followed by non-word text (e.g. `: no`), there is no word/non-word transition at that boundary position, so `\b` fails to match at all — the FIXME-style comment is silently missed. Confirmed empirically: `re.compile(r"#\s*(YES|???)\b", re.I).search("# ???: no")` returns None while `"# YES: yes"` matches. This is why `--notes="YES,???"` misses lines starting with `# ???`.
+### R5 — switch-match-to-fullmatch is also a topic mismatch here
 
-### R6 — Why a plain lookahead beats \b here
-
-A trailing lookahead like `(?=(:|\s|\Z))` doesn't inspect the character class of the tag's last char at all — it only requires that whatever follows is one of a fixed set (colon, whitespace, or end-of-string). This sidesteps \b's word/non-word-transition requirement entirely, so it works uniformly for alnum tags (FIXME), punctuation-only tags (???), and mixed tags, while still blocking substring false positives like "FIX" matching inside "FIXME2" (next char "M" isn't `:`/whitespace/EOF).
+switch-match-to-fullmatch ([[discover-files#X42]]: changing ignore-paths regex matching from `re.Pattern.match` to `.fullmatch` in `_is_in_ignore_list_re`) was also reported (stages measurement, tuning) as an attempted fix for this topic's punctuation-tag bug. It cannot apply: that code path is pylinter.py's ignore-paths matching, unrelated to misc.py's `_fixme_pattern`/notes_rgx construction ([[pylint-dev-pylint-5859#X4]]), and [[discover-files#X42]] itself was already deprioritized as orthogonal even within its own (ignore-paths) topic. Same class of mismatch as R4 — check the actual failing code path (misc.py, not pylinter.py) before proposing an ignore-paths approach here.
 
 ## References
 
-### X1 — misc.py open()/process_tokens() regex construction (source read in full)
+### X2 — unittest_misc.py test_xxx_middle is unaffected by \b changes
 
-pylint/checkers/misc.py:
-- options tuple: `notes` (csv, default ("FIXME","XXX","TODO")), `notes-rgx` (string, no default → None/"" when unset).
-- open(): `notes = "|".join(re.escape(n) for n in self.config.notes)`; if self.config.notes_rgx: `regex_string = rf"#\s*({notes}|{self.config.notes_rgx})\b"` else `rf"#\s*({notes})\b"`; then `self._fixme_pattern = re.compile(regex_string, re.I)`. Individual `notes` entries are re.escape'd; notes_rgx is spliced in raw as a regex fragment (intentional — it's user-supplied regex).
-- process_tokens(): starts with `if not self.config.notes: return` — this guard never checks notes_rgx, so notes-rgx has no effect when notes is empty/falsy. Identified as the likely core bug for #5859 (see approach fix-process_tokens-guard-for-notes-rgx in research approaches).
+tests/checkers/unittest_misc.py:55-60 `test_xxx_middle` uses code "# midle XXX" (note: "midle" is a typo for "middle", not an actual middle-of-line placement of XXX) and expects assertNoMessages(). It passes because the checker regex requires the tag immediately after `#\s*` — matching is anchored right after the `#`, not searched anywhere in the string — so "midle" (not "XXX") at that position means the XXX alternative never matches at all, regardless of any `\b`-suffix change. This test exercises the `#\s*` prefix behavior, not boundary logic, so it's irrelevant to (and unaffected by) fixes targeting the trailing `\b`.
 
-### X2 — Fix location: EncodingChecker.open() regex_string
+### X3 — pylint CLI does not run in this sandbox (Python 3.13 vs old pylint checkout)
 
-The buggy regex is built in `pylint/checkers/misc.py`, `EncodingChecker.open()`, at lines ~122-128 (base commit 182cc539b815). Two `regex_string = rf"..."` assignments (with/without `self.config.notes_rgx`) both end in `\b` and need the same replacement. This checkout uses `self.config.notes` (not `self.linter.config.notes` — that's an unrelated later refactor, do not copy it in).
+Running the actual `pylint` CLI against this checkout fails with "Problem importing module ... Unable to find module for .../pylint/checkers/refactoring" under the sandbox's Python 3.13. This looks like an environment/packaging incompatibility unrelated to the notes_rgx bug, not something to fix as part of this task. Workaround used: verify regex behavior directly with standalone Python snippets that reconstruct the regex string exactly as open() builds it and run .search() against fixture file contents (e.g. tests/functional/f/fixme.py), comparing to the expected .txt output — this is sufficient since the whole bug lives in the regex string construction, not in checker plumbing.
+
+### X4 — Root cause: word-boundary \b in EncodingChecker note regex, and the confirmed fix
+
+In pylint/checkers/misc.py EncodingChecker.open() (~lines 119-128), the notes regex is built as `#\s*({notes})\b` where `notes = "|".join(re.escape(note) for note in self.config.notes)`. The trailing `\b` requires a transition between a word char and non-word char. For a punctuation-only tag like `???`, if followed by another non-word char (e.g. `:`), there's no boundary, so the regex never matches — this is the exact cause of pylint#5859 (`--notes="YES,???"` ignoring `???`). Verified: `re.compile(rf'#\s*({notes})\b').search('# ??? what')` → None.
+
+**Confirmed fix (worked):** apply `\b` per-alternative, only when that tag ends in a word char (`re.search(r"\w$", note)`), else omit it — do not use one shared `\b` around the whole alternation. This fixes punctuation-tag matching while still rejecting substring extensions (TODOIST for TODO, FIXMENOW for FIXME) for word tags, and keeps all 10 unittest_misc.py tests passing unmodified. `notes_rgx` must NOT get this same per-tag treatment ([[pylint-dev-pylint-5859#R3]]) since it isn't a literal tag list — see research approach `per_tag_boundary` / `conditional-word-boundary`, topic pylint-dev__pylint-5859.

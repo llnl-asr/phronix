@@ -1,6 +1,6 @@
 ---
 name: pallets-flask-4045
-description: The pallets-flask-4045 subject.
+description: Flask issue 4045: Blueprint names containing a dot should be rejected since '.' is reserved for nested-blueprint separators.
 subject: pallets-flask-4045
 type: skill
 ---
@@ -9,18 +9,10 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `I1` | Instructions | Unresolved gap: Flask.register_blueprint (app.py) not inspected |
-| `R1` | Rules | Existing dot-check style template in this file |
-| `R2` | Rules | Do not add a blanket dot-rejection check on Blueprint(name=...) |
-| `R3` | Rules | Blueprint name/endpoint/view_func dot checks must raise ValueError, not assert |
-| `R4` | Rules | The registration-time name-collision assert was deliberately NOT converted to ValueError |
-| `X1` | References | Blueprint.__init__ has no name validation currently |
-| `X2` | References | How name_prefix concatenation works for nested blueprints |
-| `X3` | References | Real upstream issue number is 4041, not 4045; CHANGES.rst wording available |
-
-
-
-
+| `I1` | Instructions | Fix site: Blueprint.__init__ has no dot-check on name |
+| `R1` | Rules | Unconditional dot-check in Blueprint.__init__ breaks legacy test_dotted_names |
+| `R2` | Rules | Do not trust attempt-1 notes' captured pytest output for this issue — re-run pytest directly |
+| `X1` | References | Reproduce the target test in a matched python3.9+werkzeug<2.1+pytest<7 venv |
 
 
 
@@ -28,43 +20,32 @@ type: skill
 
 ## Instructions
 
-### I1 — Unresolved gap: Flask.register_blueprint (app.py) not inspected
+### I1 — Fix site: Blueprint.__init__ has no dot-check on name
 
-The validation_site investigation deliberately scoped to Blueprint.__init__/add_url_rule/register in src/flask/blueprints.py and did not check Flask.register_blueprint in src/flask/app.py for any competing or duplicate name-dot validation. Before finalizing the fix location, confirm app.py's register_blueprint has no pre-existing dot check that would make the blueprints.py change redundant or conflicting.
+Blueprint.__init__ in src/flask/blueprints.py sets self.name = name with no validation. No dot-check exists anywhere in the blueprint code path. If the task requires rejecting dotted blueprint names (dots are reserved as the nesting separator), add the validation here — raise on `"." in name` before the assignment.
 
 ## Rules
 
-### R1 — Existing dot-check style template in this file
+### R1 — Unconditional dot-check in Blueprint.__init__ breaks legacy test_dotted_names
 
-Blueprint.add_url_rule (lines 353-369) is the in-file precedent for dot-in-identifier checks: `assert "." not in endpoint, "Blueprint endpoints should not contain dots"` and `assert "." not in view_func.__name__, "Blueprint view function name should not contain dots"`. Both are asserts, placed at the top of the method before other logic, worded "X should not contain dots", and guarded by truthiness checks only because those params are optional (name in __init__ is required/positional, so no truthiness guard needed for a new check there). This is the strongest local style precedent, though it was not cross-checked against the actual upstream flask-4045 fix (no GitHub fetch performed) — treat the assert-vs-raise choice as unresolved, see approaches A3/A4.
+The naive fix in [[pallets-flask-4045#I1]] (raise on "." in name inside Blueprint.__init__) is confirmed to regress an existing test: an unconditional check there breaks the legacy `test_dotted_names` test, in addition to already being insufficient for `test_route_decorator_custom_endpoint_with_dots` (see [[flask-blueprint-dotted-names#R1]]).
 
-### R2 — Do not add a blanket dot-rejection check on Blueprint(name=...)
+**Why:** some existing legacy test path constructs or relies on a Blueprint whose name contains a dot without expecting a raise — an unconditional check has no escape hatch for it.
 
-tests/test_blueprints.py::test_dotted_names (line 256-273) intentionally constructs Blueprint names containing literal dots ("myapp.frontend", "myapp.backend") and registers them directly on the app. Blueprint.__init__ currently does zero validation on `name` (plain `self.name = name` at blueprints.py:191). Any fix for flask-4045 that adds unconditional "no dots allowed in Blueprint name" validation at construction time will break this existing/passing regression test. If a name check is needed at all, it must be scoped/conditional (e.g. only for self-nesting scenarios), not a blanket check in __init__.
+**How to apply:** do not apply the raw `__init__` dot-check from I1 as-is. Any dot validation must be scoped/conditioned so `test_dotted_names` still passes, and must also cover the `add_url_rule` endpoint case per [[flask-blueprint-dotted-names#R1]]. Treat I1 as falsified for the unconditional form; re-derive the exact condition against both failing tests before reattempting.
 
-### R3 — Blueprint name/endpoint/view_func dot checks must raise ValueError, not assert
+### R2 — Do not trust attempt-1 notes' captured pytest output for this issue — re-run pytest directly
 
-Real Flask 2.0.2 (the actual next patch release after this task's base commit, fixing the real upstream issue #4041) converts ALL dot-related validation in src/flask/blueprints.py from bare `assert` to `raise ValueError(...)`, including the pre-existing endpoint and view_func checks in add_url_rule (previously `assert "." not in endpoint, "..."` and `assert "." not in view_func.__name__, "..."`). Asserts are stripped under `python -O`/`-OO` and are wrong for user-supplied input validation. Exact wording convention: `"'<param>' may not <condition>."` (single-quoted param name, trailing period). Exact strings confirmed in shipped source:
-- `"'name' may not be empty."`
-- `"'name' may not contain a dot '.' character."`
-- `"'endpoint' may not contain a dot '.' character."`
-- `"'view_func' name may not contain a dot '.' character."`
-The new name-dot check goes in `Blueprint.__init__`, right after `super().__init__(...)`, before `self.name = name`.
+On at least one run, attempt-1's saved notes for this topic captured pytest failure output that was truncated/irrelevant to the actual named target test — diagnosing from those notes alone did not work.
 
-### R4 — The registration-time name-collision assert was deliberately NOT converted to ValueError
+**Why:** whatever captured the attempt-1 output truncated it or captured the wrong test's failure, so it looked informative but didn't answer the question asked.
 
-In blueprints.py there's a separate `assert app.blueprints[self.name] is self, ("A name collision occurred between blueprints" ...)` check at registration time (~line 271 at base commit). Unlike the dot-related checks, upstream Flask 2.0.2 did NOT turn this into `ValueError` — it became an explicit `raise AssertionError(...)` (still AssertionError, just not a bare `assert` statement, likely to keep working under `python -O`). Don't assume every assert→exception conversion in this file should end up as ValueError; this one stays an AssertionError.
+**How to apply:** when diagnosing a failure for pallets-flask-4045, re-run the specific target test directly (see [[pallets-flask-4045#X1]] for the matched venv) rather than relying on attempt-1's saved notes as the source of truth for what failed and why.
 
 ## References
 
-### X1 — Blueprint.__init__ has no name validation currently
+### X1 — Reproduce the target test in a matched python3.9+werkzeug<2.1+pytest<7 venv
 
-src/flask/blueprints.py lines 171-201: Blueprint.__init__ assigns `self.name = name` unconditionally at line 191 with zero validation. No other blueprint code re-validates self.name after construction — register() (lines 270-277) only asserts identity on name collision (`assert app.blueprints[self.name] is self`), not dot-in-name. This makes __init__ the single natural choke point for a dot-in-name check; register() is a weaker fallback site that fails later (at registration, not construction).
+The pallets__flask-4045 target test reproduces cleanly in a venv matched to the repo's pinned deps: python3.9, werkzeug<2.1, pytest<7. Using a mismatched/newer combination is a plausible source of spurious collection or import errors unrelated to the actual bug.
 
-### X2 — How name_prefix concatenation works for nested blueprints
-
-In src/flask/blueprints.py: BlueprintSetupState.add_url_rule (line ~101) builds endpoint as f"{self.name_prefix}{self.blueprint.name}.{endpoint}". Blueprint.register's self-nesting loop (line ~342-351) sets bp_options["name_prefix"] = options.get("name_prefix", "") + self.name + "." before recursing into child.register(app, bp_options). This is pure string concatenation — it does not crash or misbehave with dotted names, it just produces multi-segment/ambiguous endpoint strings. Separately, app.blueprints dict (collision check at blueprints.py:270-280) is keyed by the blueprint's own bare `.name`, not by the nested/prefixed full name — so two different parents nesting same-named children could collide in app.blueprints even though final endpoint prefixes differ; this edge case is unconfirmed/untested (no test found exercising it), flagged as adjacent-but-unverified, not the aspect's main answer.
-
-### X3 — Real upstream issue number is 4041, not 4045; CHANGES.rst wording available
-
-Task title "4045" is this benchmark's synthetic numbering — the actual Flask GitHub issue is #4041. If CHANGES.rst needs an entry, real wording (Flask 2.0.2 CHANGES.rst line 44-46): "Show an error when a blueprint name contains a dot. The ``.`` has special meaning, it is used to separate (nested) blueprint names and the endpoint name. :issue:`4041`". Don't write `:issue:`4045`` — use 4041 if matching upstream exactly matters.
+**How to apply:** when reproducing or verifying a fix for this issue, build/activate a venv pinned to those bounds before running the target test, rather than using whatever default interpreter/deps are on PATH.

@@ -27,15 +27,34 @@ import os
 import re
 import shlex
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from phronix import bus as bus_module
 
 from .isolation import Container, isolated_env
 
 #: The one model every arm uses. LivAI is OpenAI-compatible, so mini-swe-agent
 #: (litellm) and opencode (ai-sdk openai-compatible) can both reach it.
+def _tuned(key: str, fallback):
+    """A tuning value, falling back to what the code shipped with.
+
+    The learner's clocks belong in the same file as everything else tunable: a
+    node packing six tasks wants a different cadence from a laptop running one,
+    and that is a deployment decision rather than a code change.
+    """
+    try:
+        from phronix.tuning import get
+
+        return get(key, fallback)
+    except Exception:
+        return fallback
+
+
 DEFAULT_MODEL = "claude-sonnet-4.5"
 DEFAULT_PROVIDER = "livai"
 DEFAULT_BASE_URL = "https://livai-api.llnl.gov/v1"
@@ -46,6 +65,14 @@ DEFAULT_BASE_URL = "https://livai-api.llnl.gov/v1"
 #: away. Doing that in the checkout itself has two costs: the work shows up in
 #: the diff the agent is judged on, and — worse — parallel evaluators share one
 #: working tree, so each one measures a mixture of everybody's edits.
+#: The arm that owns this job's learner, and the lock that decides.
+#:
+#: One learner for the whole benchmark job: arms run concurrently, tasks may
+#: too, and every one of them reaches `start_learning`. Two consumers of one
+#: stream is how two reconcilers come to work the same findings.
+_LEARNER_LOCK = threading.Lock()
+_LEARNER_OWNER = None
+
 SCRATCH_DIR = "tmp"
 RESEARCH_SCRATCH = f"{SCRATCH_DIR}/research"
 
@@ -323,100 +350,275 @@ call without a description shows up as a command line and tells them nothing.
 """
 
 
-def describe_call(part: Dict[str, Any], root: Optional[Path] = None) -> str:
-    """One line saying what a tool call was FOR, not how it was spelled.
+def say(text: str) -> str:
+    """One line of an agent's own commentary, as plain prose.
 
-    The raw call is nearly useless in a log. A `bash` entry arrives as
-    ``cd /p/lustre5/.../tasks/000-pylint-dev__pylint-7080/attempt-1/repo &&
-    grep -n ...`` and the eighty characters of path push the only informative
-    part off the end of the line. A `read` is the same path again.
+    The model writes markdown: headings, bullets, bold, code spans, tables. In a
+    trace that is noise with a shape — `## Analysis` and `**Found it**` and
+    `- [ ] check the parser` all say something, and none of it survives being
+    read at a glance next to eighty other lines. So the markup comes off, the
+    first real sentence is kept, and it is cut to the width of everything else
+    in the column.
 
-    So: paths are shown relative to the checkout, the ``cd`` preamble that every
-    command repeats is dropped, and where a tool carries the agent's own stated
-    intent — phronix tools take a ``description`` — that is shown instead of the
-    mechanics.
+    Returns an empty string when nothing worth showing is left, which is the
+    common case for a heading or a lone code fence.
     """
-    tool = str(part.get("tool") or "?")
-    state = part.get("state") or {}
-    args = state.get("input") or {}
-    output = str(state.get("output") or "")
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("```") or set(line) <= set("-=*_ |"):
+            continue
+        line = re.sub(r"^#{1,6}\s*", "", line)            # headings
+        line = re.sub(r"^[-*+]\s+(\[[ xX]\]\s*)?", "", line)  # bullets, checkboxes
+        line = re.sub(r"^\d+[.)]\s+", "", line)            # numbered steps
+        line = re.sub(r"^>\s*", "", line)                  # quotes
+        line = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", r"\1\2", line)  # bold
+        line = re.sub(r"(?<!\w)[*_](.+?)[*_](?!\w)", r"\1", line)   # italics
+        line = line.replace("`", "")                       # code spans
+        line = re.sub(r"\[(.+?)\]\((.+?)\)", r"\1", line)          # links
+        line = " ".join(line.split())
+        if len(line) <= 12:
+            # A fragment — "Analysis", "Next:" — carries no more than the stage
+            # label already does.
+            continue
+        if len(line) > LOG_SUMMARY_CHARS:
+            # Cut at a word, and only say it was cut when something was.
+            line = line[:LOG_SUMMARY_CHARS].rsplit(" ", 1)[0] + "…"
+        return line
+    return ""
 
-    def shorten(value: str, limit: int = 96) -> str:
-        text = str(value).replace("\n", " ").strip()
+
+def describe_tool_call(name: str, args: Dict[str, Any],
+                       output: str = "", root: Optional[Path] = None) -> str:
+    """What one tool call was FOR, in a sentence, for every harness.
+
+    One copy, two adapters. This was written twice — once for opencode's event
+    shape and once for Claude's — and the two drifted immediately: a fix to how
+    a `grep` reads landed in one and not the other, so the same agent doing the
+    same thing produced different trace lines depending on which harness ran it,
+    and the runs stopped being comparable by eye. The harness-specific part is
+    only how a call is spelled in its stream, so that is all the adapters do:
+    normalise to (name, args, output) and hand it here.
+
+    The line is a statement of intent and never the mechanics. `bash` arrives as
+    ``cd /p/lustre5/.../attempt-1/repo && python -m pytest -x -q tests/...`` and
+    eighty characters of path and flags push the one informative word off the
+    end; what a reader of a live trace needs is "running the test suite in
+    test_cli.py". Paths shrink to a basename for the same reason — every line in
+    a task's trace shares a directory, so it carries no information and costs
+    the width that does.
+    """
+    args = args if isinstance(args, dict) else {}
+    spoken = _spoken_call(name, args, output, root)
+    # A sentence assembled from arguments that turned out to be absent reads as
+    # "proposing : " — an elaboration of nothing, and worse than the plain
+    # intent it was elaborating. Observed live on `research_add_approach`, whose
+    # branch names two arguments that a caller supplying only `topic` does not
+    # have.
+    trimmed = spoken.strip().rstrip(":,-—").strip()
+    if len(trimmed) > 12:
+        return trimmed
+    short = str(name or "?").replace("mcp__phronix__", "").replace("phronix_", "")
+    return _PHRONIX_INTENT.get(short) or short.replace("_", " ") or "a step"
+
+
+def _spoken_call(name: str, args: Dict[str, Any],
+                 output: str = "", root: Optional[Path] = None) -> str:
+    """The sentence itself; :func:`describe_tool_call` guards the result."""
+    # Longest prefix first. The other order eats the middle of the longer one —
+    # `phronix_` matches inside `mcp__phronix__`, leaving `mcp__research_add_
+    # approach`, which then spoke as "mcp  research add approach".
+    short = str(name or "?").replace("mcp__phronix__", "").replace("phronix_", "")
+
+    def shorten(value: Any, limit: int = LOG_SUMMARY_CHARS) -> str:
+        text = " ".join(str(value).split())
         if root is not None:
-            text = text.replace(str(root) + "/", "").replace(str(root), ".")
+            # Both spellings: /tmp is a symlink to /var/tmp here, so the literal
+            # prefix often does not match. At a path boundary only, longest base
+            # first — "/tmp/x/repo/" also occurs inside "/var/tmp/x/repo/", and a
+            # plain replace there turned an edit of calc.py into "/varcalc.py".
+            for base in sorted({str(root), str(Path(root).resolve())},
+                               key=len, reverse=True):
+                text = re.sub(r"(?<![\w/])" + re.escape(base) + "/", "", text)
+                if text == base:
+                    text = "."
         return text[:limit]
 
-    def arg(*names: str, limit: int = 96) -> str:
-        for name in names:
-            if args.get(name):
-                return shorten(args[name], limit)
+    def arg(*names: str, limit: int = 200) -> str:
+        for key in names:
+            if args.get(key):
+                return shorten(args[key], limit)
         return ""
 
-    short = tool.replace("phronix_", "")
+    def leaf(value: Any, limit: int = 44) -> str:
+        text = str(value).strip().strip("'\"")
+        return (text.rsplit("/", 1)[-1] or text)[:limit]
 
     # The agent's own words, whenever it supplied any.
     #
-    # A derived description says what a call *was* — "run pytest -k ignore" —
-    # and never why. The agent knows why, and every tool here takes a
-    # ``description``; the prompts now require one on every call. Where it is
-    # present it wins, because a reconstruction of intent from a command line is
-    # a guess and the agent's own sentence is not.
+    # A derived description says what a call *was* and never why. The agent
+    # knows why, every tool here takes a ``description``, and the prompts require
+    # one — so where it exists it wins, because reconstructing intent from a
+    # command line is a guess and the agent's own sentence is not. Unprefixed
+    # and lowercased so it runs on from the stage label: "Bash: " in front of it
+    # adds the one thing the reader does not need, in the column the eye hits
+    # first.
     stated = str(args.get("description") or "").strip()
     if stated:
-        return f"{short}: {shorten(stated, LOG_SUMMARY_CHARS)}"
+        return shorten(stated[0].lower() + stated[1:])
 
-    if "websearch" in tool.lower():
-        return f"search: {arg('query')}"
-    if "webfetch" in tool.lower():
-        return f"fetch: {arg('url')}"
-    if short in ("read", "glob"):
-        return f"read {arg('filePath', 'path', 'pattern', limit=70)}"
-    if short == "grep":
-        return f"grep {arg('pattern', limit=50)} in {arg('path', 'include', limit=40) or '.'}"
-    if short == "bash":
-        command = arg("command", limit=400)
-        # Every command starts by cd-ing to the same checkout; that is setup,
-        # not intent.
-        command = re.sub(r"^cd\s+\S+\s*&&\s*", "", command)
-        return f"run {command[:96]}"
+    lowered = str(name or "").lower()
+    if "websearch" in lowered:
+        return f"looking something up online: {arg('query', limit=50)}"
+    if "webfetch" in lowered:
+        return f"reading a page online: {arg('url', limit=50)}"
+
+    if short in ("bash", "Bash"):
+        return _command_intent(arg("command", limit=400))
+    if short in ("read", "Read"):
+        offset, limit_ = args.get("offset"), args.get("limit")
+        where = leaf(arg("file_path", "filePath", "path"))
+        if offset or limit_:
+            first = int(offset or 1)
+            span = (f"lines {first} to {first + int(limit_)}" if limit_
+                    else f"from line {first} on")
+            return f"reading {where}, {span}"
+        return f"reading all of {where}"
+    if short in ("glob", "Glob"):
+        return f"looking for files named like {leaf(arg('pattern', 'path'))}"
+    if short in ("grep", "Grep"):
+        where = leaf(arg("path", "glob", "include"), 30)
+        return (f"searching the source for {leaf(arg('pattern'))}"
+                + (f", under {where}" if where and where != "." else ""))
+    if short in ("edit", "Edit", "NotebookEdit", "write", "Write"):
+        verb = "writing" if short.lower() == "write" else "editing"
+        return f"{verb} {leaf(arg('file_path', 'filePath', 'path'))}"
+    if short in ("task", "Task"):
+        return f"delegating a sub-task: {arg('prompt', 'description', limit=54)}"
+    if short in ("todowrite", "TodoWrite"):
+        todos = args.get("todos")
+        if isinstance(todos, list):
+            for item in todos:
+                if isinstance(item, dict) and item.get("status") == "in_progress":
+                    return f"planning, now working on {shorten(item.get('content'), 50)}"
+        return "planning, revising its list of steps"
 
     # Research tools: report the decision, not the payload.
     if short == "research_assess":
         verdict = ("gap" if '"verdict": "gap"' in output
                    else "covered" if '"verdict": "covered"' in output else "?")
-        return f"assess -> {verdict}"
+        return f"deciding whether this is already covered -> {verdict}"
     if short == "research_define_fom":
-        return f"metric := {arg('name')} ({arg('direction')}, target {arg('target')})"
+        return (f"fixing the metric: {arg('name', limit=40)} "
+                f"({arg('direction', limit=10)}, target {arg('target', limit=10)})")
     if short == "research_set_aspects":
-        return f"plan aspects: {arg('aspects', limit=90)}"
+        return f"planning which aspects to study: {arg('aspects', limit=46)}"
     if short == "research_declare_corpus":
-        return f"dataset axes: {arg('dimensions', limit=80)}"
+        return f"declaring the dataset axes: {arg('dimensions', limit=50)}"
     if short == "research_add_instances":
-        return f"add instances: {arg('instances', limit=70)}"
+        return f"adding cases to the dataset: {arg('instances', limit=48)}"
     if short == "research_split":
-        return "split the dataset into train/validate/test"
+        return "splitting the dataset into train, validate and test"
     if short == "research_add_approach":
-        return f"propose {arg('name')}: {arg('hypothesis', 'summary', limit=70)}"
+        return (f"proposing {arg('name', limit=24)}: "
+                f"{arg('hypothesis', 'summary', limit=44)}")
     if short == "research_record_trial":
         passed = str(args.get("passed", "")).lower()
-        return (f"trial {arg('approach', limit=30)} on {arg('instance', limit=30)}"
-                f" -> {'pass' if passed in ('true', '1') else 'fail'}")
+        return (f"trying {arg('approach', limit=24)} on "
+                f"{arg('instance', limit=24)} -> "
+                f"{'it worked' if passed in ('true', '1') else 'it did not'}")
     if short == "research_evaluate_approach":
-        return f"score {arg('approach')}"
+        return f"scoring {arg('approach', limit=40)} against the metric"
     if short == "research_rank":
-        return "rank approaches by the metric"
+        return "ranking the approaches by the metric"
     if short == "research_write_plan":
-        return f"write the execution plan: {arg('steps', limit=70)}"
-    if short in ("research_select", "research_backups", "research_ruled_out",
-                 "research_status", "research_verify"):
-        return short.replace("research_", "").replace("_", " ")
+        return f"writing the execution plan: {arg('steps', limit=50)}"
+
+    if short in _PHRONIX_INTENT:
+        return _PHRONIX_INTENT[short]
 
     failed = '"status": "error"' in output
+    spoken = short.replace("_", " ")
     if args:
         first = next(iter(args.values()))
-        return f"{short}({shorten(first, 70)})" + (" REJECTED" if failed else "")
-    return short
+        return (f"{spoken}: {shorten(first, 50)}"
+                + (" — REJECTED" if failed else ""))
+    return spoken
+
+
+def describe_call(part: Dict[str, Any], root: Optional[Path] = None) -> str:
+    """opencode's event shape, normalised for :func:`describe_tool_call`."""
+    state = part.get("state") or {}
+    return describe_tool_call(str(part.get("tool") or "?"),
+                              state.get("input") or {},
+                              str(state.get("output") or ""), root)
+
+
+def describe_claude_call(block: Dict[str, Any], root: Optional[Path] = None) -> str:
+    """Claude Code's event shape, normalised for :func:`describe_tool_call`."""
+    return describe_tool_call(str(block.get("name") or "?"),
+                              block.get("input") or {}, "", root)
+
+
+#: What each phronix tool is FOR, in the words someone reading a trace would
+#: use. The tool name says which function ran; this says why it was worth
+#: running, which is the only thing a reader of a live trace can act on.
+_PHRONIX_INTENT = {
+    "skill_search": "looking for a skill that already covers this",
+    "skill_read": "reading a skill it found",
+    "skill_write": "writing down what it learned as a skill",
+    "memory_search": "checking memory for related work",
+    "memory_write": "recording something worth remembering",
+    "research_observe": "reporting an observation to the learner",
+    "research_notice": "checking which observations have repeated",
+    "research_verify": "checking a claim against the repository",
+    "research_record": "recording a research finding",
+    "research_status": "checking where the research stands",
+    "research_select": "choosing the approach to carry forward",
+    "research_backups": "noting which approaches are held in reserve",
+    "research_ruled_out": "ruling an approach out",
+    "capability_write": "building itself a tool for this step",
+    "capability_run": "running a tool it built earlier",
+}
+
+#: How a shell command reads as an intention. Ordered, first match wins, so the
+#: specific patterns come before the general ones.
+_COMMAND_INTENTS = (
+    (r"\bpytest\b|\bunittest\b|\btox\b", "running the test suite"),
+    (r"\bgit\s+apply\b|\bpatch\b", "applying a patch"),
+    (r"\bgit\s+diff\b", "reviewing its own changes"),
+    (r"\bgit\s+(log|show|blame)\b", "reading the project's history"),
+    (r"\bgit\s+(checkout|stash|reset)\b", "putting the working tree back"),
+    (r"\bgrep\b|\brg\b|\back\b", "searching the source"),
+    (r"\bfind\b|\bls\b", "looking around the tree"),
+    (r"\bpip\b|\bnpm\b|\bconda\b", "installing a dependency"),
+    (r"\bpython[0-9.]*\s+-c\b", "running a short probe script"),
+    (r"\bpython[0-9.]*\b", "running a script"),
+    (r"\bcat\b|\bhead\b|\btail\b|\bsed\s+-n\b", "reading a file"),
+    (r"\bmkdir\b|\bcp\b|\bmv\b|\brm\b", "moving files around"),
+)
+
+
+def _command_intent(command: str) -> str:
+    """A shell command as a sentence, never as the command.
+
+    The agent's own `description` is preferred over this everywhere it exists;
+    this is the fallback, and a fallback rather than an echo because a trace full
+    of flags is a trace nobody reads. Where a file is named it is kept, since
+    "the test suite" and "the test suite in test_cli.py" are different amounts
+    of progress.
+    """
+    text = " ".join(str(command or "").split())
+    text = re.sub(r"^cd\s+\S+\s*&&\s*", "", text)
+    if not text:
+        return "a command"
+
+    for pattern, phrase in _COMMAND_INTENTS:
+        if re.search(pattern, text):
+            named = re.search(r"[\w./-]+\.(py|txt|cfg|toml|json|md)\b", text)
+            if named:
+                return f"{phrase} in {named.group(0).rsplit('/', 1)[-1]}"
+            return phrase
+    return f"running a shell step ({text.split()[0]})"
 
 
 def private_opencode_home(env: Dict[str, str]) -> Any:
@@ -490,60 +692,114 @@ def private_home(env: Dict[str, str]):
             shutil.rmtree(home, ignore_errors=True)
 
 
-def describe_claude_call(block: Dict[str, Any], root: Optional[Path] = None) -> str:
-    """One line for a Claude Code tool call, in the same shape as opencode's.
+class _LlmGate:
+    """Paces every agent invocation in the job, and waits out a rejected window.
 
-    The two harnesses must read alike in the trace, or a run on one cannot be
-    compared with a run on the other by eye — and the trace is how these runs
-    get diagnosed.
+    The binding limit here is not the node, it is the account. A five-hour usage
+    window, once rejected, fails every subsequent agent instantly: the harness
+    emits one `rate_limit_event` and exits 1, so a stage that would have taken
+    six minutes returns nothing in four seconds. Observed: six tasks of four
+    stage agents each emptied the window in under an hour, and the run then
+    spent its remaining time producing empty transcripts and reporting them as a
+    collapsed research pipeline.
+
+    Two levers, because they bound different things. The semaphore bounds how
+    many calls are in flight; the spacing bounds how many are *started* per
+    minute, which is what actually draws down a window — eight agents finishing
+    in twenty seconds each still start a hundred and forty an hour.
+
+    One gate for the whole process, so packing more tasks onto a node does not
+    multiply the draw. Tasks share the account whether or not they share a
+    thread pool.
     """
-    name = str(block.get("name") or "?")
-    args = block.get("input") or {}
 
-    def shorten(value: Any, limit: int = 96) -> str:
-        text = str(value).replace("\n", " ").strip()
-        if root is not None:
-            # Both spellings: /tmp is a symlink to /var/tmp here, so the literal
-            # prefix often does not match and every path stays absolute —
-            # sixty characters of noise that push the informative part off the
-            # end of an eighty-character line.
-            # At a path boundary only, longest base first.
-            #
-            # /tmp is a symlink to /var/tmp here, so BOTH spellings have to go —
-            # but "/tmp/x/repo/" also occurs inside "/var/tmp/x/repo/", and a
-            # plain replace there turned an edit of calc.py into
-            # "edit(/varcalc.py)". The lookbehind means only a genuine start or
-            # a path after whitespace is stripped.
-            for base in sorted({str(root), str(Path(root).resolve())},
-                               key=len, reverse=True):
-                text = re.sub(r"(?<![\w/])" + re.escape(base) + "/", "", text)
-                if text == base:
-                    text = "."
-        return text[:limit]
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last_start = 0.0
+        self._reset_at = 0.0
+        self._semaphore: Optional[threading.Semaphore] = None
+        self._size = 0
+        self._announced = 0.0
 
-    # The agent's own statement of intent wins, exactly as it does for opencode.
-    stated = str(args.get("description") or "").strip()
-    if stated:
-        return f"{name}: {shorten(stated, LOG_SUMMARY_CHARS)}"
+    def _limit(self) -> threading.Semaphore:
+        if self._semaphore is None:
+            with self._lock:
+                if self._semaphore is None:
+                    self._size = max(1, int(_tuned("llm.max_concurrent_agents", 8)))
+                    self._semaphore = threading.Semaphore(self._size)
+        return self._semaphore
 
-    if name == "Bash":
-        command = shorten(args.get("command", ""), 400)
-        command = re.sub(r"^cd\s+\S+\s*&&\s*", "", command)
-        return f"run {command[:96]}"
-    if name in ("Read", "Glob"):
-        return f"read {shorten(args.get('file_path') or args.get('pattern'), 70)}"
-    if name == "Grep":
-        return (f"grep {shorten(args.get('pattern'), 50)} in "
-                f"{shorten(args.get('path') or args.get('glob') or '.', 40)}")
-    if name in ("Edit", "Write", "NotebookEdit"):
-        return f"edit({shorten(args.get('file_path'), 70)})"
-    if name.startswith("mcp__phronix__"):
-        short = name.replace("mcp__phronix__", "")
-        first = next(iter(args.values()), "")
-        return f"{short}({shorten(first, 60)})"
+    def rejected_until(self, resets_at: float, on_note=None) -> None:
+        """Record that the window is closed until *resets_at* (unix seconds)."""
+        with self._lock:
+            if resets_at > self._reset_at:
+                self._reset_at = float(resets_at)
+                announce = on_note and (time.time() - self._announced > 60)
+                if announce:
+                    self._announced = time.time()
+        if on_note and announce:
+            wait = max(0.0, resets_at - time.time())
+            on_note(f"[llm] usage window rejected; it resets in "
+                    f"{wait / 60:.0f} min — holding every agent until then "
+                    f"rather than launching ones that cannot run")
 
-    first = next(iter(args.values()), "")
-    return f"{name}({shorten(first, 60)})" if args else name
+    @contextlib.contextmanager
+    def slot(self, on_note=None):
+        """Hold a slot for one agent invocation."""
+        self._wait_for_window(on_note)
+        limit = self._limit()
+        # Say so when this has to wait.
+        #
+        # The gate is taken BEFORE the subprocess starts, so a stage held here
+        # writes nothing at all — no stage line, no tool call, no output. In a
+        # six-task run two tasks sat at "initial pass for try 1" for fourteen
+        # minutes and read as hung, while the server they were waiting for
+        # reported five free slots and nothing deferred. A queue nobody can see
+        # is worse than a slower queue.
+        if not limit.acquire(blocking=False):
+            waiting_since = time.time()
+            if on_note:
+                on_note(f"waiting for one of {self._size} agent slots — the "
+                        f"client's own limit, not the server's")
+            limit.acquire()
+            if on_note:
+                on_note(f"got a slot after {time.time() - waiting_since:.0f}s")
+        try:
+            spacing = float(_tuned("llm.min_seconds_between_starts", 2.0))
+            with self._lock:
+                delay = max(0.0, self._last_start + spacing - time.time())
+                self._last_start = time.time() + delay
+            if delay > 0:
+                time.sleep(delay)
+            yield
+        finally:
+            limit.release()
+
+    def _wait_for_window(self, on_note=None) -> None:
+        if not _tuned("llm.wait_for_reset", True):
+            return
+        while True:
+            with self._lock:
+                remaining = self._reset_at - time.time()
+            if remaining <= 0:
+                return
+            cap = float(_tuned("llm.max_wait_seconds", 1800))
+            if remaining > cap:
+                # A job that silently sits for hours is worse than one that
+                # proceeds and fails loudly: the failure is at least visible in
+                # the trace, and the operator can decide to stop.
+                if on_note:
+                    on_note(f"[llm] window does not reset for "
+                            f"{remaining / 60:.0f} min, past the "
+                            f"{cap / 60:.0f} min cap — going ahead; expect "
+                            f"this stage to be rejected")
+                return
+            time.sleep(min(30.0, remaining))
+
+
+#: One gate for the process. Tasks share an account whether or not they share a
+#: thread pool, so the cap cannot live on the arm or the task.
+LLM_GATE = _LlmGate()
 
 
 def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
@@ -567,6 +823,11 @@ def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
     # Private state directory per invocation: several of these run at once.
     env = dict(env)
     home = private_opencode_home(env)
+
+    # Wait here, before spending anything, if the account's window is closed or
+    # the job is already running as many agents as it is allowed.
+    gate = LLM_GATE.slot(on_call)
+    gate.__enter__()
 
     process = subprocess.Popen(command, cwd=str(cwd), env=env, text=True,
                                stdin=subprocess.DEVNULL,
@@ -592,6 +853,23 @@ def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+            # The account's usage window, reported by the harness itself.
+            #
+            # A rejected window is not a failure of this stage — it is every
+            # later stage failing too, four seconds at a time, until the window
+            # resets. The event carries the reset time, so the gate can hold the
+            # whole job instead of each thread rediscovering it.
+            if event.get("type") == "rate_limit_event":
+                info = event.get("rate_limit_info") or {}
+                if str(info.get("status") or "").lower() == "rejected":
+                    if stats is not None:
+                        stats["rate_limited"] = True
+                        stats["resets_at"] = info.get("resetsAt")
+                    LLM_GATE.rejected_until(float(info.get("resetsAt") or 0),
+                                            on_call)
+                continue
+
             # Claude Code speaks a different stream. Handle it first, since an
             # unrecognised event would otherwise fall through as silence — and a
             # silent trace is exactly what makes a working agent and a dead one
@@ -602,10 +880,9 @@ def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
                         if block.get("type") == "tool_use":
                             on_call(describe_claude_call(block, root or cwd))
                         elif block.get("type") == "text" and block.get("text"):
-                            first = str(block["text"]).strip().splitlines()
-                            first = first[0].strip() if first else ""
-                            if len(first) > 12 and not first.startswith("```"):
-                                on_call(f"· {first[:110]}")
+                            spoken = say(block["text"])
+                            if spoken:
+                                on_call(spoken)
                 except Exception:
                     pass
                 continue
@@ -622,9 +899,9 @@ def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
                     # clearest statement of intent available — a tool call says
                     # what was run, this says why. First line only: the full
                     # reasoning belongs in the transcript, not the log.
-                    first = str(part["text"]).strip().splitlines()[0].strip()
-                    if len(first) > 12 and not first.startswith("```"):
-                        on_call(f"· {first[:110]}")
+                    spoken = say(part["text"])
+                    if spoken:
+                        on_call(spoken)
             except Exception:
                 pass  # commentary must never break the pass it narrates
     finally:
@@ -646,6 +923,7 @@ def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
             import shutil
 
             shutil.rmtree(home, ignore_errors=True)
+        gate.__exit__(None, None, None)
         if was_killed and on_call is not None:
             # A stage cut off at its budget looks exactly like a slow one from
             # the outside. Observed: an investigator ran 55 tool calls into a
@@ -679,6 +957,24 @@ def tool_path_env(env: Dict[str, str]) -> Dict[str, str]:
     return env
 
 
+def _needs_key(base_url: str) -> bool:
+    """Whether an endpoint authenticates at all.
+
+    A gateway does; a llama.cpp server on a lab host does not, and demanding a
+    key for one blocks a run on a credential that has no meaning there. Decided
+    by scheme and host rather than by a list of known-good URLs, so a new local
+    endpoint works without editing this.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(str(base_url or ""))
+    if parsed.scheme == "http":
+        # Plain HTTP is not something a credential should be sent over anyway,
+        # so an endpoint offering it is one that does not expect one.
+        return False
+    return True
+
+
 def model_env(api_key_var: str = "OPENAI_API_KEY",
               base_url: str = DEFAULT_BASE_URL) -> Dict[str, str]:
     """Model/endpoint settings shared by every arm.
@@ -689,10 +985,16 @@ def model_env(api_key_var: str = "OPENAI_API_KEY",
     """
     key = os.environ.get(api_key_var, "")
     if not key:
-        raise RuntimeError(
-            f"{api_key_var} is not set. The LivAI endpoint needs it; see "
-            "dftracer-agents/.env.example. Every arm uses the same key, so this "
-            "blocks the whole run.")
+        if _needs_key(base_url):
+            raise RuntimeError(
+                f"{api_key_var} is not set. {base_url} needs it; see "
+                "dftracer-agents/.env.example. Every arm uses the same key, so "
+                "this blocks the whole run.")
+        # A local, unauthenticated endpoint still wants the variable SET: the
+        # OpenAI client libraries refuse to construct without one, and the
+        # server ignores whatever it is given. Failing here instead would block
+        # a run on a credential that does not exist for this endpoint.
+        key = "not-required"
     return {
         api_key_var: key,
         "OPENAI_API_KEY": key,
@@ -786,6 +1088,20 @@ class Arm:
     @property
     def qualified_model(self) -> str:
         return f"{self.provider}/{self.model}"
+
+    def start_learning(self, *_args, **_kwargs) -> None:
+        """No learner on an arm that does not research.
+
+        Defined here rather than guarded at the call site: the runner calls this
+        on whatever arm it has, and an attribute only some arms carry is a
+        `hasattr` in the caller that quietly does nothing when the name changes.
+        """
+
+    def drain_learning(self) -> List[str]:
+        return []
+
+    def stop_learning(self, timeout: float = 60.0) -> List[str]:
+        return []
 
     def mounts(self, store_root: Path) -> Dict[Path, str]:
         """Host->guest mounts. Only the phronix arms mount the store."""
@@ -889,6 +1205,14 @@ class Arm:
             env["PHRONIX_RESEARCH_SESSION"] = self.research_session
         if getattr(self, "research_reuse", False):
             env["PHRONIX_RESEARCH_REUSE"] = "1"
+        # Every producer publishes to this run's bus.
+        #
+        # Inherited from the harness rather than derived, so a second run on the
+        # same host cannot consume this one's observations: the endpoint is per
+        # run, and a stage that inherits the wrong one would report its findings
+        # into somebody else's learner.
+        if os.environ.get(bus_module.ENDPOINT_ENV):
+            env[bus_module.ENDPOINT_ENV] = os.environ[bus_module.ENDPOINT_ENV]
         if getattr(self, "research_topic_binding", ""):
             # One task, one research record. Without this the scope stage, the
             # aspect investigators and the harness each pick their own name for
@@ -1335,6 +1659,11 @@ class OpenCodeArm(Arm):
         env.update(model_env(base_url=self.base_url))
         if self.uses_phronix:
             env["PHRONIX_WRITE_LAYER"] = "project"
+            # The phase every retrieval in this environment belongs to.
+            # 'solve' is the one that matters most: research can load a skill
+            # and then hand over a plan that never mentions it, and the attempt
+            # then solves without the knowledge ever reaching it.
+            env["PHRONIX_PHASE"] = "solve"
             if self.store_readonly:
                 # Belt and braces alongside the :ro mount, so the tools report a
                 # clear refusal rather than an opaque OSError from the kernel.
@@ -1572,6 +1901,33 @@ class PhronixOpenCodeArm(OpenCodeArm):
     #: and names the exact tools, because the failure mode measured here was not
     #: an agent that refused to learn — it was an agent that meant to and never
     #: got round to it while absorbed in the fix.
+    #: The learner's own agent, carrying the two learning skills.
+    #:
+    #: Named rather than prompted: the method — what counts as a pattern, where
+    #: a block goes, when to build a tool instead — lives in
+    #: `phronix-learning-capture` and `phronix-learning-reconcile`, which the
+    #: learner can improve for itself. A method pasted into a prompt here is a
+    #: method the learner cannot edit, and this learner is supposed to get
+    #: better at learning.
+    learner_agent_name = "phronix-always-on-learner"
+
+    LEARNER_PROMPT = """\
+Run one **{cycle}** cycle. `skill_load("{skill}")` is your first action and the
+skill is the method; this message is only the input.
+
+Since the last cycle, these were reported:
+
+{observations}
+
+Each line opens with the KIND of work it is about. You have been given one
+kind's worth and another worker has the others, so nothing you write can collide
+with theirs.
+
+Lines marked **repeated** were said more than once. That is a reason to widen
+and firm up what is already written, not a filter on what is worth writing —
+everything here gets recorded.
+"""
+
     LEARN_PROMPT = """\
 The task attempt just finished. Your only job now is to record what it taught
 this system, so the next session does not rediscover it. Do not edit any source.
@@ -1671,6 +2027,25 @@ already known. You are establishing the question, not answering it.
 Say explicitly which parts are already answered by steps 1 and 2 and which are
 genuinely open. The next stage plans around that split, and anything you list as
 open will be investigated at full price.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     PLAN_PROMPT = """\
@@ -1718,6 +2093,25 @@ Three things, in this order:
 
 Do not propose approaches yet. This stage decides how the question gets
 answered, not what the answer is.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     ASPECT_PROMPT = """\
@@ -1786,6 +2180,25 @@ does not.
 
 Report what you established AND what you ruled out — a dead end recorded is
 worth more than a dead end rediscovered.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     ASPECT_RECHECK_PROMPT = """\
@@ -1867,6 +2280,25 @@ Call `research_status(topic="{topic}")` once. Then write, in a few lines each:
 - which questions remain open.
 
 Then stop. Do not propose approaches — the next stage does that, from this.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     RESUME_NOTE = """\
@@ -2019,6 +2451,25 @@ because the failure output is evidence no amount of fresh proposing has.
 
 Report: which of the two it was, the key you recorded, the reproduction path,
 and the instance you added.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     PROPOSE_PROMPT = """\
@@ -2090,6 +2541,25 @@ Those are where the next approach usually is.
 Never conclude that no approach exists. If everything on record has failed, the
 search has been too narrow, and the correct response is to widen it — not to
 re-propose a loser with more detail attached.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     EVALUATE_PROMPT = """\
@@ -2137,6 +2607,25 @@ falsify anything. Tuning had its own stage and its own instances.
 
 Report the score and whether the hypothesis survived. A refuted hypothesis is a
 result; do not rescue it by turning this into a different approach.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     TUNE_PROMPT = """\
@@ -2199,6 +2688,25 @@ than a refutation. That is exactly why refinement belongs here and not in the
 stage that scores.
 
 Report: the final key, what changed across the revisions, and the tuning result.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     REPAIR_COLLECT_PROMPT = """\
@@ -2336,6 +2844,25 @@ a corpus this session authored, which is a reason to try it first and not
 evidence that it is right. It becomes *working* when a task passes with it.
 
 Report: the skill name and the approach order.
+
+## Report what you learn, as you learn it
+
+`research_observe(what=..., worked=true/false, detail=..., stage=..., kind=...)` whenever
+something turns out to work or not: a technique that fixed a class of cases, a
+tool whose output needed massaging, an approach that looked right and was not.
+
+`kind` says what sort of work it was about — `bash`, `python`, `traversal`,
+`tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling` — and it
+is how the finding is filed. Something learned about walking a directory tree
+goes with everything else learned about walking directory trees, where the next
+task in any repository will find it.
+
+It costs nothing and nothing waits on it. A learner running in the background
+drains these, looks for what repeats across tasks, and turns the repeats into
+lessons and tools — so a thing you report once may save every later
+task the discovery. **`worked=false` is the more valuable report** and the one
+nobody writes down: a dead end recorded costs the next task a sentence,
+unrecorded it costs an attempt.
 """
 
     #: Stages that must be allowed to finish.
@@ -2366,13 +2893,18 @@ Report: the skill name and the approach order.
     STAGE_BUDGETS = {
         "survey": 180,
         "plan": 600,
-        # Aspects now TRY what they find and measure it, not just read.
-        # Investigating was 300s; applying a change and running the tuning
-        # instances needs room, and this is the stage where a measured
-        # candidate is cheapest to produce.
-        "aspect": 540,
+        # Aspects TRY what they find and measure it, not just read — but they
+        # do it in about two minutes.
+        #
+        # Measured live: three aspects, 118s wall, and the write-up 33s. The
+        # budget was 540s, which never bound the common case and bound the bad
+        # one far too late: the aspects are a barrier, so one straggler holds
+        # `collect` and everything after it for as long as its ceiling allows.
+        # A ceiling near the measured maximum makes the barrier predictable.
+        "aspect": 300,
         # Filing findings is must-finish; this is a hang-guard, not a budget.
-        "aspect-record": 420,
+        # Measured at 33s, so 180 is generous and still bounds a hang.
+        "aspect-record": 180,
         # Confirming that a settled finding still applies at this version is a
         # much smaller job than establishing it in the first place.
         "aspect-recheck": 150,
@@ -2393,7 +2925,15 @@ Report: the skill name and the approach order.
 
     #: Aspects investigated at once in stage 3, approaches evaluated at once in
     #: stage 6. Small, because a parallel stage costs its slowest member.
-    max_parallel_aspects = 3
+    #: How many aspects are investigated at once.
+    #:
+    #: Five, not three, and this widening is nearly free where the tuning tree's
+    #: was not. Aspects have no merge above them — they fan out, write findings,
+    #: and `collect` reads all of them — so the phase costs its slowest member
+    #: whether there are three or eight of them. Measured: three aspects, 118s
+    #: wall. What widening costs is tokens, and what it buys is coverage: an
+    #: aspect nobody investigated is a question nobody asked.
+    max_parallel_aspects = int(os.environ.get("PHRONIX_BENCH_ASPECTS") or 5)
     max_parallel_evaluations = 3
 
     def research(self, instance: Dict[str, Any], store_root: Path,
@@ -2411,7 +2951,6 @@ Report: the skill name and the approach order.
         same ones at full price.
         """
         import subprocess
-        from concurrent.futures import ThreadPoolExecutor
         from phronix import research as research_mod
 
         checkout = workdir / "repo"
@@ -2433,6 +2972,8 @@ Report: the skill name and the approach order.
             isolated_env(store_root, workdir / "cache")))
         env.update(model_env(base_url=self.base_url))
         env["PHRONIX_WRITE_LAYER"] = "project"
+        # See `solve` above — this is the research half.
+        env["PHRONIX_PHASE"] = "research"
         if self.store_readonly:
             env["PHRONIX_BENCH_FROZEN"] = "1"
         # Anything that reaches for a temp file without being told — a helper
@@ -2473,6 +3014,10 @@ Report: the skill name and the approach order.
             stage_scratch.mkdir(parents=True, exist_ok=True)
             for key in ("TMPDIR", "TMP", "TEMP", "PHRONIX_RESEARCH_SCRATCH"):
                 stage_env[key] = str(stage_scratch)
+            # Which research stage a retrieval came from. Survey loading a skill
+            # and execution-plan loading one mean different things: the first is
+            # orientation, the second is the plan actually being built out of it.
+            stage_env["PHRONIX_STAGE"] = str(name)
 
             stats: Dict[str, Any] = {}
             stage_started = time.time()
@@ -2525,6 +3070,10 @@ Report: the skill name and the approach order.
                                        round(time.time() - stage_started, 1)),
                 "budget_s": stats.get("budget_s", budget),
                 "truncated": bool(stats.get("truncated")),
+                # Set by `stream_opencode` when the harness reported the
+                # account's window rejected during this stage.
+                "rate_limited": bool(stats.get("rate_limited")),
+                "resets_at": stats.get("resets_at"),
                 "returncode": rc,
                 "steps": counted.steps,
                 "tokens_input": counted.tokens_input,
@@ -2593,6 +3142,17 @@ Report: the skill name and the approach order.
             if tree is not checkout:
                 subprocess.run(["git", "worktree", "remove", "--force", str(tree)],
                                cwd=checkout, capture_output=True, text=True)
+
+        # The learner runs for the life of the arm, and starts before the
+        # stages do.
+        #
+        # Started here because this is the first moment there is anything to
+        # learn from, and left running afterwards: a pattern is a thing that
+        # repeats, and repetition is only visible from above several tasks. A
+        # harvest at the end of a pass can see what that pass did twice; it
+        # cannot see what every pass has been doing wrong.
+        self.start_learning(store_root, checkout, workdir, env=env,
+                            on_learning=on_call)
 
         budgets = self.STAGE_BUDGETS
 
@@ -2836,6 +3396,14 @@ Report: the skill name and the approach order.
             # tells you nothing about where to look.
             "failed_stages": [f"{d['stage']}=rc{d['returncode']}"
                               for d in stage_detail if d["returncode"]],
+            # Whether the account's window was rejected during this pass. Zero
+            # tool calls means the same thing on the surface whether the harness
+            # is broken or the account is dry, and the two call for opposite
+            # responses — stop, or wait. This is the fact that tells them apart,
+            # taken off the harness's own stream rather than inferred from rc=1.
+            "rate_limited": any(d.get("rate_limited") for d in stage_detail),
+            "resets_at": max((d.get("resets_at") or 0)
+                             for d in stage_detail) or None,
             "returncode": code,
             "steps": parsed.steps,
             "elapsed_s": round(time.time() - started, 1),
@@ -2986,6 +3554,372 @@ Report: the skill name and the approach order.
                         tally(str(block.get("name") or ""))
         return counts
 
+    #: How often the learner looks at what has been reported.
+    #:
+    #: Ten seconds, because looking is arithmetic — `research_notice` groups
+    #: observations by shape and costs nothing. Generalising is the expensive
+    #: half and runs on its own, slower clock.
+    LEARNING_NOTICE_INTERVAL = _tuned("learning.notice_seconds", 10.0)
+    #: How often it reconciles what it has noticed into lessons and tools.
+    #:
+    #: A minute, because this half is an agent invocation and one of those costs
+    #: the better part of a minute before it does anything. Aggressive capture,
+    #: periodic compaction: the fast tier never misses anything, and the slow
+    #: tier keeps the library small.
+    LEARNING_RECONCILE_INTERVAL = _tuned("learning.reconcile_seconds", 60.0)
+    #: How many observations make a cycle worth spending.
+    #:
+    #: One, because everything is learned: a finding reported once and not
+    #: written down is rediscovered at full price by the next task, and the
+    #: block that would have prevented that costs a few lines. This exists only
+    #: so a cycle is not spent on literally nothing.
+    LEARNING_BATCH = _tuned("learning.batch", 1)
+    #: A cycle's ceiling. Off the critical path, so this buys thoroughness
+    #: rather than costing wall clock — but bounded, because a wedged learner
+    #: holding a skill file open is a problem for everyone.
+    LEARNING_BUDGET = _tuned("learning.budget_seconds", 300)
+    #: Reconcilers running at once, each holding a disjoint set of subjects.
+    #:
+    #: One falls behind when many tasks report at once. More is safe only
+    #: because the split is by subject: two workers never write the same skill,
+    #: so "more workers" cannot become "two lessons that contradict each other
+    #: in one file". Small, because each is an agent invocation.
+    LEARNING_WORKERS = _tuned("learning.workers", 3)
+
+    def _learning_env(self, store_root: Path, workdir: Path) -> Dict[str, str]:
+        """The environment a learner cycle runs in.
+
+        Built the same way a research stage's is, because the learner needs the
+        same things: the store to write into, the MCP server to reach, and a
+        model to call. It writes to the project layer deliberately — a lesson
+        that lands in a task's session folder helps nothing after that task.
+
+        A method rather than a call site, because the call site had this wrong:
+        it named `research_env`, which does not exist, so every cycle raised
+        AttributeError and the learner produced nothing for a whole run.
+        """
+        env = self.phronix_env(tool_path_env(
+            isolated_env(store_root, workdir / "learner-cache")))
+        env.update(model_env(base_url=self.base_url))
+        env["PHRONIX_WRITE_LAYER"] = "project"
+        # The background learner's own retrievals, kept apart from the
+        # task's so they cannot be counted as a task reusing anything.
+        env["PHRONIX_PHASE"] = "learner"
+        return env
+
+    def start_learning(self, store_root: Path, checkout: Path,
+                       workdir: Path, env: Optional[Dict[str, str]] = None,
+                       on_learning=None) -> None:
+        """Start the always-on learner, if it is not already running.
+
+        One agent per arm, for the life of the run, draining what the stages
+        report. It exists because the learning that mattered was being thrown
+        away: a stage would discover that a green test masked a bug, and the
+        finding lived in that stage's transcript until the run ended. Nothing
+        read across stages and nothing read across tasks, so the same discovery
+        was made again on the next instance.
+
+        Two clocks. Every ten seconds it *notices* — arithmetic over the
+        observations, grouping them by what they claim, which is how a repeat is
+        spotted the moment it happens. Every minute it *reconciles* — one agent,
+        turning what repeated into lessons and tools, and compacting what is
+        already there.
+
+        It never blocks anything. The pipeline does not wait for it, a cycle
+        that runs out of time loses only that cycle, and the thread is a daemon
+        so a wedged learner cannot hold the run open.
+        """
+        # One learner for the whole job, not one per arm.
+        #
+        # Started from the research pass because that is the first moment there
+        # is anything to learn from — but arms run concurrently and tasks may
+        # too, so several of them reach this line. A per-instance guard gave one
+        # learner per ARM: two consumers of one stream, each with its own idea
+        # of what it had seen, which is how two reconcilers come to work the
+        # same findings and write lessons that contradict each other.
+        #
+        # The claim is process-wide, and taken under a lock because the check
+        # and the start are not atomic: two arms starting together would
+        # otherwise both pass the check.
+        global _LEARNER_OWNER
+        with _LEARNER_LOCK:
+            if _LEARNER_OWNER is not None:
+                if on_learning and _LEARNER_OWNER is not self:
+                    on_learning("[learner] already running for this job")
+                return
+            _LEARNER_OWNER = self
+
+        self._learning_stop = threading.Event()
+        self._learner_out: List[str] = []
+
+        def cycle() -> None:
+            from phronix import bus, research as research_mod
+
+            # Binding is what makes this the consumer: a second one would fail
+            # to bind and fall back to the file, which is the correct outcome
+            # rather than a race — but the singleton above means there is no
+            # second one.
+            collector = bus.Collector()
+            seen = time.time()
+            pending: List[Dict[str, Any]] = []
+            last_reconcile = time.time()
+
+            if on_learning:
+                on_learning(f"[learner] running: notices every "
+                            f"{self.LEARNING_NOTICE_INTERVAL:.0f}s, reconciles "
+                            f"every {self.LEARNING_RECONCILE_INTERVAL:.0f}s")
+
+            while not self._learning_stop.is_set():
+                if self._learning_stop.wait(self.LEARNING_NOTICE_INTERVAL):
+                    collector.close()
+                    return
+
+                # The fast half: arithmetic, every ten seconds.
+                try:
+                    claimed = self._in_store(store_root, research_mod.claim,
+                                             "learner", 200, collector) or {}
+                    noticed = self._in_store(
+                        store_root, research_mod.notice, seen,
+                        claimed.get("observations") or []) or {}
+                except Exception:
+                    noticed = {}
+                if noticed.get("new"):
+                    seen = float(noticed.get("latest") or seen)
+                    pending.extend(noticed.get("candidates") or [])
+                    repeats = len(noticed.get("repeats") or [])
+                    if on_learning:
+                        on_learning(f"[learner] noticed {noticed['new']} "
+                                    f"observation(s), {repeats} repeated")
+
+                # Which cycle this turn is.
+                #
+                # Capture runs on the fast clock and fires on ANYTHING new.
+                #
+                # It used to wait for a shape to repeat, on the theory that one
+                # report is an anecdote. That was wrong in the direction that
+                # costs the most: a finding reported once and never written down
+                # is lost, and the next task rediscovers it at full price —
+                # while the cost of writing it is one short block. Repetition is
+                # not what makes a finding true, it is what makes it *confident*,
+                # so it belongs in how a block is updated rather than in whether
+                # one exists at all.
+                #
+                # Reconcile runs on the slow clock whether or not anything
+                # arrived: duplicates and falsified blocks are already on file
+                # and do not need a fresh observation to be worth removing.
+                enough = len(pending) >= max(1, int(self.LEARNING_BATCH))
+                due = (time.time() - last_reconcile
+                       >= self.LEARNING_RECONCILE_INTERVAL)
+                if due:
+                    cycle_name = "reconcile"
+                    last_reconcile = time.time()
+                elif enough:
+                    cycle_name = "capture"
+                else:
+                    continue
+
+                # One agent per worker, on what the fast half collected.
+                ordered = sorted(pending,
+                                 key=lambda c: (c.get("across_tasks"),
+                                                c.get("count", 0)),
+                                 reverse=True)[:30] or [
+                    {"kind": "other", "what": "(nothing new since the last "
+                                              "cycle — reconcile what is "
+                                              "already written)", "worked": True}]
+                lines = []
+                for candidate in ordered:
+                    mark = " **repeated**" if candidate.get("count", 1) > 1 else ""
+                    outcome = ("worked" if candidate.get("worked")
+                               else "did NOT work")
+                    lines.append(f"- [{candidate.get('kind', 'other')}] "
+                                 f"[{outcome}]{mark} {candidate.get('what', '')}"
+                                 + (f"  ({', '.join(candidate.get('stages') or [])})"
+                                    if candidate.get("stages") else ""))
+                pending = []
+
+                # Several reconcilers, partitioned so they cannot contradict.
+                #
+                # With many tasks in flight one reconciler falls behind, and the
+                # obvious fix — run several — is the obvious way to get two
+                # agents writing opposite lessons into one skill. So the split
+                # is by TOPIC: a lesson about a subject goes to that subject's
+                # skill, so workers holding disjoint topics write disjoint
+                # files. Nothing needs to coordinate at run time because nothing
+                # overlaps by construction.
+                #
+                # Findings that belong to no topic — about a stage rather than a
+                # subject — all go to one worker for the same reason.
+                buckets: Dict[str, List[str]] = {}
+                for candidate, line in zip(ordered, lines):
+                    # By KIND of operation, not by task.
+                    #
+                    # A lesson about running subprocesses belongs with every
+                    # other thing learned about running subprocesses, and the
+                    # next task in any repository retrieves it there. Split by
+                    # task instead and the same lesson is written into six
+                    # skills, each helping only the instance that produced it.
+                    #
+                    # It also keeps the workers disjoint, which is what stops
+                    # two of them writing contradictory lessons into one file:
+                    # one kind, one skill, one writer.
+                    buckets.setdefault(candidate.get("kind") or "other",
+                                       []).append(line)
+
+                groups: List[List[str]] = []
+                for topic_lines in buckets.values():
+                    if len(groups) < self.LEARNING_WORKERS:
+                        groups.append(list(topic_lines))
+                    else:
+                        # Smallest group takes the next topic, so the work is
+                        # spread without ever splitting a topic across workers.
+                        min(groups, key=len).extend(topic_lines)
+
+                if on_learning:
+                    on_learning(f"[learner] {cycle_name} cycle: {len(lines)} "
+                                f"finding(s) across {len(groups)} worker(s), "
+                                f"split by kind so none can contradict another")
+
+                def reconcile(group: List[str],
+                              cycle_name: str = "reconcile") -> Optional[str]:
+                    skill = ("phronix-learning-capture" if cycle_name == "capture"
+                             else "phronix-learning-reconcile")
+                    try:
+                        out, _ = stream_opencode(
+                            self.agent_command(
+                                LOG_NOTE + SCRATCH_NOTE
+                                + self.LEARNER_PROMPT
+                                .replace("{cycle}", cycle_name)
+                                .replace("{skill}", skill)
+                                .replace("{observations}", "\n".join(group)),
+                                checkout, self.attachments([]),
+                                self.learner_agent_name),
+                            checkout,
+                            self._learning_env(store_root, workdir),
+                            self.LEARNING_BUDGET)
+                        return out
+                    except Exception as exc:
+                        # A learner that dies must not take the run with it —
+                        # the observations remain and the next cycle reads them.
+                        #
+                        # But it must SAY so. This swallowed an AttributeError
+                        # for a whole run: every cycle noticed findings, called
+                        # a method that did not exist, returned nothing, and the
+                        # trace showed only "reconciling 7 finding(s)" — which
+                        # reads exactly like a learner that is working.
+                        if on_learning:
+                            on_learning(f"[learner] cycle FAILED: "
+                                        f"{type(exc).__name__}: {exc}")
+                        return None
+
+                if len(groups) == 1:
+                    written = [reconcile(groups[0], cycle_name)]
+                else:
+                    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+                        written = list(pool.map(
+                            lambda g: reconcile(g, cycle_name), groups))
+
+                out = "\n".join(chunk for chunk in written if chunk)
+                if out:
+                    self._learner_out.append(out)
+                else:
+                    continue
+
+                # What came out, by name. "The learner ran" is not a result;
+                # "it wrote probe_run_area_tests and a lesson on
+                # phronix-research-tune" is, and it is the only evidence that
+                # the loop is generalising rather than idling.
+                if on_learning:
+                    produced = self._learning_products(out)
+                    if produced:
+                        for item in produced:
+                            on_learning(f"[learner] wrote {item}")
+                    else:
+                        # What "nothing" means depends on the cycle, and saying
+                        # the wrong one reads as a fault. A capture cycle that
+                        # writes nothing had nothing worth stating; a reconcile
+                        # cycle that writes nothing found nothing to merge or
+                        # retire, which is the healthy steady state.
+                        on_learning("[learner] " + (
+                            "nothing to merge or retire — the library is "
+                            "already consistent"
+                            if cycle_name == "reconcile"
+                            else "wrote nothing — no finding worth stating"))
+
+        self._learner = threading.Thread(target=cycle, daemon=True)
+        self._learner.start()
+
+    @staticmethod
+    def _learning_products(stdout: str) -> List[str]:
+        """What a learner cycle actually wrote, by name.
+
+        Read from its tool calls rather than its prose: an agent's summary of
+        what it did is a claim, and the calls are the record. Only writes count
+        — a cycle that read six skills and wrote nothing produced nothing.
+        """
+        products: List[str] = []
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+
+            calls = []
+            part = event.get("part")
+            if isinstance(part, dict) and part.get("type") == "tool":
+                calls.append((str(part.get("tool") or ""),
+                              (part.get("state") or {}).get("input") or {}))
+            # A plain turn carries `content` as a string; iterating it walks
+            # characters and every "block" is a one-character str.
+            blocks = (event.get("message") or {}).get("content")
+            for block in (blocks if isinstance(blocks, list) else []):
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    calls.append((str(block.get("name") or ""),
+                                  block.get("input") or {}))
+
+            for tool, args in calls:
+                if not isinstance(args, dict):
+                    args = {}
+                if "capability_new" in tool:
+                    products.append(f"tool {args.get('name', '?')}")
+                elif "skill_write_lesson" in tool:
+                    products.append(f"lesson {args.get('skill', '?')}: "
+                                    f"{str(args.get('title', ''))[:60]}")
+                elif "skill_write" in tool:
+                    products.append(f"block {args.get('skill', '?')}: "
+                                    f"{str(args.get('title', ''))[:60]}")
+                elif "skill_create" in tool:
+                    products.append(f"skill {args.get('name', '?')}")
+        return products
+
+    def drain_learning(self) -> List[str]:
+        """Transcripts the learner has finished with since the last drain."""
+        collected = list(getattr(self, "_learner_out", []) or [])
+        self._learner_out = []
+        return collected
+
+    def stop_learning(self, timeout: float = 60.0) -> List[str]:
+        """Ask the learner to finish, and collect what it spent.
+
+        Called when the arm's tasks are done. The wait is bounded because a
+        cycle mid-invocation is worth a minute of patience and not more — its
+        observations are already on file, so what an abandoned cycle loses is
+        one write-up rather than the input to it.
+        """
+        global _LEARNER_OWNER
+        stopper = getattr(self, "_learning_stop", None)
+        if stopper is not None:
+            stopper.set()
+        learner = getattr(self, "_learner", None)
+        if learner is not None:
+            learner.join(timeout=timeout)
+        self._learner = None
+        with _LEARNER_LOCK:
+            if _LEARNER_OWNER is self:
+                _LEARNER_OWNER = None
+        return self.drain_learning()
+
     def learn(self, instance: Dict[str, Any], store_root: Path, workdir: Path,
               outcome: AttemptOutcome,
               verdict: Optional[Dict[str, Any]] = None) -> None:
@@ -3030,6 +3964,8 @@ Report: the skill name and the approach order.
         env = self.phronix_env(tool_path_env(isolated_env(store_root, workdir / "cache")))
         env.update(model_env(base_url=self.base_url))
         env["PHRONIX_WRITE_LAYER"] = "project"
+        # The post-attempt harvest, which reads to write rather than to solve.
+        env["PHRONIX_PHASE"] = "learn"
         if self.store_readonly:
             env["PHRONIX_BENCH_FROZEN"] = "1"
 

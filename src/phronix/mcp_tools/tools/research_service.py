@@ -413,6 +413,54 @@ def register(mcp: Any) -> None:
                                   source=source), indent=2)
 
     @mcp.tool()
+    def research_observe(what: str, worked: bool, detail: str = "",
+                         topic: str = "", stage: str = "") -> str:
+        """Report that something worked, or did not. Costs a file append.
+
+        **Call this whenever you learn something the next task would want.** A
+        technique that fixed a class of cases, a tool whose output needed
+        massaging, an approach that looked right and was not.
+
+        A background learner drains these, looks for what repeats across tasks,
+        and turns the repeats into skill lessons and `probe_` tools. It never
+        blocks you: writing is an append, and nothing waits on the learner.
+
+        ``worked=false`` is the more valuable report and the one nobody writes
+        down. An approach recorded as a dead end costs the next task a sentence;
+        unrecorded it costs an attempt.
+
+        Returns JSON: {status, recorded, worked}.
+        """
+        from phronix import research
+
+        return json.dumps(
+            research.observe(what, worked, detail, topic, stage), indent=2)
+
+    @mcp.tool()
+    def research_notice(since: float = 0.0, limit: int = 200) -> str:
+        """What has been reported lately, grouped by what repeated.
+
+        The read side of ``research_observe``. Arithmetic, not a model call:
+        observations are grouped by shape, so this answers "has this been said
+        before, and by how many different stages" without spending an agent.
+
+        Read this before writing a lesson. A finding that appears once is an
+        anecdote; the same finding from two stages or two tasks is a pattern,
+        and the group tells you which you have.
+
+        Args:
+            since: unix time; 0 for everything on record.
+            limit: how many raw observations to consider.
+
+        Returns JSON: {status, groups, repeats, latest, considered}.
+        """
+        from phronix import research
+
+        return json.dumps(
+            research.notice(since, research.observations(since, limit)),
+            indent=2)
+
+    @mcp.tool()
     def research_record_trial(topic: str, approach: str, instance: str,
                               passed: bool, detail: str = "") -> str:
         """Record how one approach fared on one instance.

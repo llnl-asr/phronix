@@ -27,7 +27,25 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from typing import Any, Dict, List
+
+#: How often a running server re-reads the store it serves.
+#:
+#: A minute: long enough that a scan and a graph rebuild are free beside
+#: everything else the server does, short enough that a tool or a lesson written
+#: by the learner is usable while the work that prompted it is still going on.
+def _refresh_seconds() -> float:
+    """From the tuning file, so a deployment can change it without a reinstall."""
+    try:
+        from phronix.tuning import get
+
+        return float(get("graph.refresh_seconds", 60.0))
+    except Exception:
+        return 60.0
+
+
+STORE_REFRESH_SECONDS = _refresh_seconds()
 
 SERVER_NAME = "phronix"
 
@@ -101,6 +119,118 @@ def run_startup_setup(target_root: str = "", quiet: bool = False) -> Dict[str, A
     return results
 
 
+def _watch_store(server: Any, interval: float = 60.0) -> None:
+    """Keep the served store current: new capabilities, and a warm graph.
+
+    A capability is not live until the tool is registered, and registration
+    happened once at startup — so a tool written by the learner, or by another
+    task's research, was invisible to every server already running. With one
+    server per agent invocation that resolved itself at the next stage; with
+    tasks running concurrently it means a tool built now helps nobody currently
+    working, which is most of the fleet.
+
+    So the server watches the directory it loaded from. New modules are
+    registered as they appear, and clients that support it are told the tool
+    list changed. A tool that was already registered is left alone: re-importing
+    a module that is mid-write, or replacing a closure an in-flight call is
+    using, would be a worse failure than a minute's delay.
+
+    A daemon thread, so a server whose watcher dies still serves, and a watcher
+    that is mid-scan never delays a shutdown.
+    """
+    import threading
+
+    from phronix.capabilities import load_all
+
+    def watch() -> None:
+        while True:
+            time.sleep(interval)
+
+            # Re-read the tuning file first, so an edit takes effect on the next
+            # sweep rather than on the next restart — the same property the
+            # capability scan gives tools.
+            try:
+                from phronix.tuning import reload as reload_tuning
+
+                reload_tuning()
+            except Exception:
+                pass
+
+            # Rebuild the knowledge graph here rather than on the query path.
+            #
+            # Measured: a warm query is 1.2s and a query that has to rebuild
+            # first is 6.0s — and something is written to the store constantly,
+            # so on the query path almost every call pays the rebuild. Moving
+            # it here means retrieval is warm by the time anyone asks, which is
+            # what makes graph-backed lookup affordable for skills, memory and
+            # research rather than a thing to reach for only when the index
+            # fails.
+            #
+            # It also closes the loop the capability scan opens: a lesson the
+            # learner writes is findable a minute later, by the same clock that
+            # makes its tools callable.
+            try:
+                from phronix.knowledge_graph import ensure as ensure_graph
+
+                ensure_graph("knowledge", force=False)
+            except Exception as exc:
+                # A graph that stops building is not a small loss: retrieval
+                # falls back to term matching, agents stop finding what the
+                # library holds, and the whole thing degrades invisibly —
+                # nothing fails, answers just get worse.
+                #
+                # So it is reported twice. To stderr, where the run's trace
+                # picks it up; and to the learner, which is the thing that can
+                # act on it — a build that fails the same way three times is a
+                # pattern, and self-healing is what the learner is for.
+                print(f"[phronix] graph refresh FAILED: "
+                      f"{type(exc).__name__}: {exc}", file=sys.stderr)
+                try:
+                    from phronix.research import observe
+
+                    observe(f"the knowledge graph failed to rebuild: "
+                            f"{type(exc).__name__}",
+                            worked=False, kind="tooling", stage="mcp-server",
+                            detail=str(exc)[:400])
+                except Exception:
+                    pass              # reporting a failure must not raise one
+
+            # Picking up new capabilities is separable from keeping the graph
+            # warm: a deployment that wants a fixed, audited tool set still
+            # wants retrieval to work, and turning the whole sweep off to get
+            # that would cost it the graph as well.
+            from phronix.tuning import get as tuned
+
+            if not tuned("graph.refresh_capabilities", True):
+                continue
+
+            try:
+                found = load_all(server)
+            except Exception:
+                continue                      # a bad module must not stop the loop
+            fresh = [name for name in found.get("loaded", [])
+                     if name not in _REGISTERED]
+            if not fresh:
+                continue
+            _REGISTERED.update(fresh)
+            print(f"[phronix] capabilities added: {', '.join(sorted(fresh))}",
+                  file=sys.stderr)
+            # Best effort: not every client acts on it, and the ones that do not
+            # will still see the tool on their next session.
+            try:
+                notify = getattr(server, "notify_tools_changed", None)
+                if callable(notify):
+                    notify()
+            except Exception:
+                pass
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
+#: What has been registered, so a rescan adds rather than replaces.
+_REGISTERED: set = set()
+
+
 def build_server(quiet: bool = False) -> Any:
     """Construct the FastMCP server with built-in tools, capabilities and middleware."""
     from fastmcp import FastMCP
@@ -122,6 +252,14 @@ def build_server(quiet: bool = False) -> Any:
         # session like a tool that never existed, and it will be rewritten.
         print(f"[phronix] capability FAILED {failure['name']} ({failure['file']}): "
               f"{failure['error']}", file=sys.stderr)
+
+    _REGISTERED.update(learned.get("loaded", []))
+
+    # Tools written while this server is running become callable without a
+    # restart, and the graph stays warm so retrieval never pays for a rebuild.
+    # Together that is the difference between "a tool built now helps the next
+    # stage" and "a tool built now helps whoever is working when it lands".
+    _watch_store(server, STORE_REFRESH_SECONDS)
 
     if not quiet:
         print(f"[phronix] services={len(builtin['loaded'])} "

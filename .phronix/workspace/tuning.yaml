@@ -1,0 +1,9 @@
+# phronix tuning overrides for this layer.
+# Only the keys set here differ from the shipped defaults;
+# everything else falls through. See `phronix tuning`.
+graph: {}
+learning: {}
+research: {}
+llm:
+  max_concurrent_agents: 24
+  min_seconds_between_starts: 0.0

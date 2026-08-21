@@ -37,6 +37,7 @@ learns.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -45,6 +46,20 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 #: Content directory for research records, alongside skills/ and memory/.
+def _tuned(key: str, fallback):
+    """A tuning value, falling back to what the code shipped with.
+
+    Read at import for constants and per call for anything the server's refresh
+    should be able to change; see `phronix.tuning`.
+    """
+    try:
+        from phronix.tuning import get
+
+        return get(key, fallback)
+    except Exception:
+        return fallback
+
+
 RESEARCH_DIR = "research"
 
 #: A subject is considered covered when a skill search returns at least this many
@@ -95,7 +110,8 @@ DEFAULT_CORPUS_TARGET = 100
 
 #: How the corpus is divided. Train is largest because discovery needs the most
 #: material; test is held back and touched once.
-DEFAULT_SPLIT = {"train": 0.6, "validate": 0.2, "test": 0.2}
+DEFAULT_SPLIT = _tuned("research.split",
+                       {"train": 0.6, "validate": 0.2, "test": 0.2})
 
 #: Tuning is train + validate; only `test` decides. 80:20, and the 20 is never
 #: seen until the final measurement.
@@ -108,7 +124,7 @@ TUNING_PHASES = ("train", "validate")
 #: licenses writing the approach up as knowledge. The floor is on the corpus
 #: because that is where it can be acted on: the split cannot manufacture
 #: evidence that was never collected.
-MIN_CORPUS_INSTANCES = 20
+MIN_CORPUS_INSTANCES = _tuned("research.min_corpus_instances", 20)
 
 
 def _slug(text: str) -> str:
@@ -344,6 +360,340 @@ def _save(record: Dict[str, Any]) -> Path:
 # ---------------------------------------------------------------------------
 # 1. Is research needed at all?
 # ---------------------------------------------------------------------------
+
+def _tuned(key: str, fallback):
+    """A tuning value, falling back to what the code shipped with."""
+    try:
+        from phronix.tuning import get
+
+        return get(key, fallback)
+    except Exception:
+        return fallback
+
+
+#: The kinds of work research and diagnosis actually do.
+#:
+#: These are the bus topics, and the partition the learner reconciles along —
+#: which makes the choice consequential rather than cosmetic. Partitioned by
+#: TASK, a lesson lands in that task's skill and helps the one instance that
+#: produced it. Partitioned by the kind of operation, "a subprocess that reads
+#: its own stdout needs the stream merged" lands in one place with every other
+#: thing learned about running subprocesses, and the next task in any repository
+#: retrieves it.
+#:
+#: A fixed vocabulary rather than free text, because the point is accumulation:
+#: an open set fragments into forty topics of one observation each, and forty
+#: skills of one lesson each is a library nobody reads. Anything that does not
+#: fit is `other`, and a growing pile there is the signal to add a kind.
+OPERATION_KINDS = (
+    "bash",         # shell: pipelines, exit codes, quoting, environment
+    "python",       # writing and running python: imports, paths, interpreters
+    "traversal",    # walking trees: os.walk, globbing, path shapes
+    "tests",        # running a project's tests and reading what failed
+    "patch",        # applying, reverting and diffing changes
+    "matching",     # regexes, anchors, normalisation before comparison
+    "config",       # config files and option resolution
+    "git",          # worktrees, checkouts, history
+    "measurement",  # corpora, metrics, trials, what counts as evidence
+    "tooling",      # the phronix tools themselves: what they accept and refuse
+    "other",
+)
+
+
+def operation_kind(hint: str) -> str:
+    """Normalise a reported kind onto the vocabulary. Never rejects.
+
+    A rejected observation is one the reporter stops making, and a report in the
+    wrong bucket is worth much more than no report — so an unrecognised kind
+    becomes `other` rather than an error the stage has to handle.
+    """
+    wanted = str(hint or "").strip().lower()
+    if wanted in OPERATION_KINDS:
+        return wanted
+    # A few obvious synonyms, because agents name things descriptively.
+    aliases = {
+        "shell": "bash", "sh": "bash", "command": "bash", "subprocess": "bash",
+        "py": "python", "script": "python", "scripts": "python",
+        "walk": "traversal", "filesystem": "traversal", "paths": "traversal",
+        "path": "traversal", "discovery": "traversal",
+        "test": "tests", "pytest": "tests", "suite": "tests",
+        "diff": "patch", "apply": "patch",
+        "regex": "matching", "pattern": "matching", "normalisation": "matching",
+        "normalization": "matching",
+        "settings": "config", "options": "config", "toml": "config",
+        "worktree": "git", "checkout": "git",
+        "metric": "measurement", "corpus": "measurement",
+        "trials": "measurement", "fom": "measurement",
+        "mcp": "tooling", "tool": "tooling", "tools": "tooling",
+    }
+    return aliases.get(wanted, "other")
+
+
+#: Where observations land. One line per event, appended, never rewritten.
+OBSERVATIONS = "observations.jsonl"
+
+
+def observe(what: str, worked: bool, detail: str = "",
+            topic: str = "", stage: str = "", kind: str = "") -> Dict[str, Any]:
+    """Report that something worked, or did not. Cheap, append-only, unblocking.
+
+    The learning that mattered was being thrown away. A stage would discover
+    that a green test masked the bug, or that an approach class was a dead end —
+    and the finding lived in that stage's transcript until the run ended.
+    Nothing read across stages, and nothing read across tasks, so the same
+    discovery was made again on the next instance by an agent with no way to
+    know.
+
+    This is the channel. A background learner drains it, looks for what repeats,
+    and turns the repeats into skill lessons and `probe_` tools. Writing here is
+    a file append: it cannot block the stage that reports.
+
+    ``worked`` is the whole point. "This did not work" is the more valuable
+    entry and the one that never gets written down — an approach recorded as a
+    dead end costs the next task a sentence; unrecorded it costs an attempt.
+    """
+    if not str(what).strip():
+        return {"status": "error", "error": "an observation needs a subject"}
+
+    entry = {
+        "what": str(what).strip()[:400],
+        "worked": bool(worked),
+        "detail": str(detail).strip()[:800],
+        "topic": str(topic or os.environ.get(TOPIC_ENV, "")).strip(),
+        "stage": str(stage).strip()[:60],
+        # What KIND of work this was about. The bus topic and the learner's
+        # partition: lessons about running subprocesses accumulate in one place
+        # rather than scattering across the tasks that happened to hit them.
+        "kind": operation_kind(kind),
+        "at": time.time(),
+    }
+
+    # Onto the bus first: that is what the learner is waiting on, and a socket
+    # send that nobody is listening to costs nothing and returns immediately.
+    from phronix import bus
+
+    delivered = bus.publish(entry["kind"], entry)
+
+    # Then to the file, which is the record rather than the transport. An
+    # observation reported while no learner was up is still there when one
+    # starts, and a learner that dies mid-cycle has not consumed anything it
+    # cannot re-read.
+    #
+    # Appended with a single `write` in append mode and no lock. POSIX makes an
+    # O_APPEND write of less than PIPE_BUF atomic, and these lines are a few
+    # hundred bytes — so concurrent stages interleave whole lines rather than
+    # corrupting one, which is the only property the reader needs.
+    path = _research_home() / OBSERVATIONS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+    return {"status": "ok", "recorded": entry["what"][:80],
+            "worked": entry["worked"], "kind": entry["kind"],
+            "on_bus": delivered}
+
+
+def observations(since: float = 0.0, limit: int = 200) -> List[Dict[str, Any]]:
+    """Everything reported after *since*, oldest first, across every layer.
+
+    Across layers because the learner generalises across tasks, and the tasks of
+    one run write into one session while earlier runs left theirs in the project
+    layer. A pattern that appears in two runs is worth more than one that
+    appears twice in the same pass.
+    """
+    from phronix.layers import layers
+
+    found: List[Dict[str, Any]] = []
+    for layer in layers():
+        path = Path(layer.root) / RESEARCH_DIR / OBSERVATIONS
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if float(entry.get("at") or 0) > since:
+                found.append(entry)
+
+    found.sort(key=lambda e: e.get("at") or 0)
+    return found[-limit:]
+
+
+#: Where a consumer's position in the file is kept, for what the bus missed.
+CURSOR = "observations.cursor"
+
+
+def claim(consumer: str = "learner", limit: int = 200,
+          collector: Any = None) -> Dict[str, Any]:
+    """Take the observations nobody has taken yet: bus first, then the file.
+
+    Two sources, and they answer different questions. The **bus** carries what
+    is happening now, and a message is delivered to exactly one consumer — so
+    several learners can run without any of them coordinating, which is what
+    keeps two reconcilers from working the same findings and writing lessons
+    that contradict each other. The **file** carries what happened while nobody
+    was listening: before the first learner started, or between one dying and
+    the next beginning.
+
+    The file cursor is advanced with a plain read-modify-write. It does not need
+    a lock, because a consumer that re-reads a few observations does duplicate
+    work rather than damage — and the bus, which is the exactly-once path,
+    handles the case that actually recurs.
+    """
+    taken: List[Dict[str, Any]] = []
+    if collector is not None and getattr(collector, "live", False):
+        taken.extend(collector.drain(limit))
+
+    home = _research_home()
+    home.mkdir(parents=True, exist_ok=True)
+    cursor_path = home / CURSOR
+    try:
+        position = float(json.loads(cursor_path.read_text())["at"])
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        position = 0.0
+
+    # Anything the bus already delivered is not read again from the file.
+    seen = {(e.get("what"), e.get("at")) for e in taken}
+    from_file = [e for e in observations(position, limit)
+                 if (e.get("what"), e.get("at")) not in seen]
+    taken.extend(from_file)
+
+    if from_file:
+        advanced = max(float(e.get("at") or position) for e in from_file)
+        try:
+            cursor_path.write_text(json.dumps({"at": advanced,
+                                               "by": str(consumer),
+                                               "count": len(from_file)}))
+        except OSError:
+            pass
+
+    taken.sort(key=lambda e: e.get("at") or 0)
+    return {"status": "ok" if taken else "empty", "consumer": str(consumer),
+            "claimed": len(taken), "observations": taken,
+            "from_bus": len(taken) - len(from_file), "from_file": len(from_file)}
+
+
+def _shape(text: str) -> set:
+    """The content words of an observation, for comparing what it claims.
+
+    Numbers and paths are dropped — they differ between instances of the same
+    finding — and spellings are folded together, because two agents reporting
+    one discovery rarely word it identically and a literal comparison then finds
+    nothing at all.
+    """
+    lowered = re.sub(r"[0-9]+", " ", str(text).lower())
+    lowered = re.sub(r"[/\\][^\s]+", " ", lowered)
+    lowered = re.sub(r"[^a-z\s]+", " ", lowered)
+    words = set()
+    for word in lowered.split():
+        if len(word) <= 3:
+            continue
+        word = word.replace("ising", "izing").replace("isation", "ization")
+        # Long enough to still be a word after the suffix comes off, which is
+        # four characters — at five, `roots` kept its plural while `walking`
+        # lost its ending, so one report said "root" and the other "roots" and
+        # they read as different findings.
+        for suffix in ("ing", "ed", "es", "s"):
+            if len(word) - len(suffix) >= 4 and word.endswith(suffix):
+                word = word[: -len(suffix)]
+                break
+        words.add(word)
+    return words
+
+
+def _same_shape(left: set, right: set, threshold: float = 0.4) -> bool:
+    """Whether two observations make the same claim.
+
+    Overlap rather than equality: "normalising the path before matching fixed
+    14 cases" and "normalizing paths before the match fixed 9 cases" are one
+    finding reported twice, and an exact comparison sees two unrelated notes.
+    """
+    if not left or not right:
+        return False
+    return len(left & right) / len(left | right) >= threshold
+
+
+def notice(since: float = 0.0,
+           batch: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """What has been reported since *since*, grouped by what repeats. No agent.
+
+    The fast half of learning, and deliberately not a model call: an agent
+    invocation costs the better part of a minute before it does anything, so a
+    ten-second cadence has to be arithmetic. Grouping observations by shape is
+    arithmetic, and it answers the question the fast tier needs — has this been
+    said before, and by how many different stages?
+
+    Note what that answer is *for*. Every observation is learned; the counts
+    decide how a block is written, not whether it is. A shape seen once becomes
+    a block stating its conditions, and a shape seen again widens that block
+    into a general rule. Gating on repetition instead was wrong in the direction
+    that costs most: a finding reported once and never written down is
+    rediscovered at full price by the next task, while the block that would have
+    prevented it costs a few lines.
+
+    `repeats` is therefore a view over `candidates`, not a filter applied before
+    them — callers that learn should read `candidates`.
+    """
+    fresh = list(batch) if batch is not None else observations(since)
+    if not fresh:
+        return {"status": "empty", "since": since, "new": 0,
+                "candidates": [], "repeats": [], "latest": since}
+
+    groups: List[Dict[str, Any]] = []
+    for entry in fresh:
+        shape = _shape(entry.get("what", ""))
+        if not shape:
+            continue
+        entry_kind = operation_kind(entry.get("kind", ""))
+        slot = next((g for g in groups
+                     if _same_shape(g["shape"], shape)
+                     and entry_kind in g["kinds"]), None)
+        if slot is None:
+            slot = {"shape": shape, "what": entry.get("what", ""), "count": 0,
+                    "worked": 0, "failed": 0, "stages": set(), "topics": set(),
+                    "kinds": set()}
+            groups.append(slot)
+        else:
+            # Two reports of one finding do not have identical shapes, and the
+            # union is a better key for the next comparison than either alone.
+            slot["shape"] = slot["shape"] | shape
+        slot["count"] += 1
+        slot["worked" if entry.get("worked") else "failed"] += 1
+        if entry.get("stage"):
+            slot["stages"].add(str(entry["stage"]))
+        if entry.get("topic"):
+            slot["topics"].add(str(entry["topic"]))
+        slot["kinds"].add(operation_kind(entry.get("kind", "")))
+
+    candidates = []
+    for slot in groups:
+        candidates.append({
+            "what": slot["what"], "count": slot["count"],
+            "worked": slot["worked"], "failed": slot["failed"],
+            "stages": sorted(slot["stages"]), "topics": sorted(slot["topics"]),
+            "kinds": sorted(slot["kinds"]),
+            "kind": sorted(slot["kinds"])[0] if slot["kinds"] else "other",
+            # A shape seen in two different tasks generalises; the same shape
+            # twice inside one task is usually one agent repeating itself.
+            "across_tasks": len(slot["topics"]) > 1,
+        })
+    candidates.sort(key=lambda c: (c["across_tasks"], c["count"]), reverse=True)
+
+    return {"status": "ok", "since": since, "new": len(fresh),
+            "candidates": candidates,
+            "repeats": [c for c in candidates if c["count"] > 1],
+            "latest": max(float(e.get("at") or since) for e in fresh)}
+
 
 def assess(task: str) -> Dict[str, Any]:
     """Whether the library already covers *task*, and therefore whether to research.
@@ -2506,7 +2856,7 @@ def mark_attempt_outcome(topic: str, approach: str = "", worked: bool = False,
 #: agent that can always say "nearly right, one more tweak" will spend every
 #: retry on the first idea it had. Two revisions is enough for "right place,
 #: missed a case"; a third means the diagnosis itself is wrong.
-MAX_REFINEMENTS = 2
+MAX_REFINEMENTS = _tuned("research.max_refinements", 2)
 
 
 def refine_approach(topic: str, key: str, diagnosis: str, change: str,
@@ -2650,7 +3000,7 @@ def mark_working(topic: str, approach: str = "") -> Dict[str, Any]:
 #: A real fix for one of these tasks is tens of lines. Anything much larger is
 #: not "the change", it is a working tree with debris in it — and pasting that
 #: into the attempt's context is the opposite of the point.
-CHANGE_LIMIT = 4000
+CHANGE_LIMIT = _tuned("research.change_limit", 4000)
 
 
 def _clean_steps(steps: List[Dict[str, Any]]) -> Any:

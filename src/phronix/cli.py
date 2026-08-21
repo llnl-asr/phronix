@@ -559,6 +559,58 @@ def cmd_complexity(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tuning(args: argparse.Namespace) -> int:
+    """Show or change the numbers that decide how phronix behaves."""
+    from phronix import tuning
+
+    if args.set:
+        for pair in args.set:
+            if "=" not in pair:
+                print(f"phronix tuning: expected key=value, got {pair!r}",
+                      file=sys.stderr)
+                return 2
+            key, _, raw = pair.partition("=")
+            result = tuning.set_value(key.strip(), raw.strip(), layer=args.layer)
+            if result.get("status") != "ok":
+                print(f"phronix tuning: {result.get('error')}", file=sys.stderr)
+                return 1
+            print(f"{result['key']} = {result['value']!r}  "
+                  f"[{result['layer']}]  {result['file']}")
+        return 0
+
+    if args.unset:
+        for key in args.unset:
+            result = tuning.unset(key.strip(), layer=args.layer)
+            if result.get("status") == "absent":
+                print(f"{key}: nothing set in the {args.layer} layer")
+            else:
+                print(f"{key}: removed; now {result['now']!r} "
+                      f"from {result['from'] or 'nothing'}")
+        return 0
+
+    values = tuning.flatten()
+    if args.key:
+        wanted = [(k, v) for k, v in values if k == args.key or
+                  k.startswith(args.key + ".")]
+        if not wanted:
+            print(f"phronix tuning: nothing named {args.key!r}", file=sys.stderr)
+            return 1
+        values = wanted
+
+    if getattr(args, "json", False):
+        print(json.dumps({k: v for k, v in values}, indent=2))
+        return 0
+
+    width = max((len(k) for k, _ in values), default=10)
+    for key, value in values:
+        # Where each value comes from, because "why is this 30" is the question
+        # a tuning file exists to answer, and the answer is usually "a layer you
+        # forgot you wrote".
+        source = tuning.source_of(key) or "-"
+        print(f"  {key:<{width}}  {value!r:<10}  {source}")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from phronix.mcp_server import main as serve
 
@@ -594,6 +646,24 @@ def build_parser() -> argparse.ArgumentParser:
     def add(name: str, **kwargs) -> argparse.ArgumentParser:
         kwargs.setdefault("parents", []).append(json_flag)
         return sub.add_parser(name, **kwargs)
+
+    tuning_cmd = add("tuning",
+                     help="Show or change the numbers that decide how phronix "
+                          "behaves (block limits, refresh intervals, learning "
+                          "cadence).")
+    tuning_cmd.add_argument("key", nargs="?",
+                            help="A dotted key or prefix: `graph`, "
+                                 "`graph.refresh_seconds`.")
+    tuning_cmd.add_argument("--set", action="append", metavar="KEY=VALUE",
+                            help="Set a value in the chosen layer. Repeatable.")
+    tuning_cmd.add_argument("--unset", action="append", metavar="KEY",
+                            help="Remove an override, falling back to the layer "
+                                 "beneath. Repeatable.")
+    tuning_cmd.add_argument("--layer", default="project",
+                            choices=("project", "user"),
+                            help="Where a change is written. Defaults to the "
+                                 "project, so it travels with the code it tunes.")
+    tuning_cmd.set_defaults(func=cmd_tuning)
 
     # `init` and `deploy` are the same operation. `init` is what you reach for the
     # first time; `deploy` is what you reach for afterwards, and it is idempotent,

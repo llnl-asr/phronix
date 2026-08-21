@@ -1,0 +1,174 @@
+# phronix tuning: the numbers that decide how the framework behaves.
+#
+# Every value here was a constant in a source file, which made changing one a
+# code edit and a reinstall. They are numbers rather than logic — thresholds,
+# intervals, limits — and the right value for a laptop is not the right value
+# for a 192-thread node, so they belong in a file the deployment can own.
+#
+# Layered like everything else phronix keeps: this file ships in the wheel,
+# `~/.phronix/workspace/tuning.yaml` overrides it for a user, and
+# `<repo>/.phronix/workspace/tuning.yaml` overrides both for a project. Only the
+# keys you set need appear in an override; the rest fall through.
+#
+#   phronix tuning                     # what is in force, and where each came from
+#   phronix tuning learning.notice_seconds
+#   phronix tuning --set learning.notice_seconds=5
+#   phronix tuning --set graph.refresh_seconds=30 --layer project
+#
+# A value nothing reads is a value that will drift from the behaviour it claims
+# to describe, so each is named after the thing that reads it.
+
+skills:
+  # Characters a block may hold before it is REJECTED rather than truncated.
+  #
+  # A run once wrote a 12 KB skill whose correct fix sat as a sub-bullet inside
+  # one instruction; three later attempts retrieved that skill and none acted on
+  # it. The signal was present and its length destroyed it.
+  block_limits:
+    rule: 1000
+    instruction: 1400
+    reference: 1400
+    lesson: 3000
+    pitfall: 3000
+
+  # How much of a query's discriminating power a match must account for.
+  #
+  # Weighted by inverse document frequency, so a term appearing in most skills
+  # counts for little. At zero every query matches everything; measured,
+  # irrelevant domain queries land at 0.14-0.17 and genuinely relevant ones at
+  # 0.62-1.00, so the gap is wide and 0.30 sits in it.
+  min_term_coverage: 0.30
+
+graph:
+  # How often a running MCP server rebuilds the knowledge graph.
+  #
+  # Measured: a warm query is 1.2s and one that must rebuild first is 6.0s. The
+  # store is written constantly, so on the query path nearly every call paid the
+  # rebuild — moving it to a clock means retrieval is warm by the time anyone
+  # asks. A minute is short enough that a lesson written by the learner is
+  # findable while the work that prompted it is still going on.
+  refresh_seconds: 60.0
+
+  # Whether a running server also picks up newly written capabilities.
+  #
+  # A capability is not live until its tool is registered, and registration
+  # happened once at startup — so a tool written by the learner was invisible to
+  # every server already running, which with concurrent tasks is most of them.
+  refresh_capabilities: true
+
+research:
+  # Cases a corpus needs before a metric over it means anything.
+  #
+  # Below this the metric moves in visible steps and tuning is guessing which
+  # step it landed on. Twenty is what the code shipped with — raise it where a
+  # corpus is cheap to generate and the metric needs finer resolution.
+  min_corpus_instances: 20
+
+  # How the corpus is divided. Tuning happens on train and validate; only test
+  # falsifies, and it is not run until the tuning is finished.
+  split:
+    train: 0.6
+    validate: 0.2
+    test: 0.2
+
+  # How many times one line of thinking may be refined before it is abandoned.
+  #
+  # An agent that can always say "nearly right, one more tweak" will spend every
+  # retry on its first idea. Two revisions covers "right place, missed a case";
+  # a third means the diagnosis itself is wrong.
+  max_refinements: 2
+
+  # Characters of diff an approach may carry as evidence. Larger than this is a
+  # working tree with debris in it rather than a fix.
+  change_limit: 4000
+
+learning:
+  # How often the learner looks at what has been reported.
+  #
+  # Ten seconds, because looking is arithmetic — observations are grouped by
+  # shape, which costs nothing. Generalising is the expensive half and runs on
+  # its own clock below.
+  notice_seconds: 10.0
+
+  # How often it turns what repeated into lessons and tools.
+  #
+  # A minute, because this half is an agent invocation and one of those costs
+  # the better part of a minute before it does anything. Aggressive capture,
+  # periodic compaction.
+  reconcile_seconds: 60.0
+
+  # Observations that make a cycle worth spending.
+  #
+  # One, because everything is learned. Waiting for a shape to repeat was wrong
+  # in the direction that costs most: a finding reported once and never written
+  # down is rediscovered at full price by the next task, while the block that
+  # would have prevented it costs a few lines. Repetition does not make a
+  # finding true — it makes it confident — so it belongs in how a block is
+  # updated, not in whether one gets written.
+  #
+  # Raise it only to trade recall for spend on a very chatty run.
+  batch: 1
+
+  # Seconds a reconcile cycle may take. Off the critical path, so this buys
+  # thoroughness rather than costing wall clock — bounded because a wedged
+  # learner holding a skill file open is a problem for everyone.
+  budget_seconds: 300
+
+  # Reconcilers running at once, each holding a disjoint set of subjects.
+  #
+  # More is safe only because the split is by kind of operation: two workers
+  # never write the same skill, so "more workers" cannot become "two lessons
+  # that contradict each other in one file".
+  workers: 3
+
+llm:
+  # Agent invocations allowed to be in flight at once, across the whole job.
+  #
+  # Set this ABOVE the number of agents a run will actually have in flight
+  # whenever the endpoint schedules and reports its own queue. A self-hosted
+  # llama.cpp server publishes `requests_deferred`, so letting it queue keeps
+  # the backlog visible in `status.sh`; capping below the concurrency moves the
+  # same queue into this process, where it shows up as nothing at all. Measured:
+  # a cap of 8 against six tasks in two arms left two tasks silent for fourteen
+  # minutes while the server had five idle slots.
+  #
+  # The binding limit is not the machine, it is the account: a five-hour usage
+  # window that, once rejected, fails every agent instantly for the rest of it.
+  # Measured: six tasks x four stage agents plus learner workers emptied the
+  # window in under an hour, and the run then spent forty minutes producing
+  # transcripts containing nothing but `rate_limit_event`.
+  #
+  # This is a whole-job gate, not a per-task one — tasks run concurrently, so a
+  # per-task cap multiplies by however many are packed onto the node.
+  max_concurrent_agents: 8
+
+  # Seconds between starting one agent and starting the next.
+  #
+  # Concurrency alone bounds the peak but not the rate: eight agents that each
+  # finish in twenty seconds still start a hundred and forty an hour. Spacing
+  # the starts is what turns a burst into a sustainable draw on the window.
+  min_seconds_between_starts: 2.0
+
+  # What to do when the window is rejected outright.
+  #
+  # The stream says exactly when it resets, so waiting is a known quantity
+  # rather than a guess. Waiting beats failing: every stage launched during a
+  # rejected window returns nothing, at no saving, and the run reports a
+  # research pipeline that collapsed rather than an account that ran dry.
+  wait_for_reset: true
+
+  # Longest single wait, in seconds. A five-hour window can be nearly that far
+  # from resetting, and a job that silently sits for hours is worse than one
+  # that stops and says why.
+  max_wait_seconds: 1800
+
+bus:
+  # Milliseconds a producer will wait for the socket.
+  #
+  # Effectively zero: reporting is a side effect of doing the work, and a stage
+  # that blocks on it has been made slower by the thing meant to make everything
+  # faster. The file behind the bus is what makes dropping safe.
+  send_timeout_ms: 50
+
+  # Unsent messages a producer will hold before giving up on the socket.
+  send_high_water_mark: 1000

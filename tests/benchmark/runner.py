@@ -22,6 +22,7 @@ import os
 import re
 import shlex
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -70,6 +71,18 @@ class RunConfig:
     node: str = ""
     #: Run the arms concurrently rather than one after another.
     parallel_arms: bool = False
+    #: Run this many of an arm's tasks at once. 1 keeps them strictly ordered.
+    #:
+    #: Ordering is not incidental. The learning claim is that task N benefits
+    #: from tasks 1..N-1, and it only means something if every arm saw the same
+    #: sequence — so running tasks concurrently makes `reused`, the learning
+    #: rate and every carry-over number unattributable. Recorded in the manifest
+    #: and reported loudly for that reason, like `--with-hints`.
+    #:
+    #: What it is for is iteration: six tasks that take ninety minutes in order
+    #: take twenty when they overlap, and finding a pipeline bug does not
+    #: require the learning measurement to be sound.
+    parallel_tasks: int = 1
     #: Keep retrying a task until it passes, rather than stopping at max_tries.
     #: ``max_tries`` then acts as a hard ceiling rather than the target count.
     until_pass: bool = False
@@ -107,6 +120,20 @@ class RunConfig:
         data = {k: (str(v) if isinstance(v, Path) else v) for k, v in self.__dict__.items()}
         data["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         return data
+
+
+class UsageWindowClosed(RuntimeError):
+    """The account's usage window is exhausted, not the pipeline broken.
+
+    These look identical from the outside — every stage returns rc=1 having made
+    no tool calls — and they call for opposite responses. A broken harness must
+    stop the run, because everything after it is misattributed. A dry account
+    must wait, because everything after it will work again when the window
+    resets, and stopping throws away a run that was half finished.
+
+    Told apart by the harness's own `rate_limit_event`, which names the reset
+    time, so this is a fact off the stream rather than an inference from rc=1.
+    """
 
 
 class ResearchCollapsed(RuntimeError):
@@ -699,6 +726,15 @@ class Runner:
         # Image store on the PFS, never $HOME — see tests/benchmark/paths.py.
         from .paths import container_storage, data_root
 
+        # One bus per run, named after the run.
+        #
+        # The learner binds it and every producer connects to it. Per run rather
+        # than per host because two runs sharing an endpoint would share a
+        # learner, and each would be taught from the other's tasks.
+        os.environ.setdefault(
+            "PHRONIX_BUS",
+            f"ipc://{Path(config.out).resolve() / 'learning.sock'}")
+
         storage = container_storage(data_root(config.data_root or None))
         self.runtime = (Runtime.detect(config.isolation, storage=storage,
                                        flux_job=config.flux_job, node=config.node)
@@ -965,12 +1001,38 @@ class Runner:
         arm.research_session = self.config.research_session
         arm.research_reuse = self.config.research_reuse
 
+        # One learner for the whole arm, started before any task is.
+        #
+        # It was only ever stopped: `stop_learning` was called at the end of the
+        # arm and `start_learning` was called nowhere, so every run drained an
+        # empty bus and the observations the stages wrote — ten of them in the
+        # run that exposed this — were never generalised into anything. The
+        # symptom was silence, which reads exactly like a learner with nothing
+        # to say.
+        #
+        # Before the tasks rather than inside one, because a learner per task
+        # would have several agents writing the same skills, which is what the
+        # partition by kind of operation exists to prevent.
+        # Unguarded: the base arm defines `start_learning` as a no-op precisely
+        # so the caller does not need a `hasattr` that quietly stops working
+        # when a name changes.
+        try:
+            arm.start_learning(store_root, arm_dir, arm_dir,
+                               on_learning=lambda note: tracer.event(
+                                   "learner", note))
+        except Exception as exc:
+            # A learner that cannot start must not stop the arm, but it must say
+            # so — this failed silently for a whole run once already.
+            print(f"  [{arm_name}] learner did NOT start: "
+                  f"{type(exc).__name__}: {exc}", flush=True)
+
         ledger = Ledger()
         results: List[TaskResult] = []
         # Echo only when arms run serially; concurrent arms would interleave the
         # indented detail into unreadable soup. The file always gets everything.
         tracer = Tracer(arm_dir, arm_name, echo=not self.config.parallel_arms)
 
+        planned = []
         for order, instance_id in enumerate(self.config.tasks):
             instance = self.instances.get(instance_id)
             if instance is None:
@@ -978,16 +1040,87 @@ class Runner:
                 print(f"  {prefix}[{order:3d}] {instance_id}  SKIPPED (not in dataset)",
                       flush=True)
                 continue
-            result = self.run_task(arm, instance, order, store_root, arm_dir,
-                                   ledger, tracer)
+            planned.append((order, instance))
+
+        width = max(1, int(getattr(self.config, "parallel_tasks", 1) or 1))
+        if width > 1:
+            # Said once, at the top, because a number that is only in the
+            # manifest is a number nobody reads before believing the report.
+            print(f"  [{arm_name}] running {width} task(s) at once — reuse and "
+                  f"learning-rate figures are NOT valid in this mode: a task "
+                  f"that overlaps its predecessors cannot be said to have "
+                  f"benefited from them", flush=True)
+
+        # Appended the moment a task finishes, not when all of them do.
+        #
+        # Batching the writes to the end lost the property this file exists for:
+        # a run killed at task 22 keeps 21 tasks of data rather than none.
+        # Observed — five finished tasks, five evaluations on disk, and no
+        # results.jsonl at all, so `status.sh` still called them "in flight" and
+        # a kill would have thrown all five away.
+        #
+        # Order in the file is completion order when tasks overlap. That is
+        # honest: with `--parallel-tasks` the sequence carries no learning
+        # signal anyway, which is what the warning at the top of the run says.
+        write_lock = threading.Lock()
+
+        def one(job):
+            order, instance = job
+            result = self.run_task(arm, instance, order, store_root,
+                                   arm_dir, ledger, tracer)
+
+            # The task's own result file, written by the only thread that owns
+            # that directory. No lock, no shared file, nothing to interleave —
+            # a task's result cannot be lost to another task's write because no
+            # other task touches it.
+            task_dir = arm_dir / "tasks" / f"{order:03d}-{result.instance_id}"
+            try:
+                task_dir.mkdir(parents=True, exist_ok=True)
+                (task_dir / "result.json").write_text(
+                    json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+            except (OSError, TypeError, ValueError):
+                pass
+
+            with write_lock:
+                # The aggregate as well, because every reader and report is
+                # written against it. Under a lock only because it is shared;
+                # the per-task file above is the record that cannot be lost.
+                append_result(results_path, result)
+                label = f"[{arm_name}] " if self.config.parallel_arms else ""
+                print(f"  {label}[{order:3d}] {result.instance_id:38s} "
+                      f"{'PASS' if result.resolved else 'fail'} "
+                      f"tries={result.tries} tok={result.tokens_total:,} "
+                      f"new={len(result.skills_created)} "
+                      f"reused={len(result.skills_reused)}", flush=True)
+            return order, result
+
+        if width == 1:
+            finished = [one(job) for job in planned]
+        else:
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(width, len(planned) or 1)) as pool:
+                finished = list(pool.map(one, planned))
+
+        # Kept in task order in memory for the report, whatever order they
+        # finished in — the file is the durable record, this is the summary.
+        for _, result in sorted(finished, key=lambda item: item[0]):
             results.append(result)
-            append_result(results_path, result)
-            label = f"[{arm_name}] " if self.config.parallel_arms else ""
-            print(f"  {label}[{order:3d}] {instance_id:38s} "
-                  f"{'PASS' if result.resolved else 'fail'} "
-                  f"tries={result.tries} tok={result.tokens_total:,} "
-                  f"new={len(result.skills_created)} reused={len(result.skills_reused)}",
-                  flush=True)
+
+        # Let the background learner finish, then stop it.
+        #
+        # It has been draining what the stages reported for the whole arm. The
+        # wait is bounded: a cycle mid-invocation is worth a minute of patience
+        # and no more, because its observations are already on file and what an
+        # abandoned cycle loses is one write-up rather than the input to it.
+        try:
+            left = arm.stop_learning()
+            if left:
+                print(f"  [{arm_name}] learner: {len(left)} final cycle(s)",
+                      flush=True)
+        except Exception:
+            pass
         return results
 
     def run_task(self, arm: Arm, instance: Dict[str, Any], order: int,
@@ -1012,6 +1145,10 @@ class Runner:
         arm.retrieval_log = retrieval_log
         research_log: List[Dict[str, Any]] = []
         if tracer:
+            # Every line this thread writes from here on names its task, which
+            # is the difference between a readable trace and six interleaved
+            # ones when tasks run concurrently.
+            tracer.working_on(instance_id, workdir)
             tracer.task_start(order, instance_id)
             if not arm.full_retry_budget and self.config.max_tries > 1:
                 tracer.event("budget", "1 attempt (this arm has no memory, so a "
@@ -1372,6 +1509,19 @@ class Runner:
                 # and is left alone.
                 if (research is not None and arm.uses_phronix
                         and not (research.get("steps") or 0)):
+                    # A dry account and a broken harness both produce zero tool
+                    # calls; only one of them is a reason to stop. The harness
+                    # says which, so ask it rather than guessing from rc=1.
+                    if research.get("rate_limited"):
+                        resets = research.get("resets_at")
+                        raise UsageWindowClosed(
+                            f"the account's usage window is exhausted, so "
+                            f"research on {instance.get('instance_id')} could "
+                            f"not run"
+                            + (f"; it resets at {time.strftime('%H:%M', time.localtime(float(resets)))}"
+                               if resets else "")
+                            + ". Nothing is wrong with the pipeline — the "
+                              "agents were rejected before they started.")
                     detail = str(research.get("returncode"))
                     stages = ", ".join(research.get("failed_stages") or []) or "none"
                     raise ResearchCollapsed(

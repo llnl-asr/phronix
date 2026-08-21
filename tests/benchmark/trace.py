@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -75,8 +76,25 @@ class Tracer:
         self.text_path = self.dir / "trace.log"
         self.json_path = self.dir / "trace.jsonl"
         self._started = time.time()
+        # One tracer, many task threads. See `working_on`.
+        self._local = threading.local()
 
     # -- writing -----------------------------------------------------------
+
+    def working_on(self, task: str, directory: Optional[Path] = None) -> None:
+        """Name the task this thread's events belong to, and where its log goes.
+
+        Per thread, not per tracer: one tracer serves the whole arm and the
+        tasks run in threads, so an attribute on the tracer would be whichever
+        task set it last — and every line would be attributed to it.
+
+        With a directory, every line is also written to that task's own log.
+        The arm trace stays the complete record; the per-task file is the one
+        worth following, because with six tasks running the interleaved trace
+        is six conversations in one room and `tail -f` on it is unreadable.
+        """
+        self._local.task = str(task or "")
+        self._local.directory = Path(directory) if directory else None
 
     def event(self, kind: str, summary: str, detail: Optional[List[str]] = None,
               data: Optional[Dict[str, Any]] = None) -> None:
@@ -84,16 +102,32 @@ class Tracer:
         # The pid is in every line because two runner processes once wrote into
         # the same trace and it read as one run restarting itself. Cheap to
         # carry, and it turns "why did this happen twice" into a glance.
-        line = f"{stamp} [{self.arm}:{os.getpid()}] {kind:<12} {summary}"
+        #
+        # The task is there for the same reason and a newer one: with tasks
+        # running concurrently, six of them interleave in this file and a line
+        # reading `[survey] reading the issue` belongs to any of them. Held in
+        # thread-local state because one tracer serves every task thread — a
+        # single attribute would be whichever task last touched it.
+        task = getattr(self._local, "task", "")
+        where = f"{self.arm}:{os.getpid()}" + (f":{task}" if task else "")
+        line = f"{stamp} [{where}] {kind:<12} {summary}"
         lines = [line] + [f"{'':>9} {'':<12}   {d}" for d in (detail or [])]
         blob = "\n".join(lines) + "\n"
         try:
             with self.text_path.open("a", encoding="utf-8") as handle:
                 handle.write(blob)
+
+            # And the task's own log, so one task can be followed on its own.
+            directory = getattr(self._local, "directory", None)
+            if directory is not None:
+                directory.mkdir(parents=True, exist_ok=True)
+                with (directory / "trace.log").open(
+                        "a", encoding="utf-8") as handle:
+                    handle.write(blob)
             with self.json_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps({
                     "at": time.time(), "arm": self.arm, "pid": os.getpid(),
-                    "kind": kind,
+                    "task": task, "kind": kind,
                     "summary": summary, "detail": detail or [],
                     **(data or {})}) + "\n")
         except OSError:
@@ -122,8 +156,25 @@ class Tracer:
 
     @_guard
     def step(self, phase: str, text: str) -> None:
-        """A single action an agent just took. The running commentary."""
-        self.event(f"{phase}·", text)
+        """A single action an agent just took. The running commentary.
+
+        The label reads as a path — ``research>`` alone, or ``research>survey>``
+        once the stage is known. Research narration already carries its stage as
+        a ``[survey]`` prefix on the text, so lifting it into the label puts the
+        two things a reader wants to know first in the column they scan, and
+        leaves the rest of the line for what the agent actually did.
+        """
+        stage = ""
+        stripped = text.lstrip()
+        if stripped.startswith("["):
+            name, close, rest = stripped[1:].partition("]")
+            # Only a plain stage name. A bracketed anything-else — a path, a
+            # list, a matrix — is the message itself, and hoisting it would put
+            # arbitrary text in a fixed-width column.
+            if close and name and len(name) <= 20 and name.replace("-", "").isalnum():
+                stage = name
+                text = rest.lstrip(" ·:")
+        self.event(f"{phase}>{stage + '>' if stage else ''}", text)
 
     @_guard
     def research(self, attempt: int, result: Dict[str, Any]) -> None:
@@ -356,7 +407,17 @@ def _mine(transcript: Path) -> Any:
                  str((part.get("state") or {}).get("output") or ""))
             continue
 
-        for block in ((event.get("message") or {}).get("content") or []):
+        # `content` is a list of blocks for a tool-using turn and a bare string
+        # for a plain one, so iterating it blindly walks a string character by
+        # character and every "block" is a one-character str. Measured: the
+        # tracer raised `'str' object has no attribute 'get'` mid-run, which the
+        # guard turned into `trace-bug tools failed` — the tool census for that
+        # pass was lost, and the tool census is how a research pass that called
+        # nothing is told apart from one that worked.
+        content = (event.get("message") or {}).get("content")
+        if isinstance(content, str) or not isinstance(content, list):
+            content = []
+        for block in content:
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use":

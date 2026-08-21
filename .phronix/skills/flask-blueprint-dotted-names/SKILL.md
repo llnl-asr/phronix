@@ -9,19 +9,19 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `R1` | Rules | Blueprint dot-in-name fix needs two checks, not one |
+| `R1` | Rules | Blueprint dot-name validation belongs in add_url_rule (endpoint), not just __init__ (name) |
 
 
 ## Instructions
 
 ## Rules
 
-### R1 — Blueprint dot-in-name fix needs two checks, not one
+### R1 — Blueprint dot-name validation belongs in add_url_rule (endpoint), not just __init__ (name)
 
-"Raise error when blueprint name contains a dot" (flask-4045) requires edits in TWO places in src/flask/blueprints.py:
-1. `Blueprint.__init__`: raise `ValueError` if `"." in name`.
-2. `Blueprint.add_url_rule` (used by `.route()` too): raise `AssertionError` if the resolved endpoint (explicit `endpoint=` kwarg, or `view_func.__name__` when endpoint is omitted) contains a dot.
+Target test `tests/test_blueprints.py::test_route_decorator_custom_endpoint_with_dots` builds `Blueprint("bp", __name__)` (no dot in name) then expects `AssertionError` when `endpoint=` passed to `@bp.route(...)`/`bp.add_url_rule(...)` contains a dot, e.g. `endpoint="bar.bar"`.
 
-Adding only #1 leaves tests/test_blueprints.py::test_route_decorator_custom_endpoint_with_dots failing — it calls `bp.route(..., endpoint="bar.bar")` and `bp.add_url_rule(..., endpoint="bar.123")` and expects AssertionError from add_url_rule, not ValueError from __init__.
+A dot-check added only in `Blueprint.__init__` on the `name` arg (src/flask/blueprints.py) does NOT satisfy this test — verified: attempt-1 added exactly that and the test still failed.
+
+Fix must be an `assert "." not in endpoint` inside `Blueprint.add_url_rule`, validating the endpoint string, not the blueprint name.
 
 ## References

@@ -7,20 +7,20 @@ the other.
 
 ## Pitfalls
 
-### P1 — ignore-paths-relative-absolute-anchor-mismatch does not work
+### P1 — get_module_files-leaks-then-filtered does not work
 
-**Tried**: ignore-paths-relative-absolute-anchor-mismatch
+**Tried**: get_module_files-leaks-then-filtered
 
-**Hypothesis**: If ignore-paths silently fails to ignore nested/relative paths, it's because _is_in_ignore_list_re uses Pattern.match (anchors only at start) rather than Pattern.search, combined with _discover_files passing os.walk's root (in whatever relative/absolute form the CLI arg had) unmodified. This would be falsified by finding that the actual reported bug reproduces even with a pattern anchored correctl
+**Hypothesis**: If get_module_files() is blind to ignore_list_re/ignore_list_paths_re, then files under paths matched only by those regexes would end up in expand_modules()'s final result (falsifiable by checking the final `result` list, not just what get_module_files returns internally).
 
-**Refuted by**: test 0/1, validate 0/1. Do not re-propose this without new evidence.
+**Refuted by**: test 0/1, train 0/4, validate 0/1. Do not re-propose this without new evidence.
 
-### P2 — rename-self.config.ignore_paths-to-self._ignore_paths-at-line-604 does not work
+### P2 — fix-in-expand_modules does not work
 
-**Tried**: rename-self.config.ignore_paths-to-self._ignore_paths-at-line-604
+**Tried**: fix-in-expand_modules
 
-**Hypothesis**: Hypothesis under test: changing self.config.ignore_paths to self._ignore_paths at pylinter.py:604 is the minimal correct fix for the --recursive=y ignoring ignore-paths bug. Falsified by: (1) tracing attribute lifecycle shows _ignore_paths unset at call time (AttributeError), (2) even when set later it is value-identical to config.ignore_paths, so no behavior changes.
+**Hypothesis**: If expand_modules() omits ignore_list_re/ignore_list_paths_re checks on subfiles it discovers, then files under ignored paths would appear in its non-recursive result set (falsifiable by constructing a package with an ignored subdirectory and checking expand_modules() output directly).
 
-**Refuted by**: test 0/1, train 0/6, validate 0/3. Do not re-propose this without new evidence.
+**Refuted by**: test 0/1, train 0/4, validate 0/1. Do not re-propose this without new evidence.
 
 ## Lessons

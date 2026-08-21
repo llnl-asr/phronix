@@ -32,12 +32,20 @@ resolve() {   # resolve <name-or-path> -> absolute run dir
 }
 
 liveness() {  # liveness <run-dir> -> one word plus age
+  # From the files the runner writes, not from a walk of the whole run.
+  #
+  # The walk was `find <run> -type f -newermt`, which on a live run means every
+  # file in every checkout and every worktree: 109,000 files and 23 seconds on
+  # lustre for one run — so `status.sh` appeared to hang, and appeared to hang
+  # worse the more work the run had done. The trace and the results file are
+  # touched on every stage and every task, which is the same signal for the
+  # price of two stats.
   local run="$1" now last age
   now=$(date +%s)
-  last=$(find "$run" -type f -newermt '-2 hours' -printf '%T@\n' 2>/dev/null \
-         | sort -rn | head -1)
+  last=$(stat -c '%Y' "$run"/*/trace.log "$run"/*/results.jsonl \
+                      "$run"/manifest.json 2>/dev/null | sort -rn | head -1)
   [ -z "$last" ] && { echo "idle"; return; }
-  age=$(( now - ${last%.*} ))
+  age=$(( now - last ))
   if [ "$age" -lt 180 ]; then echo "ALIVE ${age}s"; else echo "stopped ${age}s"; fi
 }
 
@@ -104,14 +112,165 @@ import json,sys
 d=json.load(open('$log'))
 print(f\"  launched: pid {d.get('pid')} on {d.get('host')} at {d.get('started')}\")" 2>/dev/null
 
+  # How the model endpoint is actually behaving, from the server's own counters.
+  #
+  # Read rather than probed. A synthetic request measures the probe and adds to
+  # the very queue it is trying to describe; llama.cpp already publishes what it
+  # has done, so this costs one cheap GET and reports the RUN's traffic instead
+  # of its own.
+  #
+  # `deferred` is the number to watch. Measured live: this server has ONE slot,
+  # so requests are strictly serialised — with both arms running, one was always
+  # processing and one always deferred, and the arm that looked "idle" for
+  # fifteen minutes was waiting its turn. That reads as a broken agent and is
+  # nothing of the kind.
+  local endpoint
+  endpoint=$(python3 -c "
+import json
+try:
+    d = json.load(open('$RUN/manifest.json'))
+    # Skipped where the recorded base_url is not the one the arm talks to:
+    # Claude Code reaches Anthropic directly and the manifest still carries a
+    # gateway URL, so its numbers would describe an endpoint this run never used.
+    print('' if d.get('provider') == 'anthropic' else (d.get('base_url') or ''))
+except Exception:
+    print('')" 2>/dev/null)
+  if [ -n "$endpoint" ]; then
+    python3 - "$endpoint" "$RUN" <<'PY' 2>/dev/null
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+base, run = sys.argv[1].rstrip("/"), sys.argv[2]
+# The metrics live on the server root, not under the API prefix the model is
+# served from.
+root = base[:-3].rstrip("/") if base.endswith("/v1") else base
+
+
+def fetch(path, timeout=10):
+    request = urllib.request.Request(f"{root}{path}")
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if key:
+        request.add_header("Authorization", f"Bearer {key}")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+try:
+    raw = fetch("/metrics")
+except (urllib.error.URLError, OSError) as exc:
+    code = getattr(exc, "code", None)
+    if code == 404:
+        # Not every endpoint publishes metrics; that is not a fault.
+        raise SystemExit
+    why = ("needs OPENAI_API_KEY" if code in (401, 403)
+           else f"{type(exc).__name__}: {exc}")
+    print(f"  endpoint: {base} — {why}")
+    raise SystemExit
+
+metric = {}
+for line in raw.splitlines():
+    if line.startswith("#") or " " not in line:
+        continue
+    name, _, value = line.partition(" ")
+    try:
+        metric[name] = float(value)
+    except ValueError:
+        continue
+
+
+def get(name, default=0.0):
+    return metric.get(f"llamacpp:{name}", default)
+
+
+busy = get("requests_processing")
+deferred = get("requests_deferred")
+slots = ""
+try:
+    seen = json.loads(fetch("/slots"))
+    if isinstance(seen, list):
+        slots = f"/{len(seen)}"
+except Exception:
+    pass                       # the slot list is a nicety; the counters are not
+
+queue = ("  ** ONE slot — requests are serialised, so an arm that looks idle "
+         "is queued" if slots == "/1" and deferred
+         else "  ** requests are queueing" if deferred else "")
+print(f"  endpoint: {base}")
+print(f"            processing {busy:.0f}{slots} slot(s), {deferred:.0f} "
+      f"deferred{queue}")
+print(f"            prompt {get('prompt_tokens_seconds'):,.0f} tok/s   "
+      f"generate {get('predicted_tokens_seconds'):,.0f} tok/s")
+
+# Throughput since the previous look, which is the only figure that describes
+# THIS run rather than everything the server has done since it booted.
+now = time.time()
+sample = {"at": now, "prompt": get("prompt_tokens_total"),
+          "predicted": get("tokens_predicted_total")}
+path = os.path.join(run, ".endpoint-sample.json")
+try:
+    with open(path) as handle:
+        last = json.load(handle)
+    gap = now - float(last["at"])
+    if 5 < gap < 3600:
+        did_prompt = sample["prompt"] - float(last["prompt"])
+        did_gen = sample["predicted"] - float(last["predicted"])
+        print(f"            since last check ({gap / 60:.0f} min): "
+              f"{did_prompt:,.0f} prompt + {did_gen:,.0f} generated tokens "
+              f"({did_gen / gap:,.1f} tok/s sustained)")
+except (OSError, ValueError, KeyError):
+    pass
+try:
+    with open(path, "w") as handle:
+        json.dump(sample, handle)
+except OSError:
+    pass
+
+served = get("prompt_seconds_total") + get("tokens_predicted_seconds_total")
+print(f"            server total: {get('prompt_tokens_total'):,.0f} prompt + "
+      f"{get('tokens_predicted_total'):,.0f} generated tokens in "
+      f"{served / 60:.0f} min of compute")
+PY
+  fi
+
   local arm name done_n total live newest
   for arm in "$RUN"/*/; do
     name=$(basename "$arm")
     [ -d "$arm/tasks" ] || continue
-    done_n=$(grep -c . "$arm/results.jsonl" 2>/dev/null || echo 0)
+    # Counted from the per-task result files: each is written by the one thread
+    # that owns that directory, so the count cannot lag behind reality the way
+    # a shared aggregate can when several tasks finish at once.
+    done_n=$(ls "$arm"/tasks/*/result.json 2>/dev/null | wc -l)
+    if [ "$done_n" -eq 0 ]; then
+      # Fall back to the promotion marker for runs without result files.
+      done_n=$(grep -l "] promoted" "$arm"/tasks/*/trace.log 2>/dev/null | wc -l)
+    fi
     total=$(ls -d "$arm"/tasks/*/ 2>/dev/null | wc -l)
+    # Passes, read from the same per-task files as the finished count. Read out
+    # of `results.jsonl` this would lag: the aggregate is appended under a lock,
+    # so a task that has already written its own result can still be missing
+    # from it, and a header reading "3 finished, 1/2 passed" looks like a lost
+    # result rather than a slow append.
+    local passed
+    passed=$(python3 - "$arm" <<'COUNT' 2>/dev/null
+import json, sys
+from pathlib import Path
+
+n = 0
+for path in sorted(Path(sys.argv[1], "tasks").glob("*/result.json")):
+    try:
+        n += 1 if json.loads(path.read_text()).get("resolved") else 0
+    except Exception:
+        # A result being written right now is worth skipping, not crashing on.
+        continue
+print(n)
+COUNT
+)
     echo
-    echo "=== $name — $done_n finished, $total started ==="
+    echo "=== $name — ${passed:-0}/$done_n passed, $total started ==="
 
     python3 - "$arm/results.jsonl" <<'PY' 2>/dev/null
 import json, sys
@@ -122,6 +281,7 @@ try:
 except OSError:
     rows = []
 
+# Long stage names push the numbers off the line.
 SHORT = {"execution-plan": "exec-plan", "aspect-record": "record",
          "aspect-recheck": "recheck"}
 
@@ -266,13 +426,16 @@ for r in rows:
             # Parallel stages cost their SLOWEST member, not the sum.
             g["max"] = max(g["max"], float(d.get("elapsed_s") or 0))
             g["cut"] += 1 if d.get("truncated") else 0
+            g["starved"] = g.get("starved", 0) + int(d.get("starved") or 0)
     if grouped:
         parts = []
         for name, g in grouped.items():
             label = SHORT.get(name, name)
             cut = f" !{g['cut']}cut" if g["cut"] else ""
-            parts.append(f"{label} {g['n']}x max {g['max']:.0f}s{cut}" if g["n"] > 1
-                         else f"{label} {g['s']:.0f}s{cut}")
+            starved = f" !{g['starved']}starved" if g.get("starved") else ""
+            parts.append(f"{label} {g['n']}x max {g['max']:.0f}s{cut}{starved}"
+                         if g["n"] > 1
+                         else f"{label} {g['s']:.0f}s{cut}{starved}")
         print("        research: " + " | ".join(parts))
 
 if rows:
@@ -291,102 +454,86 @@ if rows:
     print(line)
 PY
 
-    live=$(ls -dt "$arm"/tasks/*/ 2>/dev/null | head -1)
-    if [ -n "$live" ] && [ "$done_n" -lt "$total" ]; then
-      newest=$(find "$live" -type f -printf '%TH:%TM:%TS %p\n' 2>/dev/null | sort -rn | head -1)
-      echo "  in flight: $(basename "$live")"
-      echo "    last write: ${newest%% *}  ($(basename "${newest#* }"))"
+    # Every task in flight, one line each, from its own log.
+    #
+    # With tasks running concurrently there is no single "in flight" task, and
+    # showing the most recently touched one reported whichever happened to
+    # write last — a display that changed every second and described one sixth
+    # of the work. Each task writes its own trace now, so this is a tail per
+    # file rather than a parse of six interleaved conversations.
+    live_n=$(( total - done_n ))
+    if [ "$live_n" -gt 0 ]; then
+      echo "  in flight: $live_n of $total"
+      now=$(date +%s)
+      for task_dir in "$arm"/tasks/*/; do
+        [ -f "$task_dir/trace.log" ] || continue
+        # A task with results already recorded is finished, not in flight.
+        name=$(basename "$task_dir")
+        [ -f "$task_dir/result.json" ] && continue
+        # A task whose last act was promoting what it learned is finished, even
+        # when no result file exists — a run started before those were written,
+        # or one whose results were batched to the end, would otherwise show
+        # three finished tasks sitting "idle" for the rest of the run.
+        case "$(grep "\] " "$task_dir/trace.log" 2>/dev/null | tail -1)" in
+          *"] promoted"*|*"] task-done"*) continue ;;
+        esac
 
-      # Attempt outcomes as they happen. results.jsonl is only appended once the
-      # WHOLE task is done — after the attempt passes, the learning pass runs and
-      # the store is promoted — so for a minute or so the trace says PASS and the
-      # table above still says nothing happened.
-      tail -400 "$arm/trace.log" 2>/dev/null \
-        | grep -E "try [0-9]+: (PASS|FAILED)|verdict: " | tail -3 | sed "s/^/    /"
+        # Which try this is. A task on try 2 has already produced a patch and
+        # had it judged wrong, so the stage names mean something different:
+        # `diagnose` on try 1 is impossible, and `survey` on try 3 would be a
+        # bug. Without it the line reads as first-time work whatever happened.
+        tries=$(ls -d "$task_dir"/attempt-*/ 2>/dev/null | wc -l)
+        [ "$tries" -lt 1 ] && tries=1
+        try_mark=""
+        [ "$tries" -gt 1 ] && try_mark="try $tries "
 
-      # Live stage timing, from the trace: research.json is only written when the
-      # task ends, so the finished-task breakdown is empty for the task you are
-      # actually watching.
-      python3 - "$arm/trace.log" <<'PY' 2>/dev/null
-import re, sys
-from collections import OrderedDict
-
-STAMP = re.compile(r"^(\d\d):(\d\d):(\d\d)\s")
-BRACKET = re.compile(r"\[([^\]]+)\]")
-# Only real stage names: taking any bracket that was not the [arm:pid] prefix
-# also matched the pass summary's "[757.6s]", which appeared as a stage called
-# "757.6s" that had been running for 0 seconds.
-STAGE = re.compile(r"^(survey|plan|collect|propose|diagnose|tune:.+|execution-plan"
-                   r"|aspect:.+|evaluate:.+|aspect-record:.+)$")
-
-def seconds(m):
-    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
-
-def stage_of(line):
-    for name in BRACKET.findall(line):
-        if STAGE.match(name):
-            return name
-    return None
-
-stages, cut = OrderedDict(), set()
-last_stage = None
-research_is_live = False
-try:
-    lines = open(sys.argv[1], errors="replace").read().splitlines()
-except OSError:
-    lines = []
-
-# Anchor on where the last survey BEGAN, not the last survey line: taking the
-# last one truncated the survey to its final instant and reported it as 0s.
-start, previous_was_survey = 0, False
-for i, line in enumerate(lines):
-    is_survey = "[survey]" in line
-    if is_survey and not previous_was_survey:
-        start = i
-    if "research" in line:
-        previous_was_survey = is_survey
-
-for line in lines[start:]:
-    stamp = STAMP.match(line)
-    if not stamp or "research" not in line:
-        continue
-    name = stage_of(line)
-    if not name:
-        continue
-    t = seconds(stamp)
-    row = stages.setdefault(name, [t, t])
-    row[1] = t
-    last_stage = name
-    if "TRUNCATED" in line:
-        cut.add(name)
-
-for line in reversed(lines):
-    if STAMP.match(line) and "] " in line:
-        research_is_live = "research" in line.split("] ", 1)[1][:12]
-        break
-
-if stages:
-    print("    current research pass, stage by stage:")
-    for name, (first, last) in stages.items():
-        held = last - first
-        mark = "  ** CUT OFF at budget" if name in cut else ""
-        live = "  <- running" if (name == last_stage and research_is_live) else ""
-        print(f"      {name:<34} {held:>5}s{live}{mark}")
-    spans = list(stages.values())
-    elapsed = max(s[1] for s in spans) - min(s[0] for s in spans)
-    charged = sum(s[1] - s[0] for s in spans)
-    label = "pass so far" if research_is_live else "pass complete"
-    print(f"      {label:<34} {elapsed:>5}s wall, {charged}s across stages "
-          f"({'aspects and evaluators overlap' if charged > elapsed else 'serial'})")
-    if not research_is_live:
-        print(f"      {'':<34}       research has finished; the attempt is running")
-PY
+        # The last line that IS an event, not the last line in the file.
+        #
+        # An event with details writes them as indented continuation lines, so
+        # `tail -1` returned "budget 1800s" — no timestamp, no kind — and the
+        # display showed an empty stage with the detail as its message. The
+        # marker is the `[arm:pid:task]` prefix every real event carries.
+        last=$(grep "\] " "$task_dir/trace.log" 2>/dev/null | tail -1)
+        touched=$(stat -c '%Y' "$task_dir/trace.log" 2>/dev/null || echo "$now")
+        idle=$(( now - touched ))
+        # kind and summary, from the line the task last wrote.
+        rest=${last#*] }
+        kind=${rest%% *}
+        # Eighty characters, because that is what the describer writes. Cut at
+        # 46 the line read "searching the source for def load_dot" — the width
+        # threw away the half of the sentence that says what is being looked
+        # for, which is the only part that distinguishes one line from the next.
+        what=$(echo "${rest#"$kind"}" | cut -c1-46)
+        mark=""
+        [ "$idle" -gt 300 ] && mark="  ** idle"
+        printf "    %-26s %-7s%-18s %-46s %4ss ago%s\n" \
+               "${name#*-}" "$try_mark" "$kind" "$what" "$idle" "$mark"
+      done
+      echo "    follow one:  tail -f $arm/tasks/<task>/trace.log"
     fi
 
     if [ -d "$arm/store/.phronix/skills" ]; then
       have=$(ls "$arm/store/.phronix/skills" | wc -l)
-      echo "  skills in store: $have (seeded $BASELINE, learned $(( have - BASELINE )))"
+      tools=$(ls "$arm/store/.phronix/capabilities"/*.py 2>/dev/null | wc -l)
+      echo "  store: $have skill(s) — seeded $BASELINE, learned $(( have - BASELINE ))"\
+"   |   $tools tool(s)"
       echo "  retrievals: $(cat "$arm"/tasks/*/retrievals.jsonl 2>/dev/null | wc -l)"
+
+      # What was learned, by name. A count says the loop ran; the names say
+      # what it produced, and a name is what makes a claim checkable — "learned
+      # 3" has been true of runs that wrote three fragments of one subject.
+      BUNDLED=/usr/WS2/haridev/phronix/src/phronix/.agents/skills
+      for skill in "$arm/store/.phronix/skills"/*/; do
+        name=$(basename "$skill")
+        [ -d "$BUNDLED/$name" ] && continue
+        echo "    + skill $name"
+      done
+      for tool in "$arm/store/.phronix/capabilities"/*.py; do
+        [ -f "$tool" ] || continue
+        base=$(basename "$tool" .py)
+        case "$base" in probe_*) kind="method" ;; *) kind="solution" ;; esac
+        echo "    + tool  $base ($kind)"
+      done
     fi
     [ -f "$arm/trace.log" ] && echo "  trace: $arm/trace.log"
   done

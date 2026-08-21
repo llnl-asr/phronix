@@ -1,3 +1,6 @@
+// Generated in part by phronix.permissions — the `permission` block is
+// rendered from workspace/permissions.yaml. Run `phronix sync permissions`
+// after editing that policy.
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
@@ -13,5 +16,59 @@
       ],
       "enabled": true
     }
+  },
+  "permission": {
+    "edit": {
+      "**": "ask",
+      ".phronix/**": "allow"
+    },
+    "read": {
+      ".phronix/**": "allow"
+    },
+    "bash": {
+      "*": "ask",
+      "* .phronix/*": "allow",
+      "ls .phronix/*": "allow",
+      "cat .phronix/*": "allow",
+      "mkdir -p .phronix/*": "allow",
+      "git add .phronix/*": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git branch*": "allow",
+      "ls *": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "wc *": "allow",
+      "which *": "allow",
+      "echo *": "allow",
+      "phronix *": "allow",
+      "phronix_stack *": "allow",
+      "sudo *": "deny",
+      "sudo": "deny",
+      "su *": "deny",
+      "doas *": "deny",
+      "rm -rf /": "deny",
+      "rm -rf /*": "deny",
+      "rm -rf ~*": "deny",
+      "rm -rf $HOME*": "deny",
+      "find /": "deny",
+      "find /etc*": "deny",
+      "find /var*": "deny",
+      "find /home*": "deny",
+      "find /root*": "deny",
+      "find /tmp*": "deny",
+      "find /opt*": "deny",
+      "find /usr*": "deny",
+      "curl * | sh": "deny",
+      "curl * | bash": "deny",
+      "wget * | sh": "deny",
+      "wget * | bash": "deny",
+      "chmod -R 777 *": "deny",
+      "chown -R *": "deny"
+    },
+    "phronix_*": "allow"
   }
 }

@@ -5,8 +5,16 @@
 #   run-benchmark.sh                          # claude, 6 tasks, fresh
 #   run-benchmark.sh --harness opencode       # the other harness
 #   run-benchmark.sh --tasks pilot-1.txt      # one task, to measure cost first
+#   run-benchmark.sh --phronix-only           # skip the baseline while iterating
+#   run-benchmark.sh --parallel-tasks 6       # all six at once; invalidates reuse figures
+#   run-benchmark.sh --serial-arms            # one arm at a time; REQUIRED when the
+#                                             # endpoint is a single local server, or
+#                                             # the arms queue behind each other and
+#                                             # every timing is contention, not work
 #   run-benchmark.sh --reuse                  # let it use earlier research
 #   run-benchmark.sh --carry-root DIR         # a store of its own, for a clean pair
+#   run-benchmark.sh --harness opencode --provider matrix33 \
+#     --model nemotron-3.5 --base-url http://matrix33-pub.llnl.gov:8050/v1
 #
 # See scripts/README.md for what the options mean and how to read the result.
 set -uo pipefail
@@ -20,7 +28,12 @@ HARNESS=claude
 TASKS=$BENCH/fast-6.txt
 NODE=""
 MODEL=""
+BASE_URL=""
+ARMS_MODE="--parallel-arms"
 TAG=""
+ARMS_OVERRIDE=""
+PROVIDER_OVERRIDE=""
+PHRONIX_ONLY=""
 TRIES=3
 TIMEOUT=1800
 FRESHNESS="--fresh"
@@ -29,9 +42,14 @@ EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --harness) HARNESS="$2"; shift 2;;
+    --arms)    ARMS_OVERRIDE="$2"; shift 2;;
+    --provider) PROVIDER_OVERRIDE="$2"; shift 2;;
+    --phronix-only) PHRONIX_ONLY=1; shift;;
     --tasks)   TASKS="$2";   shift 2;;
     --node)    NODE="$2";    shift 2;;
     --model)   MODEL="$2";   shift 2;;
+    --base-url) BASE_URL="$2"; shift 2;;
+    --serial-arms) ARMS_MODE=""; shift;;
     --tag)     TAG="$2";     shift 2;;
     --tries)   TRIES="$2";   shift 2;;
     --timeout) TIMEOUT="$2"; shift 2;;
@@ -39,6 +57,7 @@ while [ $# -gt 0 ]; do
     --fresh)   FRESHNESS="--fresh"; shift;;
     --reuse)   FRESHNESS="";        shift;;
     --research-on-retry) EXTRA+=(--research-on-retry); shift;;
+    --parallel-tasks) PARALLEL_TASKS="$2"; EXTRA+=(--parallel-tasks "$2"); shift 2;;
     --limit)   EXTRA+=(--limit "$2"); shift 2;;
     -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2;;
@@ -52,6 +71,14 @@ case "$HARNESS" in
             PROVIDER=livai;;
   *) echo "harness must be 'claude' or 'opencode', not '$HARNESS'" >&2; exit 2;;
 esac
+# One arm, when the baseline is not the question.
+#
+# The comparison needs both, but iterating on phronix does not: the bare arm is
+# roughly half the spend and none of the signal while the pipeline is being
+# changed under it.
+[ -n "$PROVIDER_OVERRIDE" ] && PROVIDER="$PROVIDER_OVERRIDE"
+[ -n "$PHRONIX_ONLY" ] && ARMS="$HARNESS-phronix"
+[ -n "$ARMS_OVERRIDE" ] && ARMS="$ARMS_OVERRIDE"
 TAG=${TAG:-$HARNESS}
 
 # Tasks may be named relative to the bench directory.
@@ -83,14 +110,30 @@ echo "node    : $NODE"
 echo "mode    : ${FRESHNESS:---reuse} ${EXTRA[*]:-}"
 echo "out     : $OUT"
 
+# Packing, when tasks run concurrently.
+#
+# Each task's research fans out — aspects, tuners, evaluators — so the agents in
+# flight are tasks x fan-out, and that product is what starves an endpoint
+# rather than the task count. Measured at 192 concurrent agents: every worker
+# started, dozens hit a usage limit, most of the rest found no MCP server, and
+# none did any work. So the per-task fan-out is divided by the number of tasks
+# sharing the node.
+if [ -n "${PARALLEL_TASKS:-}" ] && [ "${PARALLEL_TASKS:-1}" -gt 1 ]; then
+  PER_TASK=$(( 24 / PARALLEL_TASKS ))
+  [ "$PER_TASK" -lt 2 ] && PER_TASK=2
+  export PHRONIX_BENCH_ASPECTS=$PER_TASK
+  echo "packing : $PARALLEL_TASKS task(s) x $PER_TASK agent(s) each"
+fi
+
 nohup "$VENV/bin/python" -u -m tests.benchmark.cli run \
   --tasks "$TASKS" \
   --arms "$ARMS" \
   --model "$MODEL" --provider "$PROVIDER" \
+  ${BASE_URL:+--base-url "$BASE_URL"} \
   --node "$NODE" \
   --max-tries "$TRIES" --timeout "$TIMEOUT" \
   --until-pass --stall-limit 2 \
-  --parallel-arms --force \
+  ${ARMS_MODE} --force \
   $FRESHNESS "${EXTRA[@]}" \
   --out "$OUT" > "$OUT.log" 2>&1 &
 

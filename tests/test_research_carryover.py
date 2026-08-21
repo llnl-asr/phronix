@@ -362,13 +362,46 @@ def test_the_agents_own_summary_wins_over_a_derived_one():
     assert "check ignore-paths is applied" in stated
     assert "pytest -k" not in stated
 
+    # Without one, the fallback still says what is happening rather than how it
+    # was spelled: a trace of flags and absolute paths is a trace nobody reads.
     derived = describe_call({"tool": "bash", "state": {"input": {
         "command": "cd /somewhere/long && pytest -k ignore_path"}}})
-    assert "pytest -k ignore_path" in derived
+    assert derived == "running the test suite"
+    assert "pytest" not in derived and "/somewhere/long" not in derived
 
     long_one = describe_call({"tool": "bash", "state": {"input": {
         "command": "x", "description": "y" * 300}}})
     assert len(long_one) <= LOG_SUMMARY_CHARS + 40
+
+
+def test_both_harnesses_describe_the_same_call_the_same_way():
+    """One describer, two adapters.
+
+    This was written twice, once per harness event shape, and the copies drifted
+    at once: a fix to how a search reads landed in one and not the other, so the
+    same agent doing the same thing produced different trace lines depending on
+    which harness ran it, and the runs stopped being comparable by eye.
+    """
+    from tests.benchmark.arms import describe_call, describe_claude_call
+
+    for name, args in (("bash", {"command": "pytest tests/test_cli.py"}),
+                       ("grep", {"pattern": "load_dotenv", "path": "src"}),
+                       ("read", {"file_path": "/a/b/cli.py"})):
+        opencode = describe_call({"tool": name, "state": {"input": args}})
+        claude = describe_claude_call({"name": name, "input": args})
+        assert opencode == claude, name
+
+
+def test_commentary_is_prose_not_markdown():
+    """The model writes headings, bullets and code spans; a trace reads none of
+    them well."""
+    from tests.benchmark.arms import LOG_SUMMARY_CHARS, say
+
+    assert say("## Analysis") == ""
+    assert say("```python\nx = 1\n```") == ""
+    spoken = say("- **Root cause**: `load_dotenv` runs before the CLI defaults")
+    assert spoken == "Root cause: load_dotenv runs before the CLI defaults"
+    assert len(say("word " * 200)) <= LOG_SUMMARY_CHARS + 1
 
 
 def _accumulated(store):
@@ -1791,8 +1824,11 @@ def test_aspects_try_what_they_find_instead_of_only_theorising():
                   source.index("with ThreadPoolExecutor(max_workers=len(chosen))")]
     assert "private_tree(f\"aspect-" in body and "drop_tree(tree)" in body
 
-    # Trying takes longer than reading.
-    assert Arm.STAGE_BUDGETS["aspect"] >= 480
+    # Trying takes longer than reading — but not as long as was assumed. The
+    # ceiling was 540s against a measured 118s wall for three aspects, and the
+    # aspects are a barrier, so an over-generous ceiling is what a straggler
+    # holds `collect` open for.
+    assert 180 <= Arm.STAGE_BUDGETS["aspect"] <= 300
 
 
 def test_one_worktree_helper_serves_every_parallel_stage():
@@ -2282,3 +2318,369 @@ def test_the_same_procedure_is_not_built_twice_under_two_names(tmp_path,
     collapsed = " ".join(Arm.EXECUTION_PLAN_PROMPT.split())
     assert "capability_list()` FIRST" in collapsed
     assert "answers `duplicate`" in collapsed
+
+
+def test_the_learner_survives_the_revert(tmp_path, monkeypatch):
+    """The research flow went back to the committed one; the learner did not.
+
+    It is orthogonal to the flow — it reads observations rather than stages, so
+    nothing about it depended on the shape that was removed. Two clocks: every
+    ten seconds it NOTICES, which is arithmetic over what has been reported;
+    every minute it RECONCILES, which is one agent turning what repeated into
+    lessons and tools. Aggressive capture, periodic compaction.
+    """
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path))
+    from pathlib import Path
+
+    from phronix import research
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm, build
+
+    # The channel: an append, so reporting cannot block the stage reporting.
+    monkeypatch.setenv("PHRONIX_RESEARCH_TOPIC", "task-a")
+    assert research.observe("normalising the path before matching fixed cases",
+                            worked=True, stage="tune")["status"] == "ok"
+    monkeypatch.setenv("PHRONIX_RESEARCH_TOPIC", "task-b")
+    research.observe("normalizing paths before the match fixed nine cases",
+                     worked=True, stage="aspect")
+    research.observe("the green test masked the bug", worked=False,
+                     stage="survey")
+
+    # Noticing is arithmetic, and it groups by what a report CLAIMS: two agents
+    # describing one finding never word it the same way.
+    noticed = research.notice()
+    assert noticed["new"] == 3
+    assert len(noticed["repeats"]) == 1
+    assert noticed["candidates"][0]["across_tasks"] is True
+
+    # Two clocks, and the fast one cannot be a model call: an invocation costs
+    # the better part of a minute before it does anything.
+    assert Arm.LEARNING_NOTICE_INTERVAL <= 10
+    assert Arm.LEARNING_RECONCILE_INTERVAL >= 6 * Arm.LEARNING_NOTICE_INTERVAL
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    loop = source[source.index("    def start_learning(self, store_root: Path"):
+                  source.index("    def _learning_products(")]
+    assert "daemon=True" in loop
+    assert "research_mod.notice" in loop            # fast tier, no agent
+    assert "stream_opencode(" in loop               # slow tier, one agent
+    assert "[learner] running:" in loop             # says it started
+
+    # Every stage reports, and every arm answers the runner's calls.
+    for const in ("SURVEY_PROMPT", "PLAN_PROMPT", "ASPECT_PROMPT",
+                  "PROPOSE_PROMPT", "TUNE_PROMPT"):
+        assert "research_observe(" in getattr(Arm, const), const
+    for name in ("claude-phronix", "opencode-bare", "mini"):
+        assert build(name, model="m", provider="p",
+                     base_url="u").stop_learning() == []
+
+
+def test_the_aspect_phase_is_wide_and_bounded():
+    """Aspects fan out with no merge above them, which changes what width costs.
+
+    The tuning tree pays a merge level per doubling, so widening it made the
+    pass slower — measured, six merge levels cost 840s against 444s for both
+    fan-outs together. Aspects have no such tax: they investigate, write
+    findings, and `collect` reads all of them, so the phase costs its slowest
+    member whether there are three or eight. Widening buys coverage and costs
+    only tokens.
+
+    The ceiling is the other half. Aspects are a barrier, so one straggler holds
+    `collect` and everything after it for as long as its budget allows —
+    measured, three aspects took 118s wall against a 540s ceiling, which never
+    bound the common case and bound the bad one far too late.
+    """
+    from pathlib import Path
+
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    assert Arm.max_parallel_aspects >= 5
+    # Near the measured maximum, so the barrier is predictable.
+    assert Arm.STAGE_BUDGETS["aspect"] <= 300
+    assert Arm.STAGE_BUDGETS["aspect-record"] <= 180
+
+    # Filing findings is still must-finish: a write-up cut half way loses
+    # everything the investigation paid for.
+    assert "aspect-record" in Arm.MUST_FINISH_STAGES
+    assert "aspect" not in Arm.MUST_FINISH_STAGES
+
+    # And they genuinely run at once.
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("            aspects = self._in_store("):
+                  source.index('stage("collect"')]
+    assert "ThreadPoolExecutor(max_workers=len(chosen))" in flow
+    assert "pool.map(investigate, chosen)" in flow
+
+
+def test_parallel_tasks_is_offered_and_its_cost_is_stated():
+    """Tasks run in order for a reason, and overlapping them has a price.
+
+    The learning claim is that task N benefits from tasks 1..N-1, and it only
+    means something if every arm saw the same sequence. Running tasks
+    concurrently makes `reused`, the learning rate and every carry-over number
+    unattributable — so the mode exists for iterating on the pipeline, is
+    recorded in the manifest, and says what it costs at the top of the run
+    rather than only in a file nobody reads before believing the report.
+    """
+    from pathlib import Path
+
+    from tests.benchmark.runner import RunConfig
+
+    assert RunConfig(tasks=[]).parallel_tasks == 1, "ordered by default"
+
+    source = (Path(__file__).parent / "benchmark" / "runner.py").read_text()
+    loop = source[source.index("        planned = []"):
+                  source.index("        # Let the background learner finish")]
+
+    # Concurrent when asked, strictly ordered otherwise.
+    assert "ThreadPoolExecutor(" in loop and "if width == 1:" in loop
+    # And it says so, out loud, before any result is believed.
+    assert "NOT valid in this mode" in loop
+
+    # Results are written back in task order however they finished: the results
+    # file is read as a sequence, and a shuffled one would show learning that is
+    # only the order the tasks happened to complete in.
+    assert "sorted(finished, key=lambda item: item[0])" in loop
+
+    # It reaches the manifest, since that is what makes a number attributable.
+    assert "parallel_tasks" in RunConfig(tasks=[]).to_dict()
+
+
+def test_concurrent_writers_cannot_take_the_same_label(tmp_path, monkeypatch):
+    """`write_block` reads, allocates the next label from what it read, then
+    writes.
+
+    With tasks running concurrently two of them may write the same subject
+    skill, and the learner writes lessons into skills while tasks write blocks
+    into them: two writers read the same file, both decide the label is `I4`,
+    and the second write erases the first. That is worse than losing a block —
+    the label is a stable key, so everything pointing at `[[skill#I4]]` now
+    points at whichever body won, and nothing records that it changed.
+    """
+    import re
+    import threading
+
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path))
+    from phronix import skills
+
+    skills.create("shared", "a shared subject", subject="shared")
+
+    def write(index):
+        skills.write_block("shared", "instruction", f"Block {index}",
+                           f"Body number {index}, long enough to be a real one.")
+
+    threads = [threading.Thread(target=write, args=(i,)) for i in range(10)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    content = (skills.load("shared") or {}).get("loaded", [{}])[0].get("content", "")
+    labels = re.findall(r"^### (I\d+) — ", content, re.M)
+    assert len(labels) == 10, f"blocks lost: {labels}"
+    assert len(set(labels)) == 10, f"labels collided: {labels}"
+
+
+def test_the_learner_reconciles_in_parallel_without_contradicting_itself():
+    """One reconciler falls behind when many tasks report at once, and the
+    obvious fix — run several — is the obvious way to get two agents writing
+    opposite lessons into one skill.
+
+    The split is by SUBJECT: a lesson about a subject goes to that subject's
+    skill, so workers holding disjoint topics write disjoint files. Nothing has
+    to coordinate at run time because nothing overlaps by construction.
+    """
+    from pathlib import Path
+
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    loop = source[source.index("    def start_learning(self, store_root: Path"):
+                  source.index("    def _learning_products(")]
+
+    # Partitioned by the KIND of operation, and a kind is never split across
+    # workers: one kind, one skill, one writer.
+    assert "buckets" in loop and 'candidate.get("kind")' in loop
+    assert "min(groups, key=len).extend(topic_lines)" in loop
+    assert "ThreadPoolExecutor(max_workers=len(groups))" in loop
+    assert "split by\n" in loop or "split by " in loop
+
+    # Bounded: each worker is an agent invocation, not a thread of arithmetic.
+    assert 1 < Arm.LEARNING_WORKERS <= 8
+
+
+def test_topics_are_kinds_of_work_not_tasks(tmp_path, monkeypatch):
+    """What a finding is filed under decides whether it is ever reused.
+
+    Filed by TASK, "a subprocess whose output you parse needs stderr merged"
+    lands in that task's skill and helps the one instance that produced it.
+    Filed by the KIND of operation, it lands with everything else learned about
+    running subprocesses, and the next task in any repository retrieves it.
+
+    A fixed vocabulary, because the point is accumulation: an open set fragments
+    into forty topics of one observation each, and forty skills of one lesson
+    each is a library nobody reads.
+    """
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PHRONIX_BUS", f"ipc://{tmp_path}/bus.sock")
+    monkeypatch.setenv("PHRONIX_RESEARCH_TOPIC", "task-a")
+    from phronix import research
+
+    # Agents name things descriptively, so the vocabulary tolerates synonyms
+    # rather than rejecting a report — a rejected report is one that stops
+    # being made, and a report in the wrong bucket beats no report.
+    assert research.operation_kind("subprocess") == "bash"
+    assert research.operation_kind("pytest") == "tests"
+    assert research.operation_kind("walk") == "traversal"
+    assert research.operation_kind("something novel") == "other"
+
+    research.observe("merge stderr into stdout or the parse loses the error",
+                     worked=True, stage="tune", kind="subprocess")
+    research.observe("os.walk yields ./ prefixed roots on a relative arg",
+                     worked=False, stage="aspect", kind="walk")
+    monkeypatch.setenv("PHRONIX_RESEARCH_TOPIC", "task-b")
+    research.observe("walking with a relative root gives ./ prefixes",
+                     worked=False, stage="aspect", kind="traversal")
+
+    grouped = research.notice()
+    by_kind = {c["kind"]: c for c in grouped["candidates"]}
+    assert set(by_kind) == {"bash", "traversal"}
+
+    # The two traversal reports are one finding worded twice, and seen in two
+    # different tasks — which is what makes it worth generalising.
+    traversal = by_kind["traversal"]
+    assert traversal["count"] == 2 and traversal["across_tasks"] is True
+
+    # Findings of different kinds never merge: the partition depends on it.
+    assert by_kind["bash"]["count"] == 1
+
+
+def test_one_learner_for_the_whole_job():
+    """Arms run concurrently and tasks may too, so several of them reach
+    `start_learning`.
+
+    A per-instance guard gave one learner per ARM: two consumers of one stream,
+    each with its own idea of what it had seen, which is how two reconcilers
+    come to work the same findings and write lessons that contradict each other.
+    """
+    from pathlib import Path
+
+    from tests.benchmark import arms as arms_module
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+
+    # A process-wide claim, taken under a lock because the check and the start
+    # are not atomic.
+    assert "_LEARNER_LOCK = threading.Lock()" in source
+    assert "global _LEARNER_OWNER" in source
+    assert arms_module._LEARNER_OWNER is None, "a learner leaked from a test"
+
+    loop = source[source.index("    def start_learning(self, store_root: Path"):
+                  source.index("    def _learning_products(")]
+    assert "if _LEARNER_OWNER is not None:" in loop
+    assert "already running for this job" in loop
+    # It consumes the bus, and the bus delivers each message once.
+    assert "bus.Collector()" in loop and "research_mod.claim" in loop
+
+
+def test_the_gate_paces_agent_starts_and_waits_out_a_closed_window():
+    """The binding limit is the account, not the node.
+
+    A five-hour usage window, once rejected, fails every later agent instantly:
+    one `rate_limit_event`, exit 1, no tool calls. A run measured that as a
+    collapsed research pipeline and stopped, which is the wrong response to an
+    account that would have worked again on its own.
+    """
+    import time
+
+    from tests.benchmark.arms import _LlmGate
+
+    gate = _LlmGate()
+    started = time.time()
+    with gate.slot():
+        pass
+    with gate.slot():
+        pass
+    # Two starts cannot be simultaneous: spacing is what turns a burst into a
+    # sustainable draw, and concurrency alone does not bound the rate.
+    assert time.time() - started >= 1.0
+
+    notes = []
+    gate.rejected_until(time.time() + 10_000, notes.append)
+    assert any("resets in" in note for note in notes)
+
+    # Past the cap it proceeds rather than sitting silently for hours — a
+    # visible failure beats an invisible stall.
+    waited = time.time()
+    gate._wait_for_window(notes.append)
+    assert time.time() - waited < 5
+    assert any("going ahead" in note for note in notes)
+
+
+def test_a_dry_account_is_not_reported_as_a_broken_pipeline():
+    """Zero tool calls means both things; only one is a reason to stop."""
+    from tests.benchmark.runner import ResearchCollapsed, UsageWindowClosed
+
+    assert not issubclass(UsageWindowClosed, ResearchCollapsed)
+    assert issubclass(UsageWindowClosed, RuntimeError)
+
+
+def test_the_runner_starts_the_learner_it_later_stops():
+    """`stop_learning` was called and `start_learning` was not.
+
+    Every run drained an empty bus, and the observations the stages wrote were
+    never generalised into anything. The symptom is silence, which reads exactly
+    like a learner that ran and found no pattern — so nothing in the output
+    distinguished a working learner from an absent one.
+    """
+    import inspect
+
+    from tests.benchmark import runner
+
+    # The calls, not the prose: a comment naming `stop_learning` sits above the
+    # start, so searching the raw source finds the wrong one first.
+    source = inspect.getsource(runner.Runner.run_arm)
+    assert "arm.start_learning(" in source, "the learner is never started"
+    assert source.index("arm.start_learning(") < source.index("arm.stop_learning("), \
+        "the learner must be started before the tasks it listens to"
+
+
+def test_every_method_the_learner_cycle_calls_exists():
+    """The cycle called `research_env`, which does not exist.
+
+    Every cycle raised AttributeError into the handler that swallows it, so the
+    learner ran all run and wrote nothing — and the trace said "reconciling 1
+    finding(s)", which reads exactly like a learner that is working. The loud
+    failure line is what surfaced it; this keeps it from coming back.
+    """
+    import inspect
+    import re
+
+    from tests.benchmark.arms import ClaudePhronixArm
+
+    source = inspect.getsource(ClaudePhronixArm.start_learning)
+    for name in set(re.findall(r"self\.([a-z_]+)\(", source)):
+        assert hasattr(ClaudePhronixArm, name), f"cycle calls missing self.{name}"
+
+
+def test_everything_is_learned_not_only_what_repeats():
+    """Repetition strengthens a lesson; it does not admit one.
+
+    Gating on a second sighting was wrong in the direction that costs most: a
+    finding reported once and never written down is rediscovered at full price
+    by the next task, while the block that would have prevented it costs a few
+    lines.
+    """
+    from phronix import research
+    from tests.benchmark.arms import ClaudePhronixArm
+
+    once = research.notice(0.0, [
+        {"what": "merging stderr into stdout kept the parse error visible",
+         "worked": True, "kind": "bash", "stage": "survey", "topic": "t1",
+         "at": 100.0},
+    ])
+    # A single observation still produces a candidate to learn from.
+    assert once["candidates"], "one report must still be learnable"
+    assert not once["repeats"], "and it is correctly not yet a repeat"
+
+    # The arm spends a cycle on it rather than waiting for a second sighting.
+    assert ClaudePhronixArm.LEARNING_BATCH <= 1

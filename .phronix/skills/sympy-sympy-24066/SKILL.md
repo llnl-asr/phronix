@@ -1,6 +1,6 @@
 ---
 name: sympy-sympy-24066
-description: The sympy-sympy-24066 subject.
+description: Notes on sympy__sympy-24066: mismatched pylint-flavored aspects to ignore, and the actual dimensionless/exp() bug in sympy.physics.units.
 subject: sympy-sympy-24066
 type: skill
 ---
@@ -9,27 +9,25 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `R1` | Rules | Function branch return shape is (factor, *dims), not (factor, dim) |
-| `R2` | Rules | get_dimensional_expr and _collect_factor_and_dimension are distinct, not unified by this fix |
-| `X1` | References | Ground-truth upstream diff and test location |
-
-
-
+| `R1` | Rules | Aspects describing pylint ignore-paths/discover_files internals are misassigned to this topic |
+| `X1` | References | Actual bug: SI._collect_factor_and_dimension() doesn't recognize exp(dimensionless) as dimensionless |
 
 ## Instructions
 
 ## Rules
 
-### R1 — Function branch return shape is (factor, *dims), not (factor, dim)
+### R1 — Aspects describing pylint ignore-paths/discover_files internals are misassigned to this topic
 
-_collect_factor_and_dimension's `elif isinstance(expr, Function):` branch returns `(factor, *dims)` where `dims` has one element per `expr.args` entry — unlike every other branch (Mul, Pow, Add, Derivative, Quantity, Dimension, else), which returns a strict 2-tuple `(factor, dimension)`. This is pre-existing behavior, untouched by PR #24066, and is a known separate bug fixed later by PR #30016. Do not attempt to fix this arity mismatch as part of issue/PR 24066 — it is out of scope (see approach `fix-general-multiarg-return-arity-bug`, refuted for this task).
+Three aspect names assigned to sympy__sympy-24066 (base commit 514579c655bf) all describe pylint-dev/pylint internals, not sympy: `expand_modules_vs_discover_files_paths`, `regex_anchoring_relative_vs_absolute`, and `discover_files_ignore_check`. Each references pylint/lint/pylinter.py `check()`/`_discover_files()`, pylint/lint/expand_modules.py `expand_modules()`/`_is_in_ignore_list_re`, `_is_ignored_file`, `--recursive=y`, or ignore-paths regex config — none of which exist in this checkout (no pylint package, no .pylintrc, verified by grep).
 
-### R2 — get_dimensional_expr and _collect_factor_and_dimension are distinct, not unified by this fix
+**Why:** A sibling phronix task for pylint-dev/pylint-7080 runs on the same shared machine; aspect text leaked from that task into this one's assignment.
 
-unitsystem.py has two separate methods with different Function-branch semantics: `get_dimensional_expr` (lines ~130-150) requires ALL args dimensionless (`all(i == 1 for i in args)`) before collapsing to `S.One`, returning a dimension *expression*. `_collect_factor_and_dimension`'s Function branch instead normalizes each argument's dimension independently to `Dimension(1)` when dimensionless, leaving non-dimensionless args' dimensions unchanged — it does not require all args to be dimensionless, and does not validate that multiple args share a common dimension. PR #24066 modifies only `_collect_factor_and_dimension`; do not mirror `get_dimensional_expr`'s all-or-nothing collapse logic into it.
+**How to apply:** If any of these three (or a similarly pylint-flavored aspect) is assigned again, do not grep/investigate — flag the mismatch and go straight to [[sympy-sympy-24066#X1]].
 
 ## References
 
-### X1 — Ground-truth upstream diff and test location
+### X1 — Actual bug: SI._collect_factor_and_dimension() doesn't recognize exp(dimensionless) as dimensionless
 
-Actual merged upstream PR #24066 diff ("Fix and test for misinterpreted dimensionless power of exponent") fetched via curl from https://patch-diff.githubusercontent.com/raw/sympy/sympy/pull/24066.diff, saved locally at tmp/research/pr24066.diff. New test `test_issue_24062` belongs in sympy/physics/units/tests/test_quantities.py, right after `test_issue_20288` (good insertion anchor, confirmed present in current checkout). Target edit site: sympy/physics/units/unitsystem.py, `_collect_factor_and_dimension`, `elif isinstance(expr, Function):` branch at lines 192-196 (confirmed matches diff's "before" text exactly at this checkout).
+The real issue for sympy__sympy-24066 is in sympy/physics/units/unitsystem.py: `UnitSystem._collect_factor_and_dimension()` (also reachable via `SI.get_dimension_system()`) fails to recognize that an `exp(expr)` argument is dimensionless when `expr` itself is dimensionless (e.g. `units.second / (units.ohm * units.farad)`), raising a spurious `ValueError: Dimension of "exp(...)" is Dimension(...), but it should be Dimension(1)`.
+
+Productive investigation directions: how `_collect_factor_and_dimension` handles `exp`/other `Function` arguments versus how it handles `Pow`, and why `is_dimensionless`/`Dimension.is_dimensionless()` isn't applied to function arguments before dimension propagation. See [[sympy-sympy-24066#R1]] for why the pylint-flavored aspects should be ignored.

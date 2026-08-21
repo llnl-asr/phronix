@@ -1,6 +1,6 @@
 ---
 name: pylint-dev-pylint-7080
-description: The pylint-dev-pylint-7080 subject.
+description: Notes on pylint-dev/pylint-7080 (ignore-paths/--recursive bug): confirmed repro, refuted hypotheses, and cross-task approach/topic mismatches to ignore.
 subject: pylint-dev-pylint-7080
 type: skill
 ---
@@ -9,67 +9,63 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `I1` | Instructions | Untested items to cover before finalizing the real patch |
-| `I2` | Instructions | Working fix for --recursive=y ignore filtering |
-| `R1` | Rules | Keep directory-level skip_subtrees check; add file-level check separately |
-| `R2` | Rules | _discover_files ignore-checks apply to dir roots only, not to individual yielded .py files |
-| `R3` | Rules | Unresolved: __init__.py package-root interaction not traced |
-| `X1` | References | _is_ignored_file semantics and call sites |
-
-
-
-
-
+| `I1` | Instructions | Reproduction commands for the issue's tree shape (does not reproduce on Linux) |
+| `I2` | Instructions | Reproduction: absolute-path argument defeats anchored ignore-paths regex |
+| `R1` | Rules | _discover_files and expand_modules ignore-paths checks are NOT redundant |
+| `R2` | Rules | Windows backslash/forward-slash mismatch already handled in argument.py |
+| `R3` | Rules | Passing ignore-paths recursive tests don't prove _discover_files filters |
+| `R4` | Rules | Approaches referencing sympy unitsystem.py dimension logic are misassigned to this topic |
+| `R5` | Rules | os.walk's leading './' prefix defeats anchored ignore-paths regexes too |
+| `X1` | References | Test file name mismatch: unittest_expand_modules.py, not test_expand_modules.py |
+| `X2` | References | Same leak class also hit sympy__sympy-21847 |
 
 
 ## Instructions
 
-### I1 — Untested items to cover before finalizing the real patch
+### I1 — Reproduction commands for the issue's tree shape (does not reproduce on Linux)
 
-Investigation of root_cause_in_discover_files verified the fix only via a monkeypatched throwaway script calling _discover_files directly, not via the actual `pylint --ignore-paths=...` CLI end-to-end — should be equivalent since check() calls _discover_files directly for recursive discovery, but worth a smoke test at implementation time. Also not yet checked: performance impact of calling _is_ignored_file once per file (likely negligible — basename/regex checks only), and the full test suite (tests/lint/unittest_expand_modules.py and any existing _discover_files tests) was not run in the investigation worktree due to time budget — run it before finalizing to catch regressions. By code inspection the same fix covers ignore, ignore_patterns, AND ignore_paths since _is_ignored_file already checks all three lists at once — no separate fix needed per option.
+To recheck or extend the Linux repro attempt: `mkdir -p tmp/research/repro/src/gen && echo 'import os' > tmp/research/repro/src/region_selection.py && echo 'x=1' > tmp/research/repro/src/gen/about.py && cd tmp/research/repro && PYTHONPATH=<repo-root> python -m pylint --recursive=y --ignore-paths='^src/gen/.*$' src`. On Linux at commit 3c5eca2ded3d this correctly excludes src/gen/about.py (both with and without src/gen/__init__.py) — i.e. no repro at this simple 2-level depth. See refuted approach literal-issue-repro-two-level-tree-linux and root-cause aspects (aspect-discover-files-ignore-check, aspect-expand-modules-vs-discover-files-paths) for where the actual bug condition might live (deeper nesting, cwd-relative paths, or Windows path separators — none of which were tested here due to budget).
 
-### I2 — Working fix for --recursive=y ignore filtering
+### I2 — Reproduction: absolute-path argument defeats anchored ignore-paths regex
 
-In pylint/lint/pylinter.py::_discover_files, the `else` branch that yields individual .py files under a non-package directory must filter each file through _is_ignored_file too:
-
-```python
-else:
-    yield from (
-        os.path.join(root, file)
-        for file in files
-        if file.endswith(".py")
-        and not _is_ignored_file(
-            os.path.join(root, file),
-            self.config.ignore,
-            self.config.ignore_patterns,
-            self.config.ignore_paths,
-        )
-    )
-```
-
-Verified via manual repro (ignore_paths regex matching a file, before/after) and via `pytest tests/lint/unittest_expand_modules.py tests/lint/unittest_lint.py -k "recursive or ignore" -q` (9 passed, 51 deselected, no regressions). Full test suite was NOT run — do that before finalizing.
+To reproduce the actual bug, pass an ABSOLUTE path as the files_or_modules CLI argument: Run(['--ignore-paths=^src/gen/.*$', os.path.abspath('src')]) leaks src/gen/about.py through (confirmed via rated-score delta of -5.00 vs. the working relative-path run). This happens identically with or without --recursive=y, because expand_modules walks subdirectories itself via modutils.get_module_files whenever given a directory argument, independent of the --recursive flag. So this is NOT a _discover_files/expand_modules sequencing issue — it's that an absolute input path yields absolute file paths somewhere in get_python_path / modutils.modpath_from_file / path normalization, and the user's anchored (^-prefixed), relative-style regex can never match an absolute path. This is the most promising lead for the real fix; investigate path normalization / regex-anchoring, likely a separate aspect than expand_modules-vs-discover_files sequencing. Test scripts and synthetic trees left at tmp/research/test_expand*.py, testproj/, testproj2/, src/, src2/ in that worktree.
 
 ## Rules
 
-### R1 — Keep directory-level skip_subtrees check; add file-level check separately
+### R1 — _discover_files and expand_modules ignore-paths checks are NOT redundant
 
-In PyLinter._discover_files (pylint/lint/pylinter.py), the directory-level `skip_subtrees` list + `_is_ignored_file(root, ...)` call must NOT be removed or replaced when fixing --ignore-paths not applying to individual files. It serves two purposes a per-file check cannot replace: (1) perf pruning — stops descending into an already-ignored subtree instead of walking+regex-testing every file inside it; (2) package unit semantics — when a dir has __init__.py, the whole dir is yielded once as a package and skip_subtrees prevents descending file-by-file, a branch per-file checks never reach. The actual #7080 bug is that the `else` branch (non-package dirs) yields `*.py` files straight from `files` without ever testing them against `_is_ignored_file`. The correct fix adds a per-file `_is_ignored_file(os.path.join(root, file), ...)` test inside that else branch's generator, alongside (not instead of) the existing directory-level check.
+With --recursive=y, PyLinter._discover_files() (pylinter.py:600-607) checks _is_ignored_file() against the directory ROOT being walked (e.g. "src/gen"), while expand_modules()'s own _is_ignored_file() call (expand_modules.py:78-81) checks the FULL FILE PATH (e.g. "src/gen/about.py"). A regex like ^src/gen/.*$ typically does not match the bare directory root but does match the full file path, so expand_modules's check is the one doing real, reachable exclusion work. Both use the same self.config.ignore_paths object (pylinter.py:1014, 604, 778) — they don't disagree on pattern lists either. Do not re-propose "expand_modules's check is unreachable/redundant" as the bug cause for pylint-7080; it was directly instrumented and refuted.
 
-### R2 — _discover_files ignore-checks apply to dir roots only, not to individual yielded .py files
+### R2 — Windows backslash/forward-slash mismatch already handled in argument.py
 
-In pylint/lint/pylinter.py::_discover_files, _is_ignored_file(root, ...) is called once per os.walk iteration against the directory `root` string — for the skip-subtree/ignore check and again implicitly when root is a package (has __init__.py, yields root itself). The `yield from (os.path.join(root, file) for file in files if file.endswith(".py"))` branch (non-package dirs) yields individual file paths WITHOUT ever passing them through _is_ignored_file. This means --ignore/--ignore-patterns/--ignore-paths regexes written to match a file's full path (not just the directory name) silently fail to exclude those files. Regexes that happen to match the directory name itself still work, since that check runs before file enumeration. Fix location: wrap the yield-from generator's filter condition with an additional `and not _is_ignored_file(os.path.join(root, file), self.config.ignore, self.config.ignore_patterns, self.config.ignore_paths)`.
+_regexp_paths_csv_transfomer in pylint/config/argument.py:110-121 already compiles ignore-paths regexes into a dual pattern accepting both backslash- and forward-slash-style paths (e.g. ^src/gen/.*$ becomes ^src\\\\gen\\\\.*$|^src/gen/.*$), present at base commit 3c5eca2d. Don't chase "Windows separator mismatch" as the cause of the ignore-paths bug — verified directly that the dual pattern matches both "src\\gen\\about.py" and "src/gen/about.py".
 
-### R3 — Unresolved: __init__.py package-root interaction not traced
+### R3 — Passing ignore-paths recursive tests don't prove _discover_files filters
 
-The investigation did not trace how the `"__init__.py" in files: yield root` branch of _discover_files interacts with expand_modules()'s own recursive submodule-walk ignore logic (call site 2 above, which is missing the plain --ignore basename check). When a directory is a package root, _discover_files yields the whole dir as one unit (only filtered via _is_ignored_file(root, ...) before the branch), and presumably expand_modules() does further per-file filtering downstream — but this path was not fully verified for consistency. Check this before considering the fix complete for all --recursive=y + package cases.
+tests/test_self.py's test_ignore_recursive/test_ignore_pattern_recursive/test_ignore_path_recursive pass, but not because _discover_files (pylinter.py:585-619) does per-file ignore-paths checks — it doesn't (no per-file check at pylinter.py:609-617). They pass because check() later calls expand_modules() on the full file list (pylinter.py:774), and expand_modules() applies _is_ignored_file per item (expand_modules.py:80-83) — that's the real save. Don't treat these tests as evidence _discover_files-level filtering works; write a test that exercises _discover_files directly (or with an anchored regex + deep non-package subdir) to actually cover that layer. unittest_expand_modules.py's test_expand_modules_with_ignore also only calls expand_modules() directly, never _discover_files/Run().
+
+### R4 — Approaches referencing sympy unitsystem.py dimension logic are misassigned to this topic
+
+Three tune/measurement assignments to pylint-dev__pylint-7080 (base commit 3c5eca2ded3d) named approaches that are actually about sympy: `raise-on-non-dimensionless-function-arg`, `simplify-dims-and-fix-multiarg-return-arity`, and `coerce-dimensionless-in-function-branch`, all targeting `sympy/physics/units/unitsystem.py`. That file does not exist in this pylint checkout.
+
+**Why:** approach text leaks in from the sibling sympy__sympy-24066 task sharing the same machine — the mirror image of [[sympy-sympy-24066#R1]] (pylint text leaking into sympy) and [[pallets-flask-5063#R4]] (pylint text leaking into flask).
+
+**How to apply:** do not search this checkout for unitsystem.py or dimension/exp() logic; flag the mismatch immediately and redirect to the real pylint ignore-paths work at [[pylint-dev-pylint-7080#I2]]. The actual sympy fix belongs at [[sympy-sympy-24066#X1]].
+
+### R5 — os.walk's leading './' prefix defeats anchored ignore-paths regexes too
+
+os.walk('.') yields root paths with a leading './' prefix (e.g. './src/gen', not 'src/gen'). An anchored user regex like ^src/gen/.*$ or even ^src/gen$ fails to match this prefixed form, so a directory-root check against os.walk's raw root string can silently miss even after the trailing-separator gap ([[pylint-discover-files-ignore-paths#R1]]) and the per-file-check gap (R1 above) are both fixed.
+
+**Why:** found while diagnosing the same recursive ignore-paths bug family — a third, independent way the anchored-regex-vs-path-string mismatch shows up.
+
+**How to apply:** any fix that checks os.walk's root against ignore_paths must strip a leading './' (or normalize via os.path.normpath) before matching, in addition to the trailing-separator and per-file fixes already recorded.
 
 ## References
 
-### X1 — _is_ignored_file semantics and call sites
+### X1 — Test file name mismatch: unittest_expand_modules.py, not test_expand_modules.py
 
-`_is_ignored_file(element, ignore_list, ignore_list_re, ignore_list_paths_re)` in pylint/lint/expand_modules.py:49-60: `ignore_list` does exact basename equality against `os.path.basename(element)`; `ignore_list_re` (--ignore-patterns) does regex .match() against the basename only; `ignore_list_paths_re` (--ignore-paths) does regex .match() against the full `element` string as given (not normalized/abspath'd). It has no dir-vs-file branch — fully path-type agnostic, safe to call on any file or dir path unmodified.
+At base commit 3c5eca2ded3d, the expand_modules test file is named tests/lint/unittest_expand_modules.py (not tests/lint/test_expand_modules.py, despite that name appearing in the task brief and other aspect notes). tests/test_self.py's name is correct as-is. Anyone grepping for test_expand_modules.py and finding nothing should check unittest_expand_modules.py before concluding there's no coverage.
 
-Three call sites exist:
-1. expand_modules() line ~78 — called correctly per top-level command-line arg.
-2. expand_modules()'s recursive submodule loop, lines ~137-146 — does NOT call _is_ignored_file; instead inlines only 2 of 3 checks (ignore_list_re + ignore_list_paths_re), omitting the plain --ignore basename check. Separate minor inconsistency from the --recursive=y bug, not yet fixed/investigated further.
-3. pylinter.py::_discover_files (--recursive=y) — the actual pylint-7080 bug site: originally called _is_ignored_file only on the os.walk `root` (directory), never on individual `file` names, so --ignore/--ignore-patterns/--ignore-paths never filtered individual files, only whole directories, under --recursive=y.
+### X2 — Same leak class also hit sympy__sympy-21847
+
+The cross-task approach-text leak described in [[pylint-dev-pylint-7080#R4]] recurred on a third topic: sympy__sympy-21847 got `rewrite_ignore_paths_patterns_to_be_root_relative` and `add_per_file_is_ignored_check_in_discover_files` handed to its tune/setup stages. See [[sympy-itermonomials#X3]] for that topic's record.

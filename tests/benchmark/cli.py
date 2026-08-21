@@ -299,6 +299,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         out=out, image_template=args.image_template, data_root=str(root),
         flux_job=args.flux_job, node=args.node,
         parallel_arms=args.parallel_arms,
+        parallel_tasks=args.parallel_tasks,
         until_pass=args.until_pass, stall_limit=args.stall_limit,
         include_hints=args.with_hints,
         reveal_target_tests=args.reveal_target_tests,
@@ -361,7 +362,10 @@ def cmd_check(args: argparse.Namespace) -> int:
     checks = preflight.run_all(pull=args.pull, live=not args.offline,
                                dataset_cache=Path(args.dataset_cache)
                                if args.dataset_cache else None,
-                               data_root=args.data_root or None)
+                               data_root=args.data_root or None,
+                               base_url=getattr(args, "base_url", None)
+                               or DEFAULT_BASE_URL,
+                               model=getattr(args, "model", None) or DEFAULT_MODEL)
     print(preflight.render(checks))
     return 1 if any(not c.ok and not c.skipped for c in checks) else 0
 
@@ -585,6 +589,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--parallel-arms", action="store_true",
                      help="Run the arms concurrently. Tasks within an arm stay "
                           "strictly ordered, so learning carry-over is unaffected.")
+    run.add_argument("--parallel-tasks", type=int, default=1,
+                     help="Run this many of an arm's tasks at once. Faster for "
+                          "iterating on the pipeline, and it INVALIDATES the "
+                          "reuse and learning-rate figures: a task that "
+                          "overlaps its predecessors cannot have benefited from "
+                          "them. Recorded in the manifest.")
     run.add_argument("--flux-job", default=os.environ.get("PHRONIX_BENCH_FLUX_JOB", ""),
                      help="Run containers inside this flux allocation (single-node) "
                           "while the agent runs locally. Needed here because opencode "
