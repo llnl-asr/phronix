@@ -1,6 +1,6 @@
 ---
 name: pylint-dev-pylint-5859
-description: The pylint-dev-pylint-5859 subject: fixing the W0511 fixme-tag regex trailing-\b bug for punctuation-only note tags.
+description: The pylint-dev-pylint-5859 subject.
 subject: pylint-dev-pylint-5859
 type: skill
 ---
@@ -9,54 +9,68 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `R1` | Rules | Do not use full pylint CLI invocation in this venv/worktree |
-| `R2` | Rules | Do not remove/alter notes_rgx's shared trailing \b |
-| `R3` | Rules | Per-tag \b-vs-(?!\w) trick applies only to literal notes, not notes_rgx |
-| `R4` | Rules | fix-discover-files-match-root-with-trailing-sep does not apply here |
-| `R5` | Rules | switch-match-to-fullmatch is also a topic mismatch here |
-| `X2` | References | unittest_misc.py test_xxx_middle is unaffected by \b changes |
-| `X3` | References | pylint CLI does not run in this sandbox (Python 3.13 vs old pylint checkout) |
-| `X4` | References | Root cause: word-boundary \b in EncodingChecker note regex, and the confirmed fix |
+| `R1` | Rules | Do not add separator-normalization code for this fix |
+| `R2` | Rules | Aspect brief mismatch: ignore this task's non_recursive_reference_behavior framing |
+| `R3` | Rules | The real issue is a --notes punctuation-tag bug, not discovery/ignore-paths |
+| `R4` | Rules | _discover_files does no ignore-paths filtering; enforcement is downstream |
+| `R5` | Rules | Aspect brief mismatch: this task's real FoM is fixme_note_tag_detection_rate, not ignore-paths |
+| `X1` | References | Actual bug location: fixme regex in misc.py |
+| `X2` | References | Discovery/expand_modules flow in this codebase version (base commit 182cc539b815) |
+| `X3` | References | Config dest-name gotchas for ignore-related options (from unrelated but verified investigation) |
+
+
+
+
+
+
+
 
 
 ## Instructions
 
 ## Rules
 
-### R1 — Do not use full pylint CLI invocation in this venv/worktree
+### R1 — Do not add separator-normalization code for this fix
 
-Running `python -m pylint ... --notes="YES,???"` end-to-end in this worktree/venv fails with `UnknownMessageError: No such message id or symbol 'c-extension-no-member'` raised during Run.__init__, before the checker under test is even reached. This is an environment/message-registry mismatch unrelated to any regex/notes fix. Use CheckerTestCase-style direct checker invocation instead (as tests/checkers/unittest_misc.py already does) — that path doesn't go through Run/PyLinter's msgs_store init and works fine.
+expand_modules.py applies os.path.normpath only to the top-level isarg=True filepath, never to subfilepath from the recursive os.walk-based get_module_files. This is a real latent issue for Windows (os.walk yields backslashes there, ignore-paths patterns are conventionally forward-slash), but the actual reported bug reproduces on Linux too (os.sep=='/'), so it is a separate "scope of check" bug (ignore-paths not applied consistently to every recursively-discovered file), not a separator bug. Because this repo's test suite runs on Linux, any separator-normalization change (e.g. subfilepath.replace(os.sep,'/')) is unverifiable here and risks masking whether the real scope-bug fix works. Do not include separator normalization in the fix or its tests; keep the fix scoped to applying _is_in_ignore_list_re consistently during the recursive walk. See research approach "normalize-subfilepath-separators" (refuted) under aspect windows_path_separator_interaction.
 
-### R2 — Do not remove/alter notes_rgx's shared trailing \b
+### R2 — Aspect brief mismatch: ignore this task's non_recursive_reference_behavior framing
 
-In EncodingChecker.open() (pylint/checkers/misc.py), the regex is rf"#\s*({notes}|{notes_rgx})\b" — notes_rgx is spliced in raw, sharing one trailing \b with notes. When fixing the --notes punctuation-boundary bug (tags like "???" never matching), do NOT remove/weaken this \b for the notes_rgx branch.
+The aspect "non_recursive_reference_behavior" as briefed (expand_modules() vs. recursive _discover_files ignore-paths handling in pylint/lint/expand_modules.py and pylinter.py) does not match this task's actual bug. This task's issue.md is about `--notes` ignoring note tags that are entirely punctuation (e.g. `pylint test.py --notes="???"` doesn't flag `# ???: no`). That brief appears copied from a different, unrelated pylint issue (likely an ignore-paths-not-applied-recursively bug, possibly pylint-dev/pylint #5901). Do not re-investigate expand_modules/ignore-paths for this task — see [[fix-fixme-regex-word-boundary]] approach for the real fix location.
 
-Why: tests/functional/f/fixme.rc sets notes-rgx=FIXME(?!.*ISSUE-\d+)|TO.*DO. fixme.py has "# Todoist API mentioned should not result in a message." which fixme.txt asserts must NOT be flagged. TO.*DO matches "Tod...do" inside "Todoist"; only the trailing \b (failing because "i" follows "do") stops it from matching. Removing \b there breaks this regression test.
+### R3 — The real issue is a --notes punctuation-tag bug, not discovery/ignore-paths
 
-### R3 — Per-tag \b-vs-(?!\w) trick applies only to literal notes, not notes_rgx
+The actual GitHub issue for pylint-dev/pylint#5859 is "--notes option ignores note tags that are entirely punctuation" (e.g. `pylint test.py --notes="YES,???"` fails to flag `???` as W0511 fixme). This is a fixme/notes-tag regex bug, likely in pylint/checkers/base.py's note-tag pattern construction (possibly a \b word-boundary issue that doesn't match tags with no word characters), NOT a discovery/_discover_files/ignore-paths/expand_modules bug. Multiple aspect briefs in this task's research plan (discovery_ignore_check_scope, and sibling dirs seen: aspect-root-path-regex-mismatch, aspect-non-recursive-reference-behavior, aspect-upstream-fix-reference) describe an ignore-paths investigation that does not match the actual issue text — likely cross-talk from a different task's aspect set. Any implementation work should target the notes/fixme checker matching the issue text, not pylint/lint/pylinter.py or expand_modules.py.
 
-notes_rgx is a free-form user regex — its "last matched character" is not statically known, so you cannot choose \b vs (?!\w) per-alternative for it the way you can for literal --notes tags (which pylint controls via re.escape). Fix only the notes branch; leave notes_rgx's construction/boundary untouched.
+### R4 — _discover_files does no ignore-paths filtering; enforcement is downstream
 
-### R4 — fix-discover-files-match-root-with-trailing-sep does not apply here
+`PyLinter._discover_files` (pylint/lint/pylinter.py, os.walk-based, ~line 1016) never calls `_is_in_ignore_list_re` and never references `ignore_list_paths_re`/`self._ignore_paths` — it yields all files/dirs unfiltered. Enforcement happens later in `expand_modules()` (pylint/lint/expand_modules.py) via `_is_in_ignore_list_re(something, ignore_list_paths_re)` against full paths (each item from files_or_modules, and each subfilepath from `modutils.get_module_files` for package expansion) — never against bare os.walk roots.
 
-The approach fix-discover-files-match-root-with-trailing-sep targets pylint/lint/pylinter.py's _discover_files/ignore-paths code path (see [[discover-files#X50]] and [[pylint-discover-files-ignore-paths#X1]]), but this topic's (pylint-dev__pylint-5859) actual issue is misc.py's notes_rgx/EncodingChecker word-boundary failing on punctuation-only note tags like '???' — see [[pylint-dev-pylint-5859#X4]] for the real root cause and confirmed fix. These are unrelated code paths; reported 3x now (stages tune, tuning) as a mismatch. Same class of cross-task contamination already tracked for flask-5063 at [[pylint-discover-files-ignore-paths#X1]].
+Do not build a fix around "match the bare os.walk root against ignore-paths regex with a trailing slash added" — no confirmed call site does that today. See [[pylint-dev__pylint-5859#lesson-root-regex-mismatch-not-reproduced]] for why the isolated regex-anchoring bug doesn't manifest as a real leak.
 
-### R5 — switch-match-to-fullmatch is also a topic mismatch here
+### R5 — Aspect brief mismatch: this task's real FoM is fixme_note_tag_detection_rate, not ignore-paths
 
-switch-match-to-fullmatch ([[discover-files#X42]]: changing ignore-paths regex matching from `re.Pattern.match` to `.fullmatch` in `_is_in_ignore_list_re`) was also reported (stages measurement, tuning) as an attempted fix for this topic's punctuation-tag bug. It cannot apply: that code path is pylinter.py's ignore-paths matching, unrelated to misc.py's `_fixme_pattern`/notes_rgx construction ([[pylint-dev-pylint-5859#X4]]), and [[discover-files#X42]] itself was already deprioritized as orthogonal even within its own (ignore-paths) topic. Same class of mismatch as R4 — check the actual failing code path (misc.py, not pylinter.py) before proposing an ignore-paths approach here.
+This topic's actual figure-of-merit (confirmed via research_add_approach / research_coverage) is `fixme_note_tag_detection_rate`, dimensions `should_match`, `tag_char_class`, `tag_position`, `trailing_context` — the W0511 fixme-checker's TODO/FIXME comment-tag regex matching. It is NOT about file discovery, `--recursive`, or `--ignore-paths`, despite an aspect brief for this task pointing at pylinter.py `_discover_files`.
+
+Why: the brief appears confused with a different, superficially similar issue (overlapping search terms "ignore-paths"/"recursive"). No `issue.md` was available to confirm the real issue text.
+
+How to apply: before building on the `_discover_files`/ignore-paths findings under this topic (approaches A1, A8, A9), re-check `research_coverage` for the real FoM. Any final patch should target the fixme-checker regex, not `pylinter.py`/`expand_modules.py`.
 
 ## References
 
-### X2 — unittest_misc.py test_xxx_middle is unaffected by \b changes
+### X1 — Actual bug location: fixme regex in misc.py
 
-tests/checkers/unittest_misc.py:55-60 `test_xxx_middle` uses code "# midle XXX" (note: "midle" is a typo for "middle", not an actual middle-of-line placement of XXX) and expects assertNoMessages(). It passes because the checker regex requires the tag immediately after `#\s*` — matching is anchored right after the `#`, not searched anywhere in the string — so "midle" (not "XXX") at that position means the XXX alternative never matches at all, regardless of any `\b`-suffix change. This test exercises the `#\s*` prefix behavior, not boundary logic, so it's irrelevant to (and unaffected by) fixes targeting the trailing `\b`.
+The real bug for this task is in pylint/checkers/misc.py, EncodingChecker, around lines 118-128, where `self._fixme_pattern` is built as `rf"#\s*({notes})\b"` (or with notes_rgx). The trailing `\b` word-boundary fails to match when a note tag is entirely punctuation. See approach [[fix-fixme-regex-word-boundary]] for the confirmed repro and fix direction.
 
-### X3 — pylint CLI does not run in this sandbox (Python 3.13 vs old pylint checkout)
+### X2 — Discovery/expand_modules flow in this codebase version (base commit 182cc539b815)
 
-Running the actual `pylint` CLI against this checkout fails with "Problem importing module ... Unable to find module for .../pylint/checkers/refactoring" under the sandbox's Python 3.13. This looks like an environment/packaging incompatibility unrelated to the notes_rgx bug, not something to fix as part of this task. Workaround used: verify regex behavior directly with standalone Python snippets that reconstruct the regex string exactly as open() builds it and run .search() against fixture file contents (e.g. tests/functional/f/fixme.py), comparing to the expected .txt output — this is sufficient since the whole bug lives in the regex string construction, not in checker plumbing.
+`_is_ignored_file` does not exist anywhere in pylint/lint/pylinter.py or pylint/lint/expand_modules.py at base commit 182cc539b815 — grepped and confirmed absent. Discovery flow: PyLinter.check() → if --recursive: files_or_modules replaced with list(_discover_files(...)) (no ignore filtering at this stage, and it already flattens to file-level or single-package-root granularity, never a whole non-package directory tree in one blob) → _iterate_file_descrs → _expand_files → expand_modules(modules, ignore_list, ignore_list_re, ignore_list_paths_re). expand_modules (pylint/lint/expand_modules.py:53-60) loops over every flattened item and checks basename against --ignore, basename against --ignore-patterns, and full path against --ignore-paths, before processing further. This is relevant background if a future aspect on this task genuinely needs discovery/ignore-paths behavior — but see [[pylint-dev__pylint-5859#R1]] first: the actual issue for this task is unrelated to discovery/ignore-paths.
 
-### X4 — Root cause: word-boundary \b in EncodingChecker note regex, and the confirmed fix
+### X3 — Config dest-name gotchas for ignore-related options (from unrelated but verified investigation)
 
-In pylint/checkers/misc.py EncodingChecker.open() (~lines 119-128), the notes regex is built as `#\s*({notes})\b` where `notes = "|".join(re.escape(note) for note in self.config.notes)`. The trailing `\b` requires a transition between a word char and non-word char. For a punctuation-only tag like `???`, if followed by another non-word char (e.g. `:`), there's no boundary, so the regex never matches — this is the exact cause of pylint#5859 (`--notes="YES,???"` ignoring `???`). Verified: `re.compile(rf'#\s*({notes})\b').search('# ??? what')` → None.
-
-**Confirmed fix (worked):** apply `\b` per-alternative, only when that tag ends in a word char (`re.search(r"\w$", note)`), else omit it — do not use one shared `\b` around the whole alternation. This fixes punctuation-tag matching while still rejecting substring extensions (TODOIST for TODO, FIXMENOW for FIXME) for word tags, and keeps all 10 unittest_misc.py tests passing unmodified. `notes_rgx` must NOT get this same per-tag treatment ([[pylint-dev-pylint-5859#R3]]) since it isn't a literal tag list — see research approach `per_tag_boundary` / `conditional-word-boundary`, topic pylint-dev__pylint-5859.
+If ignore-paths/recursive-discovery code is ever touched in this repo (pylint/lint/pylinter.py, pylint/lint/expand_modules.py), note the actual attribute names on `self.config`, which don't match the CLI flag names:
+- `--ignore` → `self.config.black_list` (not `self.config.ignore`)
+- `--ignore-patterns` → `self.config.black_list_re` (not `self.config.ignore_patterns`)
+- `--ignore-paths` → `self.config.ignore_paths` (keeps its natural name; no custom `dest` in `make_options()`)
+- `pylint/lint/expand_modules.py::_is_in_ignore_list_re(element, ignore_list_re)` is the existing reusable basename-or-fullpath regex-match helper — reuse it rather than reimplementing.
+- `expand_modules.py` (lines ~53-59 and ~122-125) already re-checks `ignore_list_paths_re` against every file/subfile discovered by `_discover_files`, via `PyLinter._iterate_file_descrs` → `_expand_files`. So a bug isolated by calling `_discover_files` alone (without running the full `check()` pipeline) can look worse than it is in end-to-end behavior — always retest through the full pipeline before concluding a discovery-time filter is missing.

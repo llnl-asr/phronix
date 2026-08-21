@@ -9,25 +9,6 @@ the other.
 
 ## Lessons
 
-### L1 — itermonomials min_degrees fix: check total degree not max power
+### L1 — exp function requires dimensionless argument
 
-**2026-08-19** — **2026-08-19** — **Symptom**: `itermonomials([x1, x2, x3], 3, min_degrees=3)` returns only `[x3**3, x2**3, x1**3]` (3 monomials) when it should return all monomials with total degree 3 (10 monomials including `x1*x2**2`, `x1*x2*x3`, etc.)
-
-**Root cause**: Lines 130 and 142 in `sympy/polys/monomials.py` use `max(powers.values()) >= min_degree` which checks the maximum individual variable power, not the total degree (sum of all powers). The documentation explicitly states it should check `min_degree <= total_degree(monom) <= max_degree`.
-
-**Fix**: Change both lines from:
-```python
-if max(powers.values()) >= min_degree:
-```
-to:
-```python
-if min_degree <= sum(powers.values()) <= max_degree:
-```
-
-This affects both the commutative branch (line 130) and non-commutative branch (line 142). Both must be fixed identically.
-
-**Verification**: 
-- Original issue case now returns 10 monomials all with degree 3
-- Docstring example `itermonomials([x, y], 2, 1)` still returns `[x, y, x**2, x*y, y**2]`
-- All existing tests in `sympy/polys/tests/test_monomials.py` pass
-- Edge cases work: min > max returns empty, min < max returns all degrees in range
+**2026-08-21** — In Sympy’s unit system, the `_collect_factor_and_dimension` method incorrectly propagated dimensions for function expressions. The `exp` function must receive a dimensionless argument. The fix adds a check that raises a ValueError if `exp` receives a non‑dimensionless argument, and ensures the returned dimensions treat `exp` as dimensionless. This resolves the failing unit tests and prevents similar bugs for other functions requiring dimensionless inputs.

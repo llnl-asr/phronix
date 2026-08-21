@@ -5,6 +5,8 @@ description: >-
   lessons and probe_ tools on a ten-second clock, and keeps one true copy of
   each fact on a sixty-second clock. Nothing waits for it.
 model_level: level_3
+mode: primary        # invoked by name with --agent; a subagent cannot be
+                     # and opencode falls back to its default instead
 intrinsic: high
 effort: medium
 tools:

@@ -9,12 +9,15 @@ the other.
 
 ## Lessons
 
-### L1 — _collect_factor_and_dimension raises ValueError for dimensionless args inside Function (e.g. exp)
+### L1 — _collect_factor_and_dimension: dimensionless args to Function not detected
 
-**2026-08-20** — Symptom: `SI._collect_factor_and_dimension(100 + exp(units.second/(units.ohm*units.farad)))` raises `ValueError: Dimension of "exp(...)" is Dimension(time/(capacitance*impedance)), but it should be Dimension(1)` even though the argument's dimension is actually dimensionless (RC time constant = 1). The recursive call correctly computes the argument dimension, but that dimension is not reduced to Dimension(1) even when `is_dimensionless()` is True for it — it's left as the raw compound dimension.
+**2026-08-21** — Symptom: `SI._collect_factor_and_dimension(100 + exp(second/(farad*ohm)))` raised `ValueError: Dimension of "exp(...)" ... should be Dimension(1)` even though `second/(farad*ohm)` is actually dimensionless (an RC time constant).
 
-Root cause: in `sympy/physics/units/unitsystem.py`, the `isinstance(expr, Function)` branch of `_collect_factor_and_dimension` (around line 192-198) returns `(expr.func(*(f[0] for f in fds)), *(d[1] for d in fds))` — it passes through each sub-dimension `d[1]` verbatim, never checking whether it is dimensionless.
+Root cause: in `sympy/physics/units/unitsystem.py`, the `Function` branch of `UnitSystem._collect_factor_and_dimension` returned each argument's raw computed dimension `d[1]` as the function's dimension, without checking whether that dimension is dimensionless per `self.get_dimension_system().is_dimensionless(d[1])`. Composite dimensions like `time/(capacitance*impedance)` reduce to dimensionless but aren't literally `Dimension(1)`, so downstream equality checks failed.
 
-Fix: before returning, map each `d[1]` through `Dimension(1) if self.get_dimension_system().is_dimensionless(d[1]) else d[1]`. This makes the dimension check downstream (which compares against `Dimension(1)` for Function args) succeed correctly.
-
-Verified: fixing only this one spot made the target test pass with 30/30 regression tests also passing (test_quantities.py, including test_factor_and_dimension_with_Abs still correctly xfails). No other file needed changes — this is a single, self-contained fix.
+Fix (verified, 1/1 target + 30/30 regression tests pass): in that branch, map each arg's dimension through `Dimension(1) if self.get_dimension_system().is_dimensionless(d[1]) else d[1]` before returning, e.g.:
+```python
+dims = [Dimension(1) if self.get_dimension_system().is_dimensionless(d[1]) else d[1] for d in fds]
+return (expr.func(*(f[0] for f in fds)), *dims)
+```
+This is a minimal, localized one-branch fix — no other files needed changes.

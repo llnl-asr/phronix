@@ -12,12 +12,12 @@ type: skill
 | `I1` | Instructions | How to evaluate a change to degree padding |
 | `I2` | Instructions | How to solve degree padding |
 | `I4` | Instructions | Steps to solve degree padding |
+| `R1` | Rules | Fix itermonomials min_degrees filter |
 | `X1` | References | Tried: fix-sum-not-max-degree-filter |
 | `X2` | References | Tried: explicit-degree-loop-no-padding |
 | `X3` | References | Sources consulted for degree padding |
 | `X4` | References | What has been investigated about degree padding |
 | `X5` | References | Where research on this subject stands |
-
 
 
 
@@ -156,3 +156,9 @@ Measured by **itermonomials_correctness_rate** (max, target 1.0).
 - explicit-degree-loop-no-padding: sympy/polys/monomials.py itermonomials total_degree branch; issue text
 - pylint/checkers/misc.py: benchmark attempt
 - full record: research topic `sympy__sympy-21847` (via research_status, only if this summary is not enough)
+
+## Rules
+
+### R1 — Fix itermonomials min_degrees filter
+
+Replace max(powers.values()) >= min_degree with sum(powers.values()) >= min_degree in both commutative and non-commutative branches of itermonomials (sympy/polys/monomials.py). This ensures the min_degrees argument checks total degree as documented, fixing missing mixed monomials. All tests now pass.

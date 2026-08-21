@@ -24,6 +24,20 @@ SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 BASELINE=$(ls /usr/WS2/haridev/phronix/src/phronix/.agents/skills 2>/dev/null | wc -l)
 BASELINE=${BASELINE:-0}
 
+# One way to write a duration, everywhere.
+#
+# Raw seconds are unreadable past a couple of minutes: "time= 1987s" and
+# "stopped 15080s" both require arithmetic to mean anything, and the second is
+# four hours. Same shape as the in-flight elapsed column: 45s, 12m30s, 2h05m.
+human() {   # human <seconds> -> 45s | 12m30s | 2h05m
+  local s=${1%.*}
+  [ -z "$s" ] && { echo "-"; return; }
+  if   [ "$s" -ge 3600 ]; then printf '%dh%02dm' $((s/3600)) $((s%3600/60))
+  elif [ "$s" -ge 60 ];   then printf '%dm%02ds' $((s/60)) $((s%60))
+  else                         printf '%ds' "$s"
+  fi
+}
+
 resolve() {   # resolve <name-or-path> -> absolute run dir
   local want="$1"
   [ -d "$want" ] && { echo "${want%/}"; return; }
@@ -46,7 +60,8 @@ liveness() {  # liveness <run-dir> -> one word plus age
                       "$run"/manifest.json 2>/dev/null | sort -rn | head -1)
   [ -z "$last" ] && { echo "idle"; return; }
   age=$(( now - last ))
-  if [ "$age" -lt 180 ]; then echo "ALIVE ${age}s"; else echo "stopped ${age}s"; fi
+  if [ "$age" -lt 180 ]; then echo "ALIVE $(human "$age")"
+  else echo "stopped $(human "$age") ago"; fi
 }
 
 summarise() { # one line per arm, for the overview
@@ -89,6 +104,307 @@ overview() {
   echo "detail:  $SCRIPTS/status.sh <run>   |   newest:  $SCRIPTS/status.sh"
 }
 
+overall() {   # overall <run-dir> -> how fast the whole run is going
+  # Rate for the run as a whole. What was LEARNED is reported at the end,
+  # next to what was added, so the two halves of the same question — what
+  # got written, and whether anything read it — are read together.
+  echo
+  python3 - "$1" <<'PY' 2>/dev/null
+import json, pathlib, sys, time, collections
+from datetime import datetime
+
+def human(seconds):
+    """45s | 12m30s | 2h05m — the same shape the shell side writes."""
+    s = int(seconds or 0)
+    if s >= 3600:
+        return f"{s // 3600}h{s % 3600 // 60:02d}m"
+    if s >= 60:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s}s"
+
+
+root = pathlib.Path(sys.argv[1])
+
+# ---- throughput ----------------------------------------------------------
+# Wall time is measured from the earliest thing the run wrote to the latest,
+# not from now: a finished run must not keep inflating its own denominator.
+#
+# The start comes from the manifest, which the runner writes once. It was
+# taken from the minimum file ctime, and on Lustre ctime is the inode-change
+# time and moves on every append — so a FINISHED run, whose files had all been
+# touched again, reported a wall of 32,245 minutes and 161,226 s per task.
+stamps = [p.stat().st_mtime for p in root.rglob("*") if p.is_file()]
+start = 0.0
+try:
+    created = json.loads((root / "manifest.json").read_text())["created_at"]
+    start = datetime.fromisoformat(created).timestamp()
+except Exception:
+    # No manifest: fall back to the oldest mtime, which at least cannot be
+    # younger than the run.
+    start = min(stamps, default=0)
+wall = max(stamps, default=0) - start
+done = attempts = prompt = generated = 0
+resolved = 0
+for results in sorted(root.glob("*/results.jsonl")):
+    for line in results.read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        done += 1
+        resolved += 1 if row.get("resolved") else 0
+        for a in row.get("attempts") or []:
+            attempts += 1
+            prompt += int(a.get("tokens_input") or 0)
+            generated += int(a.get("tokens_output") or 0)
+
+# ---- what the agents are actually DOING, per second ----------------------
+# A task is not the unit of work here. One task is minutes of an agent reading
+# files, running commands and editing — and a run that finishes no tasks at all
+# can still be working hard or barely moving. The rate that says which is the
+# rate of individual agent actions: tool calls made, model turns completed.
+tools_used = collections.Counter()
+tool_calls = 0
+# By message id, not by event: a streamed assistant message arrives as several
+# events carrying the SAME id, and counting events said 714 turns where there
+# were a few hundred. The id is the unit the model actually produced.
+turn_ids = set()
+# Per-agent time, so the run-wide rate can be divided into "how fast is one
+# agent" and "how many are running". A slow run means one of those two things
+# and the fix is different for each: a slow agent is a model/harness problem,
+# too few agents is a concurrency problem.
+#
+# From the transcript's own timestamps, not the file's. On lustre st_ctime is
+# the inode-change time and moves on every append, so mtime - ctime is ~0 and
+# the whole per-agent rate silently vanished.
+agent_seconds = 0.0
+for tr in root.glob("*/tasks/*/attempt-*/*.jsonl"):
+    stamps_here = []
+    for line in tr.read_text(errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        when = event.get("timestamp")
+        if isinstance(when, str):
+            try:
+                stamps_here.append(
+                    datetime.fromisoformat(when.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                pass
+        message = event.get("message") or {}
+        if message.get("role") == "assistant":
+            turn_ids.add((tr.parent, message.get("id") or id(event)))
+        for block in message.get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                tool_calls += 1
+                name = block.get("name") or "?"
+                # The phronix tools are the interesting group, not fifteen
+                # separate rows crowding out Bash and Read.
+                tools_used["mcp__phronix__*" if name.startswith("mcp__phronix__")
+                           else name] += 1
+    if len(stamps_here) > 1:
+        agent_seconds += max(stamps_here) - min(stamps_here)
+
+turns = len(turn_ids)
+if wall > 0:
+    actions = tool_calls + turns
+    print("=== throughput ===")
+    print(f"  wall {human(wall)}   {done} task(s) finished, "
+          f"{resolved} resolved, {attempts} attempt(s)")
+    print(f"  {actions/wall:.2f} agent action/s   "
+          f"({tool_calls} tool call(s) at {tool_calls/wall:.2f}/s, "
+          f"{turns} model turn(s) at {turns/wall:.2f}/s)")
+    if agent_seconds > 0:
+        # The two halves of the run-wide rate. Per-agent says how fast one
+        # agent moves; concurrency says how many were moving at once. Their
+        # product is the line above.
+        print(f"  {actions/agent_seconds:.2f} action/s PER AGENT   x "
+              f"{agent_seconds/wall:.1f} agent(s) in flight on average   "
+              f"= {actions/wall:.2f}/s")
+        print(f"  one action every {agent_seconds/max(actions,1):.1f}s "
+              f"for a single agent")
+    if tools_used:
+        top = "  ".join(f"{name} {n}" for name, n in tools_used.most_common(6))
+        print(f"  what they do: {top}")
+    if done:
+        print(f"  {human(wall/done)} per finished task   "
+              f"{actions/done:.0f} action(s) per task")
+    if generated:
+        print(f"  {generated/wall:.0f} generated tok/s over the whole run   "
+              f"prompt:generated {prompt/max(generated,1):.0f}:1")
+        # A high ratio means the fleet spends its time re-reading context
+        # rather than producing. That is a prompt-cache question, not a
+        # model-speed one.
+
+PY
+}
+
+assets() {   # assets <run-dir> -> what was learned, and what used it
+  local RUN="$1" arm have tools
+  echo
+  echo "=== learned assets ==="
+  for arm in "$RUN"/*/; do
+    arm="${arm%/}"
+    [ -d "$arm/tasks" ] || continue
+    echo "  --- ${arm##*/}"
+    if [ -d "$arm/store/.phronix/skills" ]; then
+      have=$(ls "$arm/store/.phronix/skills" | wc -l)
+      tools=$(ls "$arm/store/.phronix/capabilities"/*.py 2>/dev/null | wc -l)
+      echo "  store: $have skill(s) — seeded $BASELINE, learned $(( have - BASELINE ))"\
+"   |   $tools tool(s)"
+      echo "  retrievals: $(cat "$arm"/tasks/*/retrievals.jsonl 2>/dev/null | wc -l)"
+
+      # What was learned, by name. A count says the loop ran; the names say
+      # what it produced, and a name is what makes a claim checkable — "learned
+      # 3" has been true of runs that wrote three fragments of one subject.
+      BUNDLED=/usr/WS2/haridev/phronix/src/phronix/.agents/skills
+      # Every skill with how many tasks pulled it back out. A skill written and
+      # never retrieved is the thing this benchmark exists to detect, so the
+      # count is the point, not decoration: "learned 3" has been true of runs
+      # where all three were dead weight.
+      python3 - "$arm" "$BUNDLED" <<'PY' 2>/dev/null
+import json, pathlib, sys, collections
+
+arm, bundled_dir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+bundled = {p.name for p in bundled_dir.iterdir()} if bundled_dir.is_dir() else set()
+
+retrieved, reused, cross = (collections.Counter() for _ in range(3))
+results = arm / "results.jsonl"
+if results.is_file():
+    for line in results.read_text(errors="replace").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for name in row.get("skills_retrieved") or []:
+            retrieved[name] += 1
+        for name in row.get("skills_reused") or []:
+            reused[name] += 1
+        for name in row.get("skills_reused_cross_repo") or []:
+            cross[name] += 1
+
+# results.jsonl only gains a row when a task FINISHES, so on a live run every
+# skill reads "never retrieved" until the first task lands — which is the same
+# false alarm as reporting an unstarted arm. The per-task retrieval log is
+# written as it happens, so count in-flight tasks from there.
+for log in (arm / "tasks").glob("*/retrievals.jsonl"):
+    here = set()
+    for line in log.read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        here.update(record.get("skills") or [])
+    for name in here:
+        if not retrieved[name]:      # a finished task already counted it
+            retrieved[name] += 1
+
+store = arm / "store/.phronix/skills"
+present = sorted(p.name for p in store.iterdir() if p.is_dir()) if store.is_dir() else []
+# Learned first — they are what the run produced — then any seeded skill that
+# actually got used. A seeded skill nobody touched is noise here.
+learned = [n for n in present if n not in bundled]
+seeded_used = [n for n in present if n in bundled and retrieved[n]]
+for name in learned + seeded_used:
+    kind = "+ skill" if name not in bundled else "  seeded"
+    n = retrieved[name]
+    if not n:
+        note = "never retrieved"
+    else:
+        note = f"retrieved by {n} task(s)"
+        if reused[name]:
+            note += f", reused {reused[name]}"
+        if cross[name]:
+            note += f" ({cross[name]} cross-repo)"
+    print(f"    {kind} {name:<44} {note}")
+PY
+      for tool in "$arm/store/.phronix/capabilities"/*.py; do
+        [ -f "$tool" ] || continue
+        base=$(basename "$tool" .py)
+        case "$base" in probe_*) kind="method" ;; *) kind="solution" ;; esac
+        echo "    + tool  $base ($kind)"
+      done
+    fi
+  done
+  python3 - "$RUN" <<'PY' 2>/dev/null
+import json, pathlib, sys, collections
+root = pathlib.Path(sys.argv[1])
+# ---- were the learned skills and tools ever used? ------------------------
+# Counted from the transcripts rather than retrievals.jsonl, because the
+# retrieval log only fills in when the MCP server is reached at all — and the
+# case worth catching is exactly the one where it never was.
+BUNDLED = pathlib.Path(
+    "/usr/WS2/haridev/phronix/src/phronix/.agents/skills")
+bundled = {p.name for p in BUNDLED.iterdir()} if BUNDLED.is_dir() else set()
+
+calls = collections.Counter()      # phronix tool -> times called
+named = collections.Counter()      # skill/tool asked for by name -> times
+per_arm = collections.Counter()    # arm -> phronix calls
+# Arms run one after another, so an arm with no transcripts has not started
+# yet. Reporting "nothing used the store" for it would be a false alarm — the
+# claim is only meaningful about an arm that actually ran.
+started, waiting = [], []
+for arm in sorted(p for p in root.iterdir() if (p / "tasks").is_dir()):
+    seen_any = False
+    for tr in (arm / "tasks").glob("*/attempt-*/*.jsonl"):
+        seen_any = True
+        for line in tr.read_text(errors="replace").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for block in ((event.get("message") or {}).get("content") or []):
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "tool_use":
+                    continue
+                name = block.get("name") or ""
+                if not name.startswith("mcp__phronix__"):
+                    continue
+                short = name[len("mcp__phronix__"):]
+                calls[short] += 1
+                per_arm[arm.name] += 1
+                args = block.get("input") or {}
+                for key in ("name", "skill", "query", "capability"):
+                    value = args.get(key)
+                    if isinstance(value, str) and value:
+                        named[value] += 1
+                        break
+    (started if seen_any else waiting).append(arm.name)
+
+print()
+print("  --- what actually called the store")
+for arm in waiting:
+    print(f"  {arm}: not started yet — arms run in sequence")
+# Only a phronix arm is expected to reach the store; a bare arm has no MCP
+# server by design, so its zero is the control, not a fault.
+expected = [a for a in started if "phronix" in a]
+if not calls and expected:
+    # The failure mode that hid for hours: server connected, nothing used it.
+    print(f"  {', '.join(expected)} ran but called no phronix tool — the "
+          f"store was written and never read")
+elif not calls:
+    if started:
+        print(f"  {', '.join(started)}: bare arm, no store by design")
+else:
+    total = sum(calls.values())
+    print(f"  {total} phronix tool call(s) across "
+          f"{', '.join(f'{a} {n}' for a, n in per_arm.most_common())}")
+    for tool, n in calls.most_common(12):
+        print(f"    {n:>5}  {tool}")
+    if named:
+        print("  asked for by name (* = learned this run, not seeded):")
+        for what, n in named.most_common(12):
+            mark = " " if what in bundled else "*"
+            print(f"    {n:>5} {mark} {what[:60]}")
+PY
+}
+
 detail() {
   local RUN="$1"
   echo "run: $RUN"
@@ -111,6 +427,11 @@ print(f\"  model: {d.get('model','?')} ({d.get('provider','?')})   node: {d.get(
 import json,sys
 d=json.load(open('$log'))
 print(f\"  launched: pid {d.get('pid')} on {d.get('host')} at {d.get('started')}\")" 2>/dev/null
+
+  # How fast the whole run is going, and whether anything learned is being
+  # read back. Both are properties of the run rather than of one arm, so they
+  # belong here — above the per-arm detail, not buried under it.
+  overall "$RUN"
 
   # How the model endpoint is actually behaving, from the server's own counters.
   #
@@ -150,14 +471,100 @@ base, run = sys.argv[1].rstrip("/"), sys.argv[2]
 root = base[:-3].rstrip("/") if base.endswith("/v1") else base
 
 
+def _key():
+    """The credential this endpoint wants, from the deployment that owns it.
+
+    NOT `OPENAI_API_KEY`: a self-hosted cluster ships its own key in its own
+    config, and the ambient variable belongs to a different service. Reporting
+    "needs OPENAI_API_KEY" for a gateway the user deployed themselves sends them
+    looking for a credential that was never involved.
+    """
+    for path in ("/usr/workspace/haridev/phronix/tuolumne-llm/cluster.json",):
+        try:
+            with open(path) as handle:
+                key = (json.load(handle).get("gateway") or {}).get("key")
+            if key:
+                return str(key)
+        except (OSError, ValueError):
+            continue
+    return os.environ.get("OPENAI_API_KEY", "")
+
+
 def fetch(path, timeout=10):
     request = urllib.request.Request(f"{root}{path}")
-    key = os.environ.get("OPENAI_API_KEY", "")
+    key = _key()
     if key:
         request.add_header("Authorization", f"Bearer {key}")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8", "replace")
 
+
+def _fleet():
+    """Every backend behind the gateway, from the cluster's own config.
+
+    The gateway does not publish llama.cpp's counters — it 404s on /metrics —
+    but the backends do, and they answer unauthenticated. Reading them directly
+    is the only way to see whether the FLEET is being used, as opposed to
+    whether one endpoint is reachable. That distinction is the whole question
+    when 32 GPUs are serving: a run can be healthy and still leave 24 of them
+    idle.
+    """
+    try:
+        with open("/usr/workspace/haridev/phronix/tuolumne-llm/cluster.json") as h:
+            cfg = json.load(h)
+    except (OSError, ValueError):
+        return []
+    gateway = cfg.get("gateway") or {}
+    # Only when this run is actually pointed at that cluster.
+    if f"{gateway.get('host')}:{gateway.get('port')}" not in base:
+        return []
+    return [(s.get("host"), s.get("port")) for s in cfg.get("servers") or []
+            if s.get("host") and s.get("port")]
+
+
+fleet = _fleet()
+if fleet:
+    import concurrent.futures
+
+    def one(hp):
+        host, port = hp
+        try:
+            with urllib.request.urlopen(
+                    f"http://{host}:{port}/metrics", timeout=6) as response:
+                text = response.read().decode("utf-8", "replace")
+        except Exception:
+            return None
+        got = {}
+        for line in text.splitlines():
+            if line.startswith("llamacpp:"):
+                name, _, value = line.partition(" ")
+                try:
+                    got[name] = float(value)
+                except ValueError:
+                    pass
+        return got
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
+        seen = [g for g in pool.map(one, fleet) if g is not None]
+
+    if seen:
+        busy = sum(1 for g in seen if g.get("llamacpp:requests_processing", 0) > 0)
+        inflight = sum(g.get("llamacpp:requests_processing", 0) for g in seen)
+        deferred = sum(g.get("llamacpp:requests_deferred", 0) for g in seen)
+        generated = sum(g.get("llamacpp:tokens_predicted_total", 0) for g in seen)
+        rate = sum(g.get("llamacpp:predicted_tokens_seconds", 0) for g in seen)
+        idle = len(seen) - busy
+        # The headline: how much of the fleet the run is actually using. A
+        # number nobody can act on is worse than none, and "24 idle" is the
+        # most actionable thing this display can say.
+        warn = ("  ** most of the fleet is idle — the run does not have enough "
+                "concurrent agents to fill it" if idle > len(seen) / 2 else "")
+        print(f"  fleet: {len(seen)}/{len(fleet)} backend(s) reachable, "
+              f"{busy} busy / {idle} idle{warn}")
+        print(f"         {inflight:.0f} request(s) in flight, {deferred:.0f} "
+              f"queued   |   aggregate {rate:,.0f} tok/s")
+        print(f"         {generated:,.0f} tokens generated across the fleet")
+    raise SystemExit
 
 try:
     raw = fetch("/metrics")
@@ -166,7 +573,7 @@ except (urllib.error.URLError, OSError) as exc:
     if code == 404:
         # Not every endpoint publishes metrics; that is not a fault.
         raise SystemExit
-    why = ("needs OPENAI_API_KEY" if code in (401, 403)
+    why = ("rejected the credential from the cluster config" if code in (401, 403)
            else f"{type(exc).__name__}: {exc}")
     print(f"  endpoint: {base} — {why}")
     raise SystemExit
@@ -272,9 +679,23 @@ COUNT
     echo
     echo "=== $name — ${passed:-0}/$done_n passed, $total started ==="
 
-    python3 - "$arm/results.jsonl" <<'PY' 2>/dev/null
+    # NOT 2>/dev/null. A syntax error in this block once removed every per-task
+    # row while the summary above it still printed, so the display looked whole
+    # and was missing the part anyone reads it for.
+    python3 - "$arm/results.jsonl" <<'PY' || echo "  (per-task table failed to render — see the error above)"
 import json, sys
 from collections import OrderedDict
+
+
+def human(seconds):
+    """45s | 12m30s | 2h05m — the same shape the shell side writes."""
+    s = int(seconds or 0)
+    if s >= 3600:
+        return f"{s // 3600}h{s % 3600 // 60:02d}m"
+    if s >= 60:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s}s"
+
 
 try:
     rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
@@ -360,10 +781,10 @@ for r in rows:
     money = f" ${cost:.2f}" if cost else ""
     line = (f"  {'PASS' if r.get('resolved') else 'fail'}  {r['instance_id']:<28} "
             f"{retried}steps={steps:<3} tok={tokens(fresh, solve)} "
-            f"time={solve_t:>5.0f}s{money}")
+            f"time={human(solve_t):>7}{money}")
     if research or learn:
         line += (f"   research tok={tokens(fresh_research, research)} "
-                 f"time={research_t:>5.0f}s"
+                 f"time={human(research_t):>7}"
                  + (f" ${research_cost:.2f}" if research_cost else "")
                  + (f" learn tok={learn:,}" if learn else ""))
     print(line)
@@ -405,6 +826,15 @@ for r in rows:
             # lines exist to show the PROGRESSION across tries, and a ratio per
             # cell turns a comparison of six numbers into one of twelve.
             head = f"        try{index} {outcome:<10}"
+            # Whether the failure is moving. A task that fails differently each
+            # try is converging; one that repeats itself is not, and pass/fail
+            # alone cannot tell them apart. Outside the research block, because
+            # it is true of every try whether or not that try researched.
+            trend = a.get("failure_trend") or ""
+            if trend == "moved":
+                head += "  moved"
+            elif trend == "same":
+                head += f"  SAME x{a.get('same_failure_count') or 2}"
             if research_here["s"] or research_here["tok"]:
                 head += (f" research {short(research_here['tok']):>6}"
                          f" {research_here['s']:>5.0f}s"
@@ -444,11 +874,11 @@ if rows:
     money = f" ${totals['cost']:.2f}" if totals["cost"] else ""
     line = (f"  ==    {'TOTAL ' + str(passed) + '/' + str(len(rows)) + ' passed':<28} "
             f"tok={tokens(totals['fresh'], totals['solve'])} "
-            f"time={totals['st']:>5.0f}s{money}")
+            f"time={human(totals['st']):>7}{money}")
     if totals["research"] or totals["learn"]:
         share = 100.0 * (totals["research"] + totals["learn"]) / grand if grand else 0
         line += (f"   research tok={tokens(totals['fresh_research'], totals['research'])} "
-                 f"time={totals['rt']:>5.0f}s"
+                 f"time={human(totals['rt']):>7}"
                  + (f" ${totals['rcost']:.2f}" if totals["rcost"] else "")
                  + f"  ({share:.0f}% of tokens on research)")
     print(line)
@@ -496,45 +926,105 @@ PY
         last=$(grep "\] " "$task_dir/trace.log" 2>/dev/null | tail -1)
         touched=$(stat -c '%Y' "$task_dir/trace.log" 2>/dev/null || echo "$now")
         idle=$(( now - touched ))
+
+        # How long this task has been going, which is the number that says
+        # whether it is worth waiting for. Silence alone cannot: 8s ago reads
+        # the same on a task two minutes in and one at forty.
+        #
+        # From the FIRST event the task traced, not the directory's timestamps
+        # — Lustre moves ctime on every append, so a task's own files report it
+        # as newly created for as long as it keeps writing.
+        started=$(grep "\] " "$task_dir/trace.log" 2>/dev/null | head -1 \
+                  | awk '{print $1}')
+        elapsed=""
+        if [ -n "$started" ]; then
+            began=$(date -d "$started" +%s 2>/dev/null || echo "")
+            if [ -n "$began" ]; then
+                # A run that crossed midnight parses as later today.
+                [ "$began" -gt "$now" ] && began=$(( began - 86400 ))
+                elapsed=$(human $(( now - began )))
+            fi
+        fi
         # kind and summary, from the line the task last wrote.
         rest=${last#*] }
         kind=${rest%% *}
+        what=${rest#"$kind"}
+
+        # A fanout stage names itself INSIDE the message, not in the stage.
+        #
+        # Serial stages trace as `research>tune:absolute-paths> looking around`,
+        # where the stage is its own field. The members of a fanout run under
+        # one parent stage and narrate through `on_call("[label] text")`, so the
+        # line arrives as `research>   [aspect-record:pattern_type_effect] list`
+        # — every one of five aspects showing an identical `research>` in the
+        # stage column, with the only distinguishing part buried in the message
+        # and then cut off by its width.
+        #
+        # Lift the bracketed label into the stage column where it belongs.
+        trimmed=${what#"${what%%[![:space:]]*}"}
+        case "$trimmed" in
+          "["*"]"*)
+            label=${trimmed%%]*}; label=${label#[}
+            what=${trimmed#*]}
+            kind="${kind}${label}>" ;;
+        esac
+
+        # A parallel member is a NUMBER, not its full name.
+        #
+        # `research>aspect:change_risk@gpt-oss-120b` spends most of the column
+        # on two things the reader does not need: an aspect name already
+        # visible in the message, and a backend alias that is an artefact of
+        # load-spreading. What is actually wanted is "which of the five is
+        # this", so the suffix becomes an index — `research>aspect#3`.
+        #
+        # Numbered by first appearance in this task's own trace, so the same
+        # aspect keeps the same number across refreshes and between the
+        # `aspect` and `aspect-record` lines that refer to it.
+        case "$kind" in
+          *:*)
+            head_=${kind%%:*}          # research>aspect
+            tail_=${kind#*:}           # change_risk@gpt-oss-120b>
+            tail_=${tail_%>}
+            base=${head_##*>}          # aspect
+            # `]` excluded too: a fanout member is traced as
+            # `[aspect:change_risk@gpt-oss-120b]`, so a class of just `[^ >]`
+            # captured the closing bracket and never matched the lifted label.
+            num=$(grep -oh "${base}:[^] >]*" "$task_dir/trace.log" 2>/dev/null \
+                  | sed "s/^${base}://" | awk '!seen[$0]++' \
+                  | grep -nxF -- "$tail_" 2>/dev/null | head -1 | cut -d: -f1)
+            kind="${head_}#${num:-?}>"
+            ;;
+        esac
+
         # Eighty characters, because that is what the describer writes. Cut at
         # 46 the line read "searching the source for def load_dot" — the width
         # threw away the half of the sentence that says what is being looked
         # for, which is the only part that distinguishes one line from the next.
-        what=$(echo "${rest#"$kind"}" | cut -c1-46)
+        what=$(echo "$what" | cut -c1-46)
+        # The stage column has to hold `research>aspect-record:pattern-type>`,
+        # so it is wide enough for that and the message keeps its 46.
+        kind=$(echo "$kind" | cut -c1-40)
+        # "Quiet", not "idle", and on a much longer fuse.
+        #
+        # This measures silence in the TRACE, which ticks only when an event
+        # arrives — a tool call returning, a text block completing. A single
+        # model turn produces nothing until it finishes, and at ~150 tok/s that
+        # is minutes. Measured: seven tasks marked idle while the fleet was
+        # serving exactly seven requests, so every one of them was mid-turn.
+        #
+        # The fleet line above is the real check: if tasks-in-flight matches
+        # requests-in-flight, nothing is stuck however quiet it looks. A stall
+        # shows up as tasks WITHOUT requests, which is how the stderr deadlock
+        # was found.
         mark=""
-        [ "$idle" -gt 300 ] && mark="  ** idle"
-        printf "    %-26s %-7s%-18s %-46s %4ss ago%s\n" \
-               "${name#*-}" "$try_mark" "$kind" "$what" "$idle" "$mark"
+        [ "$idle" -gt "${PHRONIX_QUIET_SECONDS:-900}" ] && mark="  ** quiet"
+        printf "    %-26s %-7s%-26s %-46s %7s (%s ago)%s\n" \
+               "${name#*-}" "$try_mark" "$kind" "$what" "$elapsed" \
+               "$(human "$idle")" "$mark"
       done
       echo "    follow one:  tail -f $arm/tasks/<task>/trace.log"
     fi
 
-    if [ -d "$arm/store/.phronix/skills" ]; then
-      have=$(ls "$arm/store/.phronix/skills" | wc -l)
-      tools=$(ls "$arm/store/.phronix/capabilities"/*.py 2>/dev/null | wc -l)
-      echo "  store: $have skill(s) — seeded $BASELINE, learned $(( have - BASELINE ))"\
-"   |   $tools tool(s)"
-      echo "  retrievals: $(cat "$arm"/tasks/*/retrievals.jsonl 2>/dev/null | wc -l)"
-
-      # What was learned, by name. A count says the loop ran; the names say
-      # what it produced, and a name is what makes a claim checkable — "learned
-      # 3" has been true of runs that wrote three fragments of one subject.
-      BUNDLED=/usr/WS2/haridev/phronix/src/phronix/.agents/skills
-      for skill in "$arm/store/.phronix/skills"/*/; do
-        name=$(basename "$skill")
-        [ -d "$BUNDLED/$name" ] && continue
-        echo "    + skill $name"
-      done
-      for tool in "$arm/store/.phronix/capabilities"/*.py; do
-        [ -f "$tool" ] || continue
-        base=$(basename "$tool" .py)
-        case "$base" in probe_*) kind="method" ;; *) kind="solution" ;; esac
-        echo "    + tool  $base ($kind)"
-      done
-    fi
     [ -f "$arm/trace.log" ] && echo "  trace: $arm/trace.log"
   done
 
@@ -582,6 +1072,8 @@ if per_task:
         print(f"  ({unpriced} task(s) reported no cost — that arm's harness "
               f"does not price its calls)")
 PY
+
+  assets "$RUN"
 }
 
 case "${1:-}" in

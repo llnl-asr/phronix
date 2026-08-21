@@ -6,6 +6,8 @@ description: >-
   leaves behind a plan plus the capabilities and skills that plan needs. Use at
   the start of any task the catalogue does not cover.
 model_level: level_4
+mode: primary        # invoked by name with --agent; a subagent cannot be
+                     # and opencode falls back to its default instead
 intrinsic: high
 effort: high
 tools:

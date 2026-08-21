@@ -1,6 +1,6 @@
 ---
 name: sympy-units-dimension-collection
-description: Where the dimensionless-exponent-in-Function bug lives and why
+description: Confirmed root cause and fix for sympy__sympy-24066: UnitSystem._collect_factor_and_dimension's Function branch must collapse dimensionless args to Dimension(1), like the Pow branch already does.
 subject: sympy-units-dimension-collection
 type: skill
 ---
@@ -9,27 +9,52 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `R1` | Rules | Do not make the Function branch require all args dimensionless |
-| `X1` | References | Root cause of sympy-24066: Function branch lacks Pow branch's dimensionless check |
-| `X2` | References | Existing test coverage gap for the dimensionless-Function case |
-
-
-
+| `I1` | Instructions | Untested edge case: multi-arg functions with mixed dimensionless args |
+| `R1` | Rules | Function branch in _collect_factor_and_dimension must normalize dimensionless args |
+| `R2` | Rules | Dimension equality in Add branch uses plain != — do not patch it for this bug class |
+| `X1` | References | Minimal repro command (no pytest needed) |
 
 ## Instructions
 
+### I1 — Untested edge case: multi-arg functions with mixed dimensionless args
+
+The verified fix collapses each function argument's dimension independently via a per-arg is_dimensionless check, consistent with how args are already collected per-arg. This was only exercised against the single-arg exp(...) case from the issue. Multi-arg functions with mixed dimensionless/non-dimensionless args (e.g. atan2) were not specifically tested — worth a quick check when implementing the real fix, though no reason is known why per-arg collapsing would be wrong.
+
 ## Rules
 
-### R1 — Do not make the Function branch require all args dimensionless
+### R1 — Function branch in _collect_factor_and_dimension must normalize dimensionless args
 
-When fixing the Function-branch dimensionless bug in UnitSystem._collect_factor_and_dimension, only coerce args whose dimension IS dimensionless (via is_dimensionless()) to Dimension(1); leave non-dimensionless args' dimensions unchanged. Do NOT add a strict check that raises when a Function's argument dimension is not dimensionless — sympy/physics/units/tests/test_quantities.py::test_factor_and_dimension (~line 353-356) asserts `SI._collect_factor_and_dimension(exp(pH)) == (1, volume/amount_of_substance)` where pH = -log(cH) and cH has dimension amount_of_substance/volume (not dimensionless). A strict version breaks this existing, currently-passing test. See refuted approach [[raise-on-non-dimensionless-function-arg]] and working approach [[coerce-dimensionless-in-function-branch]].
+In sympy/physics/units/unitsystem.py, UnitSystem._collect_factor_and_dimension (method starts ~line 152) has separate branches per expr type. The Pow branch already collapses a dimensionless exponent/base dimension to Dimension(1) via self.get_dimension_system().is_dimensionless(...). The Function branch (~lines 192-196, handling exp/log/sin/... any generic sympy Function) does NOT do this — it just forwards each arg's raw Dimension unchanged:
+
+```python
+elif isinstance(expr, Function):
+    fds = [self._collect_factor_and_dimension(arg) for arg in expr.args]
+    return (expr.func(*(f[0] for f in fds)), *(d[1] for d in fds))
+```
+
+Because is_dimensionless checks dimensional-dependency equivalence (not structural equality), a dimension like time/(capacitance*impedance) can be dimensionless without being literally Dimension(1). The sibling Add branch then compares dimensions with plain `!=` (structural), so a Function-wrapped dimensionless arg mismatches a literal Dimension(1) term and raises a spurious ValueError. Fix: in the Function branch, check is_dimensionless(d[1]) for each arg's collected dimension and substitute Dimension(1) when true, before returning. This mirrors the pattern already used in the sibling method get_dimensional_expr (same class, ~line 143-147) — note that method is NOT itself called from _collect_factor_and_dimension (a separate, unrelated code path for this bug), it's only the reference pattern to copy. Bug: sympy/sympy#24066.
+
+### R2 — Dimension equality in Add branch uses plain != — do not patch it for this bug class
+
+The Add branch of _collect_factor_and_dimension compares dimensions with plain !=, which does not account for is_dimensionless-equivalence (e.g. Dimension(1) vs a fully-reduced-but-not-identical dimensionless Dimension). This comparison is legitimate and should NOT be the fix point for bugs where a Function-wrapped dimensionless argument raises a spurious ValueError — the actual defect is upstream in the Function branch not normalizing dimensionless args to Dimension(1) (see R1 above). Patching Add's comparison instead would be a broader, less-minimal change that leaves other Function-branch callers still returning misleading dimensions.
 
 ## References
 
-### X1 — Root cause of sympy-24066: Function branch lacks Pow branch's dimensionless check
+### X1 — Minimal repro command (no pytest needed)
 
-In sympy/physics/units/unitsystem.py, UnitSystem._collect_factor_and_dimension has a generic `Function` branch (~lines 192-196) that returns `(expr.func(*factors), *(d[1] for d in fds))` for each arg's dimension verbatim — it never calls `self.get_dimension_system().is_dimensionless(...)` on arg dimensions. The `Pow` branch just above it (~lines 167-172) DOES call is_dimensionless() on the exponent's dimension and coerces to Dimension(1) when true. This asymmetry is the root cause: a Function (exp/log/etc.) applied to a dimensionless-but-not-literal-Dimension(1) argument (e.g. built from unit ratios like second/(farad*ohm)) keeps its non-trivial Dimension object, which then fails `==` against Dimension(1) in the Add branch and raises ValueError.
+Reproduces with plain python -c, no test runner required:
 
-### X2 — Existing test coverage gap for the dimensionless-Function case
+```python
+from sympy import exp
+from sympy.physics import units
+from sympy.physics.units.systems.si import SI
 
-sympy/physics/units/tests/test_quantities.py has three tests touching _collect_factor_and_dimension's Function/Pow handling: test_factor_and_dimension (general coverage, includes the non-dimensionless exp(pH) case above), test_issue_22164 (Pow with Quantity base/exponent, doesn't hit the Function branch), and test_issue_20288 (`1 + exp(u**2/v**2)` where u,v share dimension energy — u**2/v**2 already collapses to literal Dimension(1) via Pow/Mul BEFORE reaching the Function branch, so it currently passes but does NOT exercise the bug). None of these cover a Function applied to an argument that is dimensionless via is_dimensionless() but not the literal Dimension(1) object (e.g. second/(farad*ohm)), nor an Add combining Dimension(1) with a Function of such an argument — which is exactly the sympy-24066 issue repro. A new test covering this case is needed; test_issue_20288 is the closest existing analog but insufficient.
+expr = units.second / (units.ohm * units.farad)
+dim = SI._collect_factor_and_dimension(expr)[1]
+assert SI.get_dimension_system().is_dimensionless(dim)
+
+buggy_expr = 100 + exp(expr)
+SI._collect_factor_and_dimension(buggy_expr)
+```
+
+Raises: `ValueError: Dimension of "exp(second/(farad*ohm))" is Dimension(time/(capacitance*impedance)), but it should be Dimension(1)`.

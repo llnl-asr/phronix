@@ -9,20 +9,10 @@ the other.
 
 ## Lessons
 
-### L1 — --notes with punctuation-only tags (e.g. "???") silently ignored
+### L1 — --notes tags of pure punctuation (e.g. "???") not detected by fixme checker
 
-**2026-08-20** — Symptom: `pylint --notes="YES,???"` reports fixme (W0511) for "YES" comments but not "???" comments.
+**2026-08-21** — Symptom: `pylint --notes="YES,???"` reports W0511 for `# YES: ...` but not `# ???: ...`.
 
-Root cause: in `pylint/checkers/misc.py` `EncodingChecker.open()`, the regex built from `self.config.notes` ended every tag alternative with `\b` (word boundary), applied uniformly. `\b` only matches between a word char and non-word char, so it never matches after a tag that ends in punctuation (e.g. "???") — the alternative can never fire.
+Root cause: in pylint/checkers/misc.py `_fixme_pattern` construction, the regex used `\b` (word boundary) after the note-tag group: `rf"#\s*({notes})\b"`. `\b` only matches between a word char and non-word char, so it never matches after a tag made entirely of punctuation (no word chars at all) — the boundary condition is never satisfied.
 
-Fix: apply `\b` per-tag, conditional on whether the tag's last char is alphanumeric (`note[-1].isalnum()`), not once at the end of the whole alternation group. Tags ending in punctuation get no trailing boundary assertion; alphanumeric tags keep it (needed so "YES" doesn't match inside "YESTERDAY").
-
-```python
-notes = "|".join(
-    re.escape(note) + r"\b" if note[-1].isalnum() else re.escape(note)
-    for note in self.config.notes
-)
-regex_string = rf"#\s*({notes})"  # trailing \b removed from the outer group
-```
-
-Verified: fixed all 11 tests in tests/checkers/unittest_misc.py::TestFixme (10 regression + 1 target), no regressions.
+Fix: replace `\b` with a lookahead that accepts `:`, whitespace, or end-of-string: `rf"#\s*({notes})(?=(:|\s|\Z))"`. Apply to both branches (with and without `self.config.notes_rgx`). This is a targeted regex fix, verified against tests/checkers/unittest_misc.py::TestFixme (all 11 tests pass, including the new non_alphanumeric_codetag case).

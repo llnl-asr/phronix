@@ -13,6 +13,9 @@
 #                                             # every timing is contention, not work
 #   run-benchmark.sh --reuse                  # let it use earlier research
 #   run-benchmark.sh --carry-root DIR         # a store of its own, for a clean pair
+#   run-benchmark.sh --cluster tuolumne-llm/cluster.json   # the local GPU cluster:
+#                                             # endpoint, model, key and provider all
+#                                             # come from the cluster's own config
 #   run-benchmark.sh --harness opencode --provider matrix33 \
 #     --model nemotron-3.5 --base-url http://matrix33-pub.llnl.gov:8050/v1
 #
@@ -27,8 +30,12 @@ SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 HARNESS=claude
 TASKS=$BENCH/fast-6.txt
 NODE=""
+NODES=""
+TASKS_PER_NODE=""
 MODEL=""
 BASE_URL=""
+CLUSTER=""
+CLUSTER_DIRECT=""
 ARMS_MODE="--parallel-arms"
 TAG=""
 ARMS_OVERRIDE=""
@@ -47,8 +54,13 @@ while [ $# -gt 0 ]; do
     --phronix-only) PHRONIX_ONLY=1; shift;;
     --tasks)   TASKS="$2";   shift 2;;
     --node)    NODE="$2";    shift 2;;
+    --nodes)   NODES="$2";   shift 2;;
+    --tasks-per-node) TASKS_PER_NODE="$2"; shift 2;;
     --model)   MODEL="$2";   shift 2;;
     --base-url) BASE_URL="$2"; shift 2;;
+    --cluster) CLUSTER="${2:-}"; shift 2;;
+    --no-kill) NO_KILL=1; shift;;
+    --cluster-direct) CLUSTER_DIRECT=1; shift;;
     --serial-arms) ARMS_MODE=""; shift;;
     --tag)     TAG="$2";     shift 2;;
     --tries)   TRIES="$2";   shift 2;;
@@ -87,15 +99,36 @@ TAG=${TAG:-$HARNESS}
 
 # The node runs the containers. Default to whatever allocation is live: the
 # agent runs here, but podman must run on the compute node.
+# An explicit --nodes wins over the guess. Checked FIRST: the flux fallback
+# returns the allocation's whole hostlist as one bracket expression
+# ("tuolumne[1171,1183,...]"), which is not a host anything can ssh to, and it
+# was overriding a --nodes that named a real one.
+if [ -z "$NODE" ] && [ -n "$NODES" ]; then
+  # The first of the list is where single-node work goes; tasks are spread
+  # across all of them.
+  NODE=${NODES%%,*}
+fi
 if [ -z "$NODE" ]; then
   NODE=$(flux jobs -a --no-header 2>/dev/null | awk '$5=="R"{print $NF; exit}')
+  # A hostlist is not a host. Expand it and take the first.
+  case "$NODE" in
+    *\[*) NODE=$(flux hostlist -e "$NODE" 2>/dev/null | awk '{print $1}') ;;
+  esac
 fi
-[ -n "$NODE" ] || { echo "no running flux allocation; pass --node" >&2; exit 2; }
+[ -n "$NODE" ] || { echo "no running flux allocation; pass --node or --nodes" >&2; exit 2; }
 
 # Stop anything already running. Two runners writing one results file produce a
 # file that looks complete and is not.
-"$SCRIPTS/kill.sh" >/dev/null 2>&1
-rm -f "$BENCH/runs/.runner.lock"
+#
+# `--no-kill` is for the case where that reasoning does not apply: two runs on
+# DIFFERENT harnesses write different files and can share a node. Measured the
+# hard way — a second benchmark launched with the caller's own teardown skipped
+# still died here, because this kill is a separate one and matches on the run
+# path, so it stopped an unrelated run that was twenty minutes in.
+if [ -z "${NO_KILL:-}" ]; then
+  "$SCRIPTS/kill.sh" >/dev/null 2>&1
+  rm -f "$BENCH/runs/.runner.lock"
+fi
 
 OUT=$BENCH/runs/$TAG-$(date +%m%d-%H%M%S)
 echo "$OUT" > "$BENCH/CURRENT"
@@ -130,6 +163,10 @@ nohup "$VENV/bin/python" -u -m tests.benchmark.cli run \
   --arms "$ARMS" \
   --model "$MODEL" --provider "$PROVIDER" \
   ${BASE_URL:+--base-url "$BASE_URL"} \
+  ${NODES:+--nodes "$NODES"} \
+  ${TASKS_PER_NODE:+--tasks-per-node "$TASKS_PER_NODE"} \
+  ${CLUSTER:+--cluster "$CLUSTER"} \
+  ${CLUSTER_DIRECT:+--cluster-direct} \
   --node "$NODE" \
   --max-tries "$TRIES" --timeout "$TIMEOUT" \
   --until-pass --stall-limit 2 \

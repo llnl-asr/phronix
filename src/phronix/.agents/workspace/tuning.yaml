@@ -78,6 +78,56 @@ research:
   # a third means the diagnosis itself is wrong.
   max_refinements: 2
 
+  # Multiplier on every research stage budget.
+  #
+  # The budgets are measured against a model decoding ~1000 tok/s. A slower
+  # endpoint needs them scaled or every stage is cut off mid-investigation and
+  # the run is scored as though the research happened: a local 150 tok/s model
+  # truncated all six survey stages in a six-task run, at 300-400s against a
+  # 180s budget.
+  #
+  # Scale by the ratio of decode rates. 1000/150 is about 6; 5 leaves the
+  # slowest stages bounded rather than open-ended.
+  budget_scale: 1.0
+
+  # How far past its budget a stage may run before it is killed.
+  #
+  # The budget is a notification, not a deadline: killing at it threw away work
+  # that was still progressing, and research continued on partial findings while
+  # being scored as though it had not. The hard ceiling is what stops a wedged
+  # agent holding a task forever, so it is set where it means "this is broken"
+  # rather than "this is slow".
+  hard_timeout_multiple: 8
+
+  # How many ranked approaches get their own solution skill.
+  #
+  # Research ranks approaches against a figure of merit measured on a corpus it
+  # built itself — a proxy. The top-ranked one is the most promising, not the
+  # correct one, and until now it was the only one ever attempted. Writing a
+  # skill per candidate is what lets several be tried against the task's own
+  # tests, which is the only judge that settles it.
+  #
+  # 1 keeps the old behaviour. Above that costs one agent per extra candidate at
+  # write-up time and one container per candidate at trial time.
+  solution_candidates: 1
+
+  # Aspects a plan must produce before the investigation is worth running.
+  # Below this the fan-out has nothing to spread across.
+  min_aspects: 2
+
+  # Times to ask a planner again before salvaging its prose or falling back to
+  # generic angles. Each retry is a full agent invocation, traded against the
+  # investigation phase existing at all.
+  max_plan_retries: 2
+
+  # Extra attempts a task may earn by failing DIFFERENTLY each time.
+  #
+  # A failure that keeps changing is a task still converging, and cutting it off
+  # at the ceiling throws away the attempt most likely to land. Bounded, because
+  # "it changed again" can go on forever and a task needing six distinct wrong
+  # answers is not close.
+  extra_tries_when_moving: 2
+
   # Characters of diff an approach may carry as evidence. Larger than this is a
   # working tree with debris in it rather than a fix.
   change_limit: 4000
@@ -156,6 +206,41 @@ llm:
   # rejected window returns nothing, at no saving, and the run reports a
   # research pipeline that collapsed rather than an account that ran dry.
   wait_for_reset: true
+
+  # The working context an agent is given, whatever the server offers.
+  #
+  # Two ceilings exist and the tighter one wins. The SERVER's is hard: `-c` is
+  # divided by `--parallel`, so a request over the per-slot window ends with
+  # "reason": "length" mid-sentence and the task fails as "agent produced no
+  # patch". This one is ours, and it is about quality and speed:
+  #
+  #   * conversations that reached 155,548 tokens produced worse results;
+  #   * decode collapses as context grows — measured on one fleet at one moment,
+  #     96,900 tokens gave 107 tok/s, 104,724 gave 42, and 113,055 gave 25.
+  #
+  # A `limits.context` in the cluster's own config overrides this, for a
+  # deployment that knows better than either default.
+  context_cap: 65536
+
+  # Most tokens an agent may generate in one call.
+  output_cap: 32000
+
+  # Slots one task unit occupies on average.
+  #
+  # A unit is one task in one arm, and it is NOT asking the model continuously —
+  # it checks out repos, runs tests and evaluates patches in between. Sampled
+  # five times against a live 12-unit run: 2, 9, 8, 7, 6 requests in flight,
+  # mean 6.4. This is what makes "how many tasks fill the fleet" answerable:
+  # capacity / (duty_cycle x arms), not capacity / 1.
+  duty_cycle: 0.53
+
+  # Concurrent tasks one node can hold, whatever the fleet could serve.
+  #
+  # Each task is a container: cores for its test runs, and about two kernel
+  # session keys against a per-user quota of 200. This binds long before the
+  # GPUs do, and exceeding it fails as "unable to join session keyring: disk
+  # quota exceeded", which names neither containers nor keys.
+  max_tasks_per_node: 16
 
   # Longest single wait, in seconds. A five-hour window can be nearly that far
   # from resetting, and a job that silently sits for hours is worse than one

@@ -87,7 +87,15 @@ def _is_under_home(path: Path) -> bool:
 
 #: Node-local scratch, in preference order. Container images go here, NOT on the
 #: PFS — see :func:`image_store`.
-_LOCAL_SCRATCH = ("/tmp", "/var/tmp")
+#: Node-local scratch, best first.
+#:
+#: `/l/ssd` leads because it is the only one of these that is a real disk: 200 GB
+#: of xfs, verified to extract SWE-bench layers. `/tmp` on these nodes is
+#: **tmpfs**, so an image store there is held in RAM — 300 images at ~2.9 GB
+#: would be ~870 GB of node memory, on a machine with 501 GB. It stays in the
+#: list only as a last resort for hosts without /l/ssd, where a handful of
+#: images is still workable.
+_LOCAL_SCRATCH = ("/l/ssd", "/tmp", "/var/tmp")
 
 
 def image_store(explicit: Optional[str] = None) -> dict:
@@ -101,10 +109,19 @@ def image_store(explicit: Optional[str] = None) -> dict:
     with ``lsetxattr: operation not supported``. The ``vfs`` driver fails
     differently on lustre, with a permission error creating its pivot directory.
 
-    Local ``/tmp`` works, and has hundreds of GB. Images are a *cache* — fully
-    regenerable from the registry — so putting them on ephemeral local disk costs
-    a re-pull after a reboot and nothing else. Everything that is actual data,
-    and that a result depends on, still lives on the PFS via :func:`data_root`.
+    Measured on this site, both drivers fail on lustre for different reasons:
+    ``overlay`` on ``lsetxattr /boot: operation not supported``, and ``vfs`` on
+    ``setting up pivot dir: permission denied``. Space is not the constraint —
+    lustre has 100 TB of quota here — the POSIX semantics are.
+
+    So the store goes on ``/l/ssd``: 200 GB of node-local xfs, which extracts
+    layers correctly. NOT ``/tmp``, which is tmpfs on these nodes and would hold
+    the images in RAM.
+
+    Images are a *cache* — regenerable from the archives on the PFS — so a local
+    store costs a reload after a reboot and nothing else. Everything a result
+    depends on still lives on the PFS via :func:`data_root`, including the image
+    archives themselves.
 
     Overridable with ``PHRONIX_BENCH_IMAGES`` for a machine where the PFS does
     support xattrs.

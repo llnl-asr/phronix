@@ -34,7 +34,7 @@ Converters render each template into every harness's on-disk dialect:
 harness       output path                     frontmatter dialect
 ============  ==============================  ==========================================
 claude        .claude/agents/<name>.md        model: <class>; tools: comma string
-opencode      .opencode/agents/<name>.md      mode: subagent; model: provider/id;
+opencode      .opencode/agents/<name>.md      mode: primary|subagent; model: provider/id;
                                               permission: {"*": deny, <tool>: allow}
 copilot       .github/agents/<name>.agent.md  tools: YAML list; mcp as server/tool
 codex         .codex/agents/<name>.toml       TOML: developer_instructions, model,
@@ -288,9 +288,26 @@ def _opencode_tool_name(tool: str) -> str:
 
 
 def render_opencode(template: Dict[str, Any], level_models: Dict[str, str]) -> str:
+    """OpenCode's dialect: markdown with frontmatter, permissions not tools.
+
+    ``mode`` is declared by the template rather than fixed here. OpenCode
+    distinguishes a *primary* agent — one that can be asked for by name with
+    ``--agent`` — from a *subagent*, which can only be delegated to. Rendering
+    everything as a subagent made the name unusable:
+
+        agent "phronix-healer" is a subagent, not a primary agent.
+        Falling back to default agent
+
+    That warning goes to stderr and the run continues, so every invocation
+    silently got the default agent instead of the one it asked for — with none
+    of the tool scoping the template describes. It is a configuration error that
+    presents as an agent ignoring its instructions.
+    """
     fields: Dict[str, Any] = {
         "description": template["description"],
-        "mode": "subagent",
+        # Default subagent: most agents are delegated to, and a primary agent
+        # that nothing invokes by name is only clutter in the picker.
+        "mode": str(template.get("mode") or "subagent"),
         "model": level_models.get(template["model_level"], "UNRESOLVED"),
     }
     if template.get("tools"):

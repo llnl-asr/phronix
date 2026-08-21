@@ -181,12 +181,64 @@ def resolve_models(
         entry = config.get("harnesses", {}).get(harness, {})
         provider = str(entry.get("provider") or _DEFAULT_PROVIDER.get(harness, "claude"))
         resolved: Dict[str, str] = {"provider": provider}
+
+        # A harness may be pinned to ONE model for every level.
+        #
+        # `models.yaml` is a menu of level -> model per provider, which assumes
+        # the provider serves a range. An endpoint serving a single model does
+        # not: a benchmark run against one fleet wants that model at every
+        # level, and resolving through a column that does not mention it yields
+        # UNRESOLVED — or worse, a model id from a provider the endpoint never
+        # heard of, which the agent then asks for and fails on.
+        pinned = str(entry.get("model") or "")
+        if pinned:
+            for level in LEVELS:
+                resolved[level] = pinned
+            out[harness] = resolved
+            continue
+
         for level in LEVELS:
             spec = level_map.get(level) or {}
             providers = spec.get("providers") or {}
             resolved[level] = str(providers.get(provider) or spec.get("default") or "UNRESOLVED")
         out[harness] = resolved
     return out
+
+
+def pin_harness(harness: str, provider: str, model: str,
+                target_root: Optional[Path] = None) -> Dict[str, Any]:
+    """Point one harness at one provider and one model, for every level.
+
+    Written to ``active-models.json`` — the local choice — rather than to
+    ``models.yaml``, because which fleet is up today is not something to commit
+    for everyone.
+
+    Exists because a rendered agent carries its model, and a run whose agents
+    name a different endpoint than the run does is a run measuring something
+    nobody chose. The benchmark pins before it re-renders, so the definitions an
+    agent loads and the `--model` on its command line agree.
+    """
+    # Where the RENDERER will look, which is not where a bare call writes.
+    #
+    # `active_models_path()` returns the write layer with no argument and
+    # `<target_root>/active-models.json` with one — and the agent renderer
+    # always passes the project root. Pinning through the bare call therefore
+    # wrote a file nothing read: `summarize()` showed the new model while every
+    # rendered agent kept the old one, and `sync agents` reported "already
+    # current" because, from where it was looking, it was.
+    if target_root is None:
+        from phronix.layers import project_root
+
+        target_root = project_root() or None
+    path = active_models_path(target_root)
+    config = load_active_config(target_root)
+    config.setdefault("harnesses", {}).setdefault(harness, {})
+    config["harnesses"][harness]["provider"] = provider
+    config["harnesses"][harness]["model"] = model
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return {"status": "pinned", "harness": harness, "provider": provider,
+            "model": model, "file": str(path)}
 
 
 def summarize(target_root: Optional[Path] = None) -> List[str]:

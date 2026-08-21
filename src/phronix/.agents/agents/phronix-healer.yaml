@@ -4,6 +4,8 @@ description: >-
   harness wiring is broken, stale or missing. Use this the moment something in
   the system misbehaves — before working around it.
 model_level: level_3
+mode: primary        # invoked by name with --agent; a subagent cannot be
+                     # and opencode falls back to its default instead
 intrinsic: high
 effort: high
 tools:

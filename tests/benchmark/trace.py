@@ -31,7 +31,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 #: Tool-call outputs containing any of these are treated as failures worth
 #: surfacing. MCP tools return their errors in the payload rather than by
@@ -95,6 +95,24 @@ class Tracer:
         """
         self._local.task = str(task or "")
         self._local.directory = Path(directory) if directory else None
+
+    def binding(self) -> Tuple[str, Optional[Path]]:
+        """This thread's task binding, for handing to a worker thread."""
+        return (getattr(self._local, "task", ""),
+                getattr(self._local, "directory", None))
+
+    def adopt(self, binding: Tuple[str, Optional[Path]]) -> None:
+        """Take another thread's binding.
+
+        `working_on` is thread-local by design — one tracer serves the whole arm
+        and an attribute on it would be whichever task set it last. But a stage
+        that fans out runs in POOL threads, which inherit nothing, so its lines
+        arrived with no task name and reached only the arm log. Every per-task
+        trace was missing the work done on its behalf.
+        """
+        task, directory = binding
+        self._local.task = task
+        self._local.directory = directory
 
     def event(self, kind: str, summary: str, detail: Optional[List[str]] = None,
               data: Optional[Dict[str, Any]] = None) -> None:
@@ -171,7 +189,14 @@ class Tracer:
             # Only a plain stage name. A bracketed anything-else — a path, a
             # list, a matrix — is the message itself, and hoisting it would put
             # arbitrary text in a fixed-width column.
-            if close and name and len(name) <= 20 and name.replace("-", "").isalnum():
+            # Colons are part of a stage name: stages that fan out are labelled
+            # `survey:prior` / `survey:issue`, and rejecting the colon left the
+            # whole label in the message column with an empty stage beside it.
+            # A stage may name the model that answered it — `aspect:locate@
+            # gpt-oss-120b` — which happens when a real mixture is serving.
+            if (close and name and len(name) <= 40
+                    and name.replace("-", "").replace(":", "")
+                            .replace("@", "").replace(".", "").isalnum()):
                 stage = name
                 text = rest.lstrip(" ·:")
         self.event(f"{phase}>{stage + '>' if stage else ''}", text)

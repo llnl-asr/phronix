@@ -50,6 +50,23 @@ class RunConfig:
     model: str = "claude-sonnet-4.5"
     provider: str = "livai"
     base_url: str = "https://livai-api.llnl.gov/v1"
+    #: Credential for `base_url`, when it is not the ambient one. A self-hosted
+    #: cluster ships its own key in its own config, and OPENAI_API_KEY in the
+    #: shell belongs to a different service entirely.
+    api_key: str = ""
+    #: How many ranked plans to attempt in parallel. 1 keeps the old behaviour
+    #: of attempting only the top-ranked one.
+    attempt_candidates: int = 1
+    #: Comma-separated aliases that each resolve to one backend.
+    pinned_models: str = ""
+    #: Comma-separated models the endpoint serves. More than one makes the
+    #: candidate-generating stages a mixture.
+    models: str = ""
+    #: Comma-separated nodes to place tasks on. Empty means `node` alone.
+    nodes: str = ""
+    #: Concurrent tasks per node. Multiplied by the node count to size the
+    #: pool, so "8 per node" means the same thing whatever the node count is.
+    tasks_per_node: int = 0
     max_tries: int = 3
     timeout_s: int = 1800
     isolation: str = "podman"
@@ -259,14 +276,132 @@ def _attempt_history(workdir: Path, upto: int) -> List[Dict[str, Any]]:
                         for line in patch.splitlines()
                         if line.startswith("diff --git")})
         history.append({"attempt": index, "files": files,
-                        "empty": not patch.strip()})
+                        "empty": not patch.strip(),
+                        # What it actually changed, not just where. Files alone
+                        # cannot answer "have I already tried this", and a retry
+                        # that re-applies a failed edit is the most expensive
+                        # thing an attempt can do.
+                        "added": _patch_changes(patch)})
     return history
+
+
+def _tuned(key: str, fallback):
+    """A tuning value, falling back to what the code shipped with."""
+    try:
+        from phronix.tuning import get
+
+        return get(key, fallback)
+    except Exception:
+        return fallback
+
+
+#: Extra attempts a task may earn by failing differently each time. See
+#: `research.extra_tries_when_moving`.
+EXTRA_TRIES_WHEN_MOVING = _tuned("research.extra_tries_when_moving", 2)
+
+
+def _failure_signature(verdict: Optional[Dict[str, Any]]) -> str:
+    """What failed, as a comparable fingerprint.
+
+    Two attempts that fail the same tests for the same reason should compare
+    equal; two that fail differently should not. So the signature is the target
+    tests still failing, the literals the assertions wanted, and how many now
+    pass — and NOT the patch, because a different patch failing identically is
+    the case that matters most: the idea did not move.
+
+    A changing signature is the good sign. It means the attempt altered the
+    outcome, which is what "progress" means here even when the task is not yet
+    solved.
+    """
+    if not verdict:
+        return ""
+    failing = sorted(verdict.get("fail_to_pass_failing") or [])
+    wanted = sorted(_missing_literals(verdict.get("failure_detail") or ""))
+    passed = verdict.get("fail_to_pass_passed")
+    return "|".join(["t:" + ",".join(failing),
+                     "w:" + ",".join(wanted),
+                     f"p:{passed}"])
+
+
+def _slug(text: str) -> str:
+    """A filesystem-safe name for a trial directory."""
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")[:40] or "plan"
+
+
+def _patch_changes(patch: str) -> List[str]:
+    """The lines a patch adds, normalised for comparison.
+
+    Whitespace and diff markers are dropped so that a re-indented or re-ordered
+    version of the same change compares equal to it — which is what a retry
+    usually produces when it believes the idea was right and the execution was
+    off.
+    """
+    out: List[str] = []
+    for line in (patch or "").splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        text = " ".join(line[1:].split())
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _repeats_earlier(patch: str, history: List[Dict[str, Any]]) -> int:
+    """Which earlier attempt this patch essentially repeats, or 0.
+
+    Judged by overlap of added lines rather than equality: an attempt that
+    re-applies most of a failed change plus a cosmetic difference is repeating
+    it, and that is precisely the case a strict comparison misses.
+    """
+    changes = set(_patch_changes(patch))
+    if len(changes) < 2:
+        return 0
+    for entry in history:
+        earlier = set(entry.get("added") or [])
+        if not earlier:
+            continue
+        shared = len(changes & earlier)
+        if shared >= max(2, int(0.8 * min(len(changes), len(earlier)))):
+            return int(entry.get("attempt") or 0)
+    return 0
+
+
+def _pytest_probe(container, timeout: int = 300):
+    """(has_pytest, why) — and the two failure modes are NOT the same thing.
+
+    This returned a bare bool on ``returncode == 0``, which conflates "the
+    testbed has no pytest" with "the probe did not finish". They are different
+    facts with different remedies, and `Runtime.run` returns non-zero for BOTH:
+    on timeout it kills the process group and reports a non-zero code, exactly
+    like a missing module.
+
+    That conflation cost a task. `pallets__flask-5063` was graded on a node
+    running twelve containers; the probe came back non-zero, pytest was
+    "installed" (pip: *Requirement already satisfied*), the probe came back
+    non-zero again, and the attempt was written off as `runner_failed` — which
+    aborts the task without a further try. The image had pytest 7.3.0 the whole
+    time, and a direct probe of that same image returns it in under a second.
+
+    The timeout is also raised from 120s: the first `python -m pytest --version`
+    in a cold container pays interpreter start and plugin discovery, and 120s
+    was measured being hit under load.
+    """
+    probe = container.exec("cd /testbed && python -m pytest --version",
+                           timeout=timeout)
+    if probe.returncode == 0:
+        return True, ""
+    detail = ((probe.stdout or "") + (probe.stderr or "")).strip()
+    # Say which of the two it was, so the caller can act differently.
+    if "No module named" in detail or "not found" in detail:
+        return False, f"pytest is genuinely absent: {detail[-400:]}"
+    return False, f"the probe did not answer (rc={probe.returncode}): {detail[-400:]}"
 
 
 def _has_pytest(container) -> bool:
     """Can this container actually run pytest? Asked, not assumed."""
-    probe = container.exec("cd /testbed && python -m pytest --version", timeout=120)
-    return probe.returncode == 0
+    return _pytest_probe(container)[0]
 
 
 def _test_files(instance: Dict[str, Any], names: Iterable[str]) -> List[str]:
@@ -321,6 +456,35 @@ def _runner_failure(instance: Dict[str, Any], fail_to_pass: Sequence[str],
     }
 
 
+def _missing_literals(detail: str) -> List[str]:
+    """Strings a containment assertion demanded and did not get.
+
+    pytest renders these as `assert "Subdomain" in 'Domain  Endpoint ...'`, so
+    both halves are on the line: what was wanted and what was produced. The
+    wanted half is the actionable one and the agent never sees the test source,
+    so it is worth lifting out of six thousand characters of traceback.
+
+    Only literals genuinely absent from the produced text are returned — a line
+    can mention a string for other reasons, and a false "this is missing" would
+    send the next attempt after the wrong thing.
+    """
+    import re
+
+    found: List[str] = []
+    for line in (detail or "").splitlines():
+        if "assert" not in line or " in " not in line:
+            continue
+        match = re.search(r"""assert\s+["']([^"']{2,60})["']\s+in\s+(.+)$""", line)
+        if not match:
+            continue
+        wanted, haystack = match.group(1), match.group(2)
+        if wanted in haystack:
+            continue                      # not the failing half of the assert
+        if wanted not in found:
+            found.append(wanted)
+    return found
+
+
 def _feedback_note(attempt_index: int, previous: Dict[str, Any]) -> str:
     """What the last attempt got wrong, written for the next one to read.
 
@@ -355,6 +519,58 @@ def _feedback_note(attempt_index: int, previous: Dict[str, Any]) -> str:
     if detail:
         lines += ["## Test output", "", "```", detail[:6000], "```", ""]
 
+    # The exact strings the tests want and did not find.
+    #
+    # A containment assertion says precisely what is missing, and the agent
+    # cannot read the grading tests — so it reasons from "the test still fails"
+    # and improves the mechanism instead. Measured twice, on two different
+    # models: `flask routes` gained a correct, conditional, host-vs-subdomain
+    # column named "Domain" while the tests asserted "Subdomain" and "Host".
+    # Three attempts refined the logic and none renamed the header, because the
+    # string literal never became a suspect.
+    # Did the last attempt change anything? This is the first thing the next
+    # attempt needs to know, so it goes near the top.
+    same_count = int(previous.get("same_failure_count") or 0)
+    if previous.get("failure_moved"):
+        lines += ["## This is progress", "",
+                  "Your last change made the task fail DIFFERENTLY — different "
+                  "tests, different missing text, or more of them passing. That "
+                  "means the change had an effect and the diagnosis is roughly "
+                  "right. Keep going down this line: refine it, do not abandon "
+                  "it.", ""]
+    elif same_count >= 3:
+        lines += ["## Stop. Three attempts have failed IDENTICALLY", "",
+                  "Not similar — identical: the same tests, failing for the same "
+                  "reason, with the same text missing. Nothing you have changed "
+                  "has altered the outcome at all, so the code you are editing is "
+                  "probably not the code that produces this behaviour.", "",
+                  "Do not edit anything until you have: run the failing test and "
+                  "read its actual output; found which function produces that "
+                  "output; and confirmed by a print or a breakpoint that your "
+                  "edits are even executed on this path. If they are, then the "
+                  "test wants something other than what you assumed.", ""]
+    elif same_count == 2:
+        lines += ["## The failure has not moved", "",
+                  "This attempt failed in exactly the same way as the last one — "
+                  "same tests, same reason, same text missing. A second identical "
+                  "failure means the idea is wrong, not the execution.", "",
+                  "PIVOT. State what you assumed, name the assumption that must "
+                  "be false given this result, and take a different approach — a "
+                  "different file, a different mechanism, or a different reading "
+                  "of what the test wants. Refining the same change again will "
+                  "produce the same failure a third time.", ""]
+
+    missing = _missing_literals(detail)
+    if missing:
+        lines += ["## Exact text the tests looked for and did NOT find", ""]
+        lines += [f"- `{literal}`" for literal in missing[:8]]
+        lines += ["",
+                  "These come from `assert \"...\" in <output>` failures, so the "
+                  "string itself is what is absent — not the logic that produces "
+                  "it. If your change emits a near-miss (a different word for the "
+                  "same concept, different capitalisation, a synonym), fix the "
+                  "literal before touching anything else.", ""]
+
     history = previous.get("attempt_history") or []
     tried = sorted({f for h in history for f in (h.get("files") or [])})
     if len(history) >= 2 and tried:
@@ -367,6 +583,24 @@ def _feedback_note(attempt_index: int, previous: Dict[str, Any]) -> str:
                   "could produce this behaviour — the helper being called, the "
                   "caller, or where the inputs are normalised — rather than "
                   "refining the same change again.", ""]
+
+    # The edits themselves, so "do not repeat this" is checkable rather than
+    # exhortatory. Locations alone let an attempt conclude "different line, so
+    # different idea" while re-applying the same failed change.
+    already = []
+    for entry in history:
+        for line in (entry.get("added") or [])[:6]:
+            if line not in already:
+                already.append(line)
+    if already:
+        lines += ["## Edits already tried and already failed", ""]
+        lines += [f"- `{line[:120]}`" for line in already[:14]]
+        lines += ["",
+                  "Your change must not be one of these again. If your diagnosis "
+                  "leads you back to the same edit, the diagnosis is what is "
+                  "wrong — say what NEW evidence distinguishes your version from "
+                  "the one that already failed, and if there is none, look "
+                  "elsewhere.", ""]
 
     lines += ["Diagnose why the previous approach was insufficient before "
               "editing anything."]
@@ -543,9 +777,18 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
     # Installed into the CONTAINER's env, never the host's: the instance pins
     # the dependency versions its tests are written against, and running them
     # anywhere else measures a different library.
-    if not _has_pytest(container):
+    present, why = _pytest_probe(container)
+    if not present and "did not answer" in why:
+        # A probe that timed out says nothing about the environment, so asking
+        # again is the cheapest way to tell a loaded node from a broken image —
+        # and installing over a working pytest is pure cost.
         if on_event:
-            on_event("testbed has no pytest — installing it into the container")
+            on_event(f"pytest probe was inconclusive, asking again — {why[:120]}")
+        present, why = _pytest_probe(container, timeout=600)
+    if not present:
+        if on_event:
+            on_event("testbed has no pytest — installing it into the container"
+                     f" ({why[:120]})")
         # Offline first, from the wheelhouse mounted at /wheels.
         #
         # A run that needs the network to score a test is a run that fails when
@@ -556,12 +799,21 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
         install = container.exec(
             "cd /testbed && (python -m pip install --quiet --no-index "
             "--find-links=/wheels pytest 2>&1 || python -m pip install --quiet "
-            "--disable-pip-version-check pytest 2>&1) | tail -3", timeout=300)
-        if not _has_pytest(container):
+            "--disable-pip-version-check --root-user-action=ignore pytest 2>&1)",
+            timeout=300)
+        present, why = _pytest_probe(container, timeout=600)
+        if not present:
+            # Report what the PROBE said, not what pip printed last.
+            #
+            # This quoted the tail of pip's output, which on a successful
+            # install is the "Running pip as the 'root' user" warning — so the
+            # recorded cause of a lost task was a warning about something that
+            # had worked, with the actual reason discarded by `tail -3`.
             return _runner_failure(
                 instance, fail_to_pass, pass_to_pass,
-                f"the testbed environment has no pytest and it could not be "
-                f"installed: {(install.stdout + install.stderr).strip()[-300:]}",
+                f"the testbed environment cannot run pytest: {why} "
+                f"(install said: "
+                f"{(install.stdout + install.stderr).strip()[-200:]})",
                 on_event)
 
     # ``--tb=short``, not ``--tb=no``. The traceback is the only part of the
@@ -736,9 +988,51 @@ class Runner:
             f"ipc://{Path(config.out).resolve() / 'learning.sock'}")
 
         storage = container_storage(data_root(config.data_root or None))
-        self.runtime = (Runtime.detect(config.isolation, storage=storage,
-                                       flux_job=config.flux_job, node=config.node)
-                        if config.isolation in ("podman", "docker") else None)
+
+        # One runtime per node, and a task's containers go to the node it was
+        # assigned. Spreading tasks across nodes is the only way past a single
+        # node's core count, and container work is what actually consumes those
+        # cores — the agents mostly wait on the model.
+        #
+        # `runtime` below is a property reading thread-local state, because a
+        # task is a thread and the alternative is threading the runtime through
+        # every call between `run_task` and the container session.
+        self._local = threading.local()
+        nodes = self.nodes()
+        if config.isolation in ("podman", "docker"):
+            self._runtimes = [
+                Runtime.detect(config.isolation, storage=storage,
+                               flux_job=config.flux_job, node=node)
+                for node in (nodes or [config.node])]
+        else:
+            self._runtimes = []
+
+    def nodes(self) -> List[str]:
+        """Every node tasks may be placed on, in assignment order."""
+        listed = [n.strip() for n in str(self.config.nodes or "").split(",")
+                  if n.strip()]
+        if listed:
+            return listed
+        return [self.config.node] if self.config.node else []
+
+    @property
+    def runtime(self):
+        """The runtime for the calling task's node.
+
+        Falls back to the first when nothing has been assigned — setup and
+        preflight run before any task exists and must still be able to reach a
+        container.
+        """
+        chosen = getattr(self._local, "runtime", None)
+        if chosen is not None:
+            return chosen
+        return self._runtimes[0] if self._runtimes else None
+
+    def runtime_for(self, order: int):
+        """Round-robin, so consecutive tasks land on different nodes."""
+        if not self._runtimes:
+            return None
+        return self._runtimes[order % len(self._runtimes)]
 
     def manifest(self) -> Dict[str, Any]:
         from phronix import __version__
@@ -948,7 +1242,23 @@ class Runner:
 
     def run_arm(self, arm_name: str) -> List[TaskResult]:
         arm = build_arm(arm_name, model=self.config.model, provider=self.config.provider,
-                        base_url=self.config.base_url, timeout_s=self.config.timeout_s)
+                        base_url=self.config.base_url, timeout_s=self.config.timeout_s,
+                        api_key=self.config.api_key)
+        # Hand the arm every model the fleet serves, so stages that generate
+        # candidates can spread across them.
+        if getattr(self.config, "models", ""):
+            arm.models = [m.strip() for m in str(self.config.models).split(",")
+                          if m.strip()]
+        # Aliases that pin a conversation to one backend. Without them every
+        # turn re-processes the whole history on whichever server it lands on.
+        if getattr(self.config, "pinned_models", ""):
+            arm.pinned_models = [m.strip()
+                                 for m in str(self.config.pinned_models).split(",")
+                                 if m.strip()]
+        # Which arm this is, so a task's two arms pin to DIFFERENT backends.
+        # They share no prefix, and on a one-slot server sharing a backend
+        # means queueing behind each other.
+        arm.arm_name = arm_name
         arm.include_hints = self.config.include_hints
         arm.reveal_target_tests = self.config.reveal_target_tests
         arm_dir = self.out / arm_name
@@ -1042,7 +1352,14 @@ class Runner:
                 continue
             planned.append((order, instance))
 
-        width = max(1, int(getattr(self.config, "parallel_tasks", 1) or 1))
+        # `--tasks-per-node` scales with the fleet; `--parallel-tasks` is a flat
+        # number. The per-node form is the one that stays correct when nodes are
+        # added, so it wins where both are given.
+        per_node = int(getattr(self.config, "tasks_per_node", 0) or 0)
+        if per_node > 0:
+            width = per_node * max(1, len(self.nodes()))
+        else:
+            width = max(1, int(getattr(self.config, "parallel_tasks", 1) or 1))
         if width > 1:
             # Said once, at the top, because a number that is only in the
             # manifest is a number nobody reads before believing the report.
@@ -1126,6 +1443,14 @@ class Runner:
     def run_task(self, arm: Arm, instance: Dict[str, Any], order: int,
                  store_root: Path, arm_dir: Path, ledger: Ledger,
                  tracer: Optional[Tracer] = None) -> TaskResult:
+        # Which node this task's containers run on, for the life of the thread.
+        self._local.runtime = self.runtime_for(order)
+        # And which backend its conversation belongs to. Set on the arm because
+        # Claude Code takes its model from the environment rather than argv.
+        try:
+            arm.pinned_for_env = arm.model_for_task(instance)
+        except Exception:
+            arm.pinned_for_env = ""
         instance_id = instance["instance_id"]
         repo = instance.get("repo", "")
         result = TaskResult(instance_id=instance_id, repo=repo, arm=arm.name, order=order)
@@ -1168,6 +1493,9 @@ class Runner:
         isolation_failures = 0
         seen_patches: set = set()
         last_verdict: Optional[Dict[str, Any]] = None
+        # How the FAILURE has moved, attempt to attempt. Progress is a changing
+        # signature, not only a passing test.
+        signatures: List[str] = []
         previous_verdict: Optional[Dict[str, Any]] = None
 
         for attempt_index in range(1, ceiling + 1):
@@ -1195,6 +1523,39 @@ class Runner:
                 arm.tasks_without_environment = 0
             result.attempts.append(attempt)
             last_verdict = attempt.verdict
+            signature = _failure_signature(attempt.verdict)
+            if signature:
+                same = signatures.count(signature)
+                # Recorded on the attempt, not only fed back to the next one:
+                # pass/fail cannot show the difference between a task closing in
+                # and a task going in circles, and that difference is what says
+                # whether more attempts are worth buying.
+                attempt.same_failure_count = same + 1
+                # The arm reads this when it diagnoses the next attempt: two
+                # identical failures turn diagnosis from "what was missing" into
+                # "what did both attempts assume".
+                arm.same_failure_count = same + 1
+                attempt.failure_trend = ("" if not signatures
+                                         else "same" if same else "moved")
+                signatures.append(signature)
+                # Handed forward on the verdict, so the next attempt's feedback
+                # can say whether anything moved.
+                if last_verdict is not None:
+                    last_verdict = dict(last_verdict)
+                    last_verdict["same_failure_count"] = same + 1
+                    last_verdict["failure_moved"] = bool(signatures[:-1]) and same == 0
+                if tracer:
+                    if same == 0 and len(signatures) > 1:
+                        tracer.event("progress",
+                                     f"try {attempt_index} failed DIFFERENTLY "
+                                     "from the last one — the change had an "
+                                     "effect; worth another attempt")
+                    elif same >= 1:
+                        tracer.event("no-progress",
+                                     f"try {attempt_index} failed exactly as "
+                                     f"try {attempt_index - 1 - same} did "
+                                     f"({same + 1}x identical) — the approach "
+                                     "has to change, not the details")
             if tracer and attempt.error:
                 # An attempt that raised reports 0 steps and 0 tokens, which is
                 # indistinguishable from an agent that ran and did nothing. The
@@ -1285,6 +1646,21 @@ class Runner:
 
             repeated = patch_digest in seen_patches
             seen_patches.add(patch_digest)
+
+            # A failure that keeps changing is a task still converging, and
+            # cutting it off at the ceiling throws away the attempt most likely
+            # to land. A failure that repeats identically is the opposite: more
+            # attempts of the same kind cannot help.
+            moved = len(signatures) > 1 and signatures[-1] != signatures[-2]
+            if moved and ceiling < self.config.max_tries + EXTRA_TRIES_WHEN_MOVING:
+                ceiling += 1
+                if tracer:
+                    tracer.event("budget",
+                                 f"the failure moved, so try {ceiling} is "
+                                 "allowed — progress buys an attempt")
+            if len(signatures) >= 2 and signatures[-1] == signatures[-2]:
+                # Identical twice is the pivot signal, whatever the patch says.
+                stalls += 1
 
             if repeated:
                 stalls += 1
@@ -1397,6 +1773,75 @@ class Runner:
                 self._sync_research_session(quiet=True)
         return result
 
+    def _race_plans(self, arm, instance, store_root, attempt_dir, plans,
+                    baseline_for, tracer=None, narrate=None):
+        """Attempt every plan concurrently; return the best patch and the scores.
+
+        "Best" is measured against the task's own target tests, which is the
+        only judge that counts: a plan that makes two of them pass beats one
+        that makes none, whatever the research metric said about it.
+
+        Each trial gets its own container and its own working directory, so they
+        cannot see or disturb each other's edits.
+        """
+        from .isolation import ContainerSession
+
+        results: List[Dict[str, Any]] = []
+        lock = threading.Lock()
+
+        def try_plan(job):
+            index, plan = job
+            work = attempt_dir / f"trial-{index}-{_slug(plan['name'])}"
+            work.mkdir(parents=True, exist_ok=True)
+            say = ((lambda text: narrate(f"[{plan['name']}] {text}"))
+                   if narrate else None)
+            try:
+                with baseline_for(arm.mounts(store_root)) as trial_container:
+                    got = arm.generate(instance, store_root, work,
+                                       trial_container, on_call=say, plan=plan)
+                    (work / "patch.diff").write_text(got.patch or "")
+                    base = measure_baseline(trial_container, instance,
+                                            timeout_s=self.config.timeout_s)
+                    verdict = evaluate(
+                        trial_container, instance, got.patch,
+                        known_failures=base.get("pre_existing_failures"))
+            except Exception as exc:                       # one trial, not all
+                with lock:
+                    results.append({"plan": plan["name"], "error": str(exc)[:200],
+                                    "score": (-1, 0), "outcome": None})
+                return
+            score = (int(verdict.get("fail_to_pass_passed") or 0),
+                     int(verdict.get("pass_to_pass_passed") or 0))
+            with lock:
+                results.append({"plan": plan["name"], "outcome": got,
+                                "verdict": verdict, "score": score,
+                                "resolved": bool(verdict.get("resolved"))})
+            if tracer:
+                tracer.event("trial",
+                             f"{plan['name']}: "
+                             f"{'SOLVED' if verdict.get('resolved') else 'failed'} "
+                             f"({score[0]} target test(s) passing)")
+
+        with ThreadPoolExecutor(max_workers=len(plans)) as pool:
+            list(pool.map(try_plan, list(enumerate(plans, 1))))
+
+        ranked = sorted(results, key=lambda r: r["score"], reverse=True)
+        winner = next((r for r in ranked if r.get("outcome") is not None), None)
+        if tracer:
+            summary = ", ".join(f"{r['plan']}={r['score'][0]}" for r in ranked)
+            solved = [r["plan"] for r in ranked if r.get("resolved")]
+            tracer.event("trials",
+                         f"{len(plans)} plan(s) tried: {summary}"
+                         + (f" — SOLVED by {', '.join(solved)}" if solved
+                            else " — none solved it; taking the furthest"))
+        trials = [{"plan": r["plan"], "target_tests_passed": r["score"][0],
+                   "resolved": bool(r.get("resolved")),
+                   "error": r.get("error", "")} for r in ranked]
+        if winner is None:
+            return AttemptOutcome(error="every plan trial failed to run"), trials
+        return winner["outcome"], trials
+
+
     def run_attempt(self, arm: Arm, instance: Dict[str, Any], attempt_index: int,
                     store_root: Path, workdir: Path, retrieval_log: Path,
                     attempt: Attempt,
@@ -1418,6 +1863,23 @@ class Runner:
 
         attempt_dir = workdir / f"attempt-{attempt_index}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
+
+        # Carry the task binding into whatever thread narrates.
+        #
+        # `working_on` is thread-local, and stages that fan out run in pool
+        # threads which inherit nothing — so their lines arrived with no task
+        # name and reached only the arm log. Every per-task trace was missing
+        # exactly the work that had been parallelised.
+        #
+        # Defined at method scope rather than inside the branch that first
+        # needed it: a helper that exists only when one conditional ran is a
+        # NameError waiting for the run where it does not.
+        bound = tracer.binding() if tracer else None
+
+        def _say(phase: str, text: str) -> None:
+            if bound is not None:
+                tracer.adopt(bound)
+            tracer.step(phase, text)
         # Carried on the arm, not through os.environ. With arms running
         # concurrently, a process-global variable would be overwritten by
         # whichever arm started its task last, and both arms' retrievals — the
@@ -1496,7 +1958,7 @@ class Runner:
                                  f"{'initial' if attempt_index <= 1 else 'revision'} "
                                  f"pass for try {attempt_index}",
                                  getattr(arm, "research_timeout_s", None))
-                narrate = ((lambda text: tracer.step("research", text))
+                narrate = ((lambda text: _say("research", text))
                            if tracer else None)
                 research = (None if skip else
                             arm.research(instance, store_root, attempt_dir,
@@ -1578,23 +2040,65 @@ class Runner:
                 baseline = baseline_failures(
                     container, instance,
                     cache_dir=Path(self.config.data_root or ".") / "baselines",
-                    on_event=((lambda text: tracer.step("evaluate", text))
+                    on_event=((lambda text: _say("evaluate", text))
                               if tracer else None))
 
                 if tracer:
                     tracer.begin("attempt",
                                  f"agent working on try {attempt_index}",
                                  self.config.timeout_s)
-                narrate_attempt = ((lambda text: tracer.step("attempt", text))
+                narrate_attempt = ((lambda text: _say("attempt", text))
                                    if tracer else None)
-                outcome = arm.generate(instance, store_root, attempt_dir,
-                                       container, on_call=narrate_attempt)
+                plans = []
+                if int(getattr(self.config, "attempt_candidates", 1) or 1) > 1:
+                    plans = arm.candidate_plans(
+                        store_root, arm.research_topic(instance),
+                        int(self.config.attempt_candidates))
+
+                if len(plans) > 1:
+                    # Try every ranked plan against the REAL tests, at once.
+                    #
+                    # Research ranks approaches against a figure of merit
+                    # measured on a corpus it built itself — a proxy. The plan
+                    # that proxy ranks first is the most promising, not the
+                    # correct one, and until now it was the only one ever
+                    # attempted. The fleet has 32 replicas and attempts are
+                    # independent, so N plans cost wall-clock once instead of N
+                    # times, and the target tests settle which proxy was right.
+                    outcome, trials = self._race_plans(
+                        arm, instance, store_root, attempt_dir, plans,
+                        baseline_for=session, tracer=tracer,
+                        narrate=narrate_attempt)
+                    attempt.trials = trials
+                    # Merge what worked, or question what they all assumed.
+                    arm.reconcile_trials(instance, store_root, attempt_dir,
+                                         trials, on_call=narrate_attempt)
+                else:
+                    outcome = arm.generate(instance, store_root, attempt_dir,
+                                           container, on_call=narrate_attempt)
                 if tracer:
                     tracer.begin("evaluate", "running the instance's tests")
 
         (attempt_dir / "patch.diff").write_text(outcome.patch or "")
         (attempt_dir / "agent.json").write_text(
             json.dumps({"raw": outcome.raw, "error": outcome.error}, indent=2))
+
+        # Did this attempt just re-apply a change that already failed?
+        #
+        # Recorded rather than blocked: the patch exists and evaluating it is
+        # cheap, and a repeat that unexpectedly passes is information too. What
+        # matters is that it stops being invisible — three attempts producing
+        # the same edit read as three independent failures in the results, and
+        # the retry budget is spent believing the idea is still untested.
+        repeat_of = _repeats_earlier(outcome.patch or "",
+                                     getattr(arm, "attempt_history", []) or [])
+        if repeat_of:
+            attempt.repeats_attempt = repeat_of
+            if tracer:
+                tracer.event("repeat",
+                             f"try {attempt_index} re-applies the change from "
+                             f"try {repeat_of}, which already failed — the "
+                             f"diagnosis did not move")
 
         attempt.steps = outcome.steps
         attempt.tokens_input = outcome.tokens_input
@@ -1620,7 +2124,7 @@ class Runner:
         # worked in would score whatever else it left behind — installed
         # packages, edited config, a stray conftest — rather than its patch.
         with session() as container:
-            narrate_eval = ((lambda text: tracer.step("evaluate", text))
+            narrate_eval = ((lambda text: _say("evaluate", text))
                             if tracer else None)
             baseline = baseline_failures(
                 container, instance,

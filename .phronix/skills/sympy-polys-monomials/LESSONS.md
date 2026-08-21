@@ -7,14 +7,14 @@ the other.
 
 ## Pitfalls
 
+### P1 — itermonomials min_degrees filtered on max(powers) instead of total degree
+
+Symptom: `itermonomials(variables, max_degrees, min_degrees=min_degrees)` silently drops valid monomials whose total degree equals min_degrees but no single variable's exponent reaches min_degrees (e.g. with 3 vars and min_degrees=3, `x1*x2**2` is missing; only `x1**3, x2**3, x3**3` are returned). Docs promise `min_degree <= total_degree(monom) <= max_degree`.
+
+Root cause: in sympy/polys/monomials.py, both the commutative and non-commutative branches of `itermonomials` filtered candidate monomials with `if max(powers.values()) >= min_degree:` — checking the max single-variable exponent instead of the total degree.
+
+Fix: change both occurrences to `if sum(powers.values()) >= min_degree:`. Two call sites, ~10 lines apart (commutative branch first, non-commutative branch second) — both must be changed identically.
+
+Verified: this exact 2-line fix made test_monomials.py::test_monomials pass and did not regress the other 10 tests in that file.
+
 ## Lessons
-
-### L1 — itermonomials min_degrees filter used max() instead of sum()
-
-**2026-08-20** — Symptom: `itermonomials(variables, max_degrees, min_degrees=min_degrees)` dropped valid monomials whose total degree met min_degree but no single variable's power did (e.g. x1*x2**2 missing when min_degree=3).
-
-Root cause: in sympy/polys/monomials.py, itermonomials's commutative and non-commutative branches (two near-identical blocks, ~line 130 and ~line 142) filtered candidate monomials with `if max(powers.values()) >= min_degree`. That checks the largest single-variable exponent, not total degree — wrong per the documented semantics `min_degree <= total_degree(monom) <= max_degree`.
-
-Fix: change both occurrences to `if sum(powers.values()) >= min_degree`. Both branches must be patched identically since they duplicate the same logic.
-
-Verified: fixes the target test (test_monomials.py::test_monomials) with no regressions across all 11 tests in that file.

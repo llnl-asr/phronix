@@ -44,6 +44,23 @@ class Attempt:
     cost_usd: float = 0.0
     wall_s: float = 0.0
     error: str = ""
+    #: The earlier attempt this one re-applied, or 0. A retry that repeats a
+    #: failed edit spends the budget believing the idea is still untested, and
+    #: three such attempts read as three independent failures in the results.
+    repeats_attempt: int = 0
+    #: How the failure moved. "" when this is the first attempt, "moved" when it
+    #: failed differently from the last one, "same" when it failed identically.
+    #: Reported because a task that keeps failing differently is converging and
+    #: one that repeats itself is not, and the results cannot show that
+    #: difference from pass/fail alone.
+    failure_trend: str = ""
+    #: Consecutive attempts that failed with this same signature.
+    same_failure_count: int = 0
+    #: One entry per plan tried in parallel: which plan, how many target tests
+    #: it made pass, and whether it solved the task. Reported because "plan B
+    #: got two of three where the top-ranked plan got none" is the finding, and
+    #: a single adopted patch hides it.
+    trials: List[Dict[str, Any]] = field(default_factory=list)
     #: Tokens the learning pass spent after this attempt was judged.
     tokens_learn: int = 0
     #: Seconds the learning pass took. Separate from ``wall_s`` for the same

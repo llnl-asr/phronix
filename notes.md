@@ -10,3 +10,4 @@ huggingface.coornith-ai/Ornith-1.5-35B-A3B-GGUF · Hugging FaceWe’re on a jour
 [5:33 PM]model:
 /usr/workspace/dldl/LLM/models/nemotron[5:36 PM]Include keywords in building llama.cpp: turboquant, MTP, ROCM APU MI300A build,
 https://github.com/TheTom/llama-cpp-turboquant.git
+

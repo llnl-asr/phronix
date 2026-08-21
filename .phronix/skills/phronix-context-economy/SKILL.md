@@ -1,7 +1,7 @@
 ---
 name: phronix-context-economy
 description: Locate, don't read: the two retrieval tools for skills and memory, index-first search, the knowledge graph for code, freshness, and the limits. Load before any task that involves orienting yourself in an unfamiliar tree or skill.
-subject: retrieving context without loading whole documents
+subject: phronix-context-economy
 type: skill
 ---
 
@@ -19,10 +19,11 @@ type: skill
 | `R3` | Rules | Run `affected` before editing anything shared |
 | `R4` | Rules | Trust the graph over your recollection of the tree |
 | `R5` | Rules | Reading the whole file is sometimes right |
-| `R6` | Rules | Pass scope="project" to locate code in the repo under test |
+| `R6` | Rules | When graph rebuild throws FileNotFoundError, stop retrying and fall back |
+| `R7` | Rules | A worktree can lag the main checkout's fixes |
 | `X1` | References | Why skills are shaped for partial loading |
 | `X2` | References | What the two stores hold |
-
+| `X3` | References | Reconcile tracker: graph-rebuild-FileNotFoundError (mcp-server stage) |
 
 ## Instructions
 
@@ -99,9 +100,17 @@ The discipline is "locate before you read", not "never read". Read it all when t
 file is small, when you need an exhaustive walk, when you are about to rewrite it,
 or when the graph returned nothing after two reformulations.
 
-### R6 — Pass scope="project" to locate code in the repo under test
+### R6 — When graph rebuild throws FileNotFoundError, stop retrying and fall back
 
-`graph_query`'s default `scope="knowledge"` indexes phronix's own tooling, skills and memory — not the target repository being benchmarked. A query like "flask routes CLI command" against the default scope returns phronix's own `cli.py`, not the checkout's. To locate code in the repo under test, pass `scope="project"` (with `root` if needed). See [[phronix-context-economy#R2]] — this is the scope argument that makes "locate before you read" actually hit the right tree.
+`graph_ensure(force=True)` (and any `graph_query`/`graph_get_node` call that triggers a rebuild) has failed with `FileNotFoundError` repeatedly and consistently (running count tracked in [[phronix-context-economy#X3]]), across many unrelated topics and both `graph_query` and `graph_get_node` paths, all from the `mcp-server` stage specifically — this is a broken `mcp-server` install or missing rebuild input, not staleness. A second symptom of the same broken install has also been observed directly: `graph_get_node` failing with `graphify produced no graph` / `Directory not empty: .../learner-cache/graph/.../skills'` on a leftover staged directory. [[phronix-context-economy#R4]] ("force a rebuild") does not apply once a rebuild has already thrown either error in this session — retrying it repeats the same failure.
+
+By contrast, rebuilds triggered from non-mcp-server call sites (e.g. this skill's own reconcile-pass `graph_query`/`graph_get_node` calls) have rebuilt cleanly on every reconcile cycle so far, with no FileNotFoundError. This does not weaken the guidance below — it sharpens it: the failure is scoped to how the `mcp-server` stage specifically invokes rebuild (e.g. concurrent/staged-directory state during a task run), not a permanently broken install, so still stop retrying whenever the error is actually seen, which so far has only been from that stage.
+
+**How to apply:** on the first `FileNotFoundError` (or the `graphify produced no graph` / `Directory not empty` variant) from a graph rebuild, do not retry the same call. Fall back to `skill_search` (index-first, no graph dependency) for docs/skills, and to `grep`/`Read` directly for code in this session. Report the error once; do not re-attempt graph rebuild speculatively later in the same run. Track the running count and any change in failure shape or hypothesis in [[phronix-context-economy#X3]] rather than adding a new reference block each cycle.
+
+### R7 — A worktree can lag the main checkout's fixes
+
+A git worktree branched off a base commit does not automatically pick up fixes/commits that exist in the main checkout of the same repo (they were applied there after the worktree was branched, or on a different ref). Before concluding a bug reproduces or a fix is missing inside a worktree, diff its state against the main checkout — a "missing fix" may just be a stale worktree, not a real gap.
 
 ## References
 
@@ -114,3 +123,9 @@ The schema exists to make block-level retrieval possible:
 
 Skills hold instructions and rules; memory holds pitfalls, lessons and durable
 facts: [[phronix-memory#R1]].
+
+### X3 — Reconcile tracker: graph-rebuild-FileNotFoundError (mcp-server stage)
+
+[[phronix-context-economy#R6]] fact: 25/25 FileNotFoundError (or Directory-not-empty) failures on record, all from the `mcp-server` stage, across at least 6 named topics (pallets__flask-4045, pallets__flask-5063, pylint-dev__pylint-5859, pylint-dev__pylint-7080, sympy__sympy-21847, sympy__sympy-24066) plus two additional unnamed-task occurrences reported across cycles (one this cycle). Still 0/25 worked; still flagged "repeated." Multiple consecutive reconcile cycles have now seen this reconcile pass's own `graph_query`/`graph_get_node` calls (a call site outside mcp-server) rebuild cleanly with no FileNotFoundError — this strengthens rather than falsifies the hypothesis that the break is scoped to how the `mcp-server` stage specifically invokes rebuild (e.g. concurrent/staged-directory state during a task run), not a broken install generally. Does not weaken R6's "stop retrying and fall back" guidance — keep applying it whenever the error is actually seen from that stage.
+
+This block is the single tracker for this fact and its label (X3) is kept stable across updates — do NOT change this title (it must not embed the count, or the label gets reallocated and existing [[...#X3]] references break). Per [[phronix-learning-reconcile#R4]]: widen this block's count/hypothesis in place on later cycles by editing the body only; do not add a new X-block unless the tracked hypothesis itself changes (new stage affected, new failure shape, or worked-count no longer 0/N).

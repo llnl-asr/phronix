@@ -15,6 +15,96 @@ Scripts live here, in the repository, so they are versioned. **Data never does**
 
 ## Quick start
 
+`swe-agent-bench.sh` is the entry point for anything involving the local GPU
+cluster; `run-benchmark.sh` underneath it is the lower-level form.
+
+```bash
+scripts/swe-agent-bench.sh                        # 6 tasks, both arms, local fleet
+scripts/swe-agent-bench.sh --dry-run              # show what would run, start nothing
+scripts/swe-agent-bench.sh --list-models          # what this backend serves
+scripts/status.sh                                 # watch it
+scripts/research-progress.sh                      # is research producing candidates?
+ssh <node> bash scripts/kill.sh                   # stop it
+```
+
+**`--dry-run` matters.** Without it the script stops any benchmark already
+running before starting its own, so "just checking the banner" ends a run that
+was twenty minutes in. Use `--keep-running` to launch a second benchmark
+alongside a first.
+
+## Choosing a harness and a model
+
+The **harness** is the agent; the **backend** is where the model lives. They
+vary independently:
+
+```bash
+# opencode against the local GPU cluster (the default)
+scripts/swe-agent-bench.sh
+
+# opencode against the site gateway
+scripts/swe-agent-bench.sh --backend livai --model claude-sonnet-4.5
+
+# Claude Code on Sonnet 5, hosted
+scripts/swe-agent-bench.sh --harness claude --backend anthropic
+
+# Claude Code against the local cluster
+scripts/swe-agent-bench.sh --harness claude --backend cluster
+```
+
+| backend | endpoint | credential | runs where |
+|---|---|---|---|
+| `cluster` | the fleet's own `cluster.json` | in that file | **on a compute node** |
+| `livai` | `https://livai-api.llnl.gov/v1` | `OPENAI_API_KEY` | login node |
+| `anthropic` | Anthropic directly | Claude Code's own auth | login node |
+
+`--harness claude --backend cluster` works: the LiteLLM gateway serves
+`/v1/messages` in Anthropic shape, so Claude Code drives the local models.
+Verified end to end — `rc=0` running `gpt-oss-120b` through the gateway. Claude
+Code will warn that claude.ai connectors are disabled because an auth source is
+set; that is the intended effect, not a fault.
+
+A `cluster` run must execute on a compute node: the gateway refuses connections
+from the login node and answers in 7 ms from a compute node. The script arranges
+that over ssh — not `flux run`, whose cgroup starves opencode into exiting 245
+with no output.
+
+**Numbers from different harnesses are not comparable** — different system
+prompts, different event streams. Bare-versus-phronix *within* one harness and
+one backend is the comparison the benchmark exists for.
+
+## Sizing a run to the fleet
+
+A task unit — one task in one arm — occupies about **half a slot**, because it
+spends much of its life checking out repos, running tests and evaluating patches
+rather than talking to the model. Measured against a live 12-unit run: 2, 9, 8,
+7, 6 requests in flight.
+
+So filling a fleet takes roughly `capacity / (0.53 x arms)` concurrent tasks —
+about **120 tasks for a 128-slot fleet** with two arms. Six tasks use ~5% of it,
+which is correct for six tasks: spare capacity is only waste when work is
+waiting on it, and `0 deferred` says nothing is.
+
+```bash
+# let the script size the run to the fleet
+scripts/swe-agent-bench.sh --fill-fleet --tasks lite-300.txt \
+  --nodes tuolumne1183,tuolumne1207,tuolumne1239,tuolumne1264
+
+# try the top 3 researched plans in parallel, keep whichever gets furthest
+scripts/swe-agent-bench.sh --candidates 3
+```
+
+Every run prints its expected utilisation:
+
+```
+fleet    : 128 slots, this run will use ~5%  (--fill-fleet would raise this; 121 concurrent tasks fills it)
+```
+
+`--fill-fleet` is capped by `MAX_TASKS_PER_NODE` (16): a task is a container,
+and containers cost cores plus about two kernel session keys against a per-user
+quota of 200. That limit binds long before the GPUs do.
+
+## Lower-level
+
 ```bash
 scripts/run-benchmark.sh                     # claude, 6 tasks, fresh
 scripts/status.sh                            # watch it (newest run, in detail)

@@ -101,6 +101,67 @@ fi
 
 rm -f "$RUNS/.runner.lock"
 
+# Remove the containers the stopped run left behind.
+#
+# Not tidiness — correctness. Every container holds kernel session keys, and the
+# per-user quota is 200. A run killed mid-flight leaves its containers running:
+# 91 of them had accumulated here, holding 179 of the 200 keys, and the next run
+# died on every task with
+#
+#   runc create failed: unable to join session keyring: disk quota exceeded
+#
+# which names neither containers nor keys and reads like a full disk. Pruning
+# here, where a run is already being torn down, is what keeps the next one from
+# inheriting the problem.
+#
+# Only the benchmark's own store is touched, so a container belonging to
+# anything else on this machine is left alone.
+if [ -z "$DRY" ]; then
+  # The store is resolved ON EACH HOST, because it is node-dependent.
+  #
+  # This was hardcoded to /tmp/$USER/phronix-images. The runner picks the first
+  # writable node-local scratch, which is /l/ssd on a compute node and /tmp on
+  # a login node — so the prune ran against an empty store, reported success,
+  # and left every container of every killed run alive: 55 across two nodes,
+  # holding keyring keys against a quota of 200, which is the exact failure
+  # this prune exists to prevent.
+  #
+  # Resolving it locally would have reproduced the bug with a different path,
+  # so the resolution is part of what runs remotely.
+  reaper='
+    S=$(PY -c "
+import sys; sys.path.insert(0, \"/usr/WS2/haridev/phronix/tests\")
+from benchmark.paths import image_store
+print(image_store()[\"root\"].rsplit(\"/\", 1)[0])" 2>/dev/null)
+    [ -n "$S" ] && [ -d "$S" ] || { echo "  ** no image store resolved"; exit 0; }
+    n=$(podman --root "$S/storage" --runroot "$S/run" ps -aq 2>/dev/null | wc -l)
+    [ "$n" -gt 0 ] && podman --root "$S/storage" --runroot "$S/run" rm -f -a >/dev/null 2>&1
+    [ "$n" -gt 0 ] && echo "  containers removed: $n"
+    # Reaping a container is not the same as reaping its monitor. A container
+    # removed while conmon is mid-flight leaves the monitor behind: 30 here,
+    # the oldest four and a half hours old, surviving every kill of every run.
+    # Small (~3 MB each) but they accumulate for as long as the node is up.
+    m=0
+    for c in /proc/[0-9]*/cmdline; do
+      grep -qa "$S" "$c" 2>/dev/null || continue
+      grep -qa conmon "$c" 2>/dev/null || continue
+      pid=${c#/proc/}; pid=${pid%/cmdline}
+      kill -9 "$pid" 2>/dev/null && m=$((m+1))
+    done
+    [ "$m" -gt 0 ] && echo "  monitors reaped: $m"
+    exit 0'
+  reaper=${reaper//PY/$VENV/bin/python}
+
+  for host in ${BENCH_NODES:-$(hostname)}; do
+    if [ "$host" = "$(hostname)" ]; then
+      bash -c "$reaper" | sed "s/^/  [$host]/"
+    else
+      ssh -n -o BatchMode=yes "$host" "bash -c '$reaper'" 2>/dev/null \
+        | sed "s/^/  [$host]/"
+    fi
+  done
+fi
+
 # Confirm, rather than assume. A kill that silently failed is worse than none:
 # it reads as "stopped" while the account keeps being charged.
 left=$(matching "$RUNNER")$(matching "$WATCHER")

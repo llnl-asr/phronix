@@ -52,6 +52,21 @@ def _record(store, topic="pylint-dev-pylint-7080"):
     return topic
 
 
+def skill_text(name):
+    """The instruction as an agent will receive it: pointer plus its skill.
+
+    The stage prompts carry only the per-run INPUT now; the method lives in a
+    skill, because a prompt in code is a method the system cannot edit — the
+    learner improves skills, the graph indexes them, and reconcile keeps one
+    copy of each fact, none of which reaches a string literal in a harness.
+    So an assertion about what a stage is told has to read both halves.
+    """
+    from pathlib import Path
+    root = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+            / "skills" / name / "SKILL.md")
+    return root.read_text(encoding="utf-8")
+
+
 def test_harvested_research_is_retrievable(isolated_layers):
     """The question a later task would ask must find what research established.
 
@@ -338,7 +353,11 @@ def test_filing_findings_is_never_truncated():
     assert "aspect" not in PhronixArm.MUST_FINISH_STAGES
     # The connective stages too: each one turns several paid-for stages into the
     # input for the next, so truncating one discards all of them.
-    for stage in ("plan", "collect", "propose", "execution-plan"):
+    # `collect` is gone from the first pass — each aspect files its own
+    # finding, so there was nothing left for it to reconcile. Its retry-path
+    # counterpart survives, where several repairs DO have to be reconciled
+    # against one failure.
+    for stage in ("plan", "repair-collect", "propose", "solution-skill"):
         assert stage in PhronixArm.MUST_FINISH_STAGES, stage
 
 
@@ -346,9 +365,17 @@ def test_every_stage_the_driver_runs_has_a_budget():
     """A missing budget is a KeyError in the middle of a research pass."""
     from tests.benchmark.arms import PhronixArm
 
-    for stage in ("survey", "plan", "aspect", "aspect-record", "aspect-recheck",
-                  "collect", "propose", "evaluate", "execution-plan"):
+    # The pipeline is five stages: `survey` folded into `plan`, `collect`
+    # dropped because each aspect files its own finding, `evaluate` dropped
+    # because `tune` already measures against the corpus.
+    for stage in ("plan", "aspect", "aspect-record", "aspect-recheck",
+                  "propose", "tune", "diagnose", "repair-collect"):
         assert stage in PhronixArm.STAGE_BUDGETS, stage
+
+    # And `solution-skill` must NOT have one: it writes up what the timed
+    # phases collected, so a budget there would put the write-up on a clock.
+    assert "solution-skill" not in PhronixArm.STAGE_BUDGETS
+    assert "solution-skill" in PhronixArm.UNTIMED_STAGES
 
 
 def test_the_agents_own_summary_wins_over_a_derived_one():
@@ -482,9 +509,12 @@ def test_the_early_stages_actually_consult_prior_work():
     """Wiring the lookup up is the whole point; a tool nobody calls is inert."""
     from tests.benchmark.arms import PhronixArm as arm
 
-    assert "research_prior" in arm.SURVEY_PROMPT
-    assert "graph_query" in arm.SURVEY_PROMPT      # reaches subjects terms miss
-    assert "research_prior" in arm.PLAN_PROMPT     # so aspects are not wasted
+    # The survey runs as two overlapping halves; consulting prior work is the
+    # job of the half that queries our own store.
+    assert "research_prior" in arm.SURVEY_PRIOR_PROMPT
+    assert "graph_query" in arm.SURVEY_PRIOR_PROMPT  # reaches subjects terms miss
+    plan = arm.PLAN_PROMPT + skill_text("phronix-research-plan")
+    assert "research_prior" in plan                # so aspects are not wasted
     assert "research_prior" in arm.PROPOSE_PROMPT  # so approaches are not re-proposed
 
 
@@ -604,7 +634,8 @@ def test_an_evaluator_worktree_carries_the_harness_scaffolding():
 
     source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
     block = source[source.index("tree = checkout / SCRATCH_DIR"):]
-    block = block[:block.index("stage(f\"evaluate:")]
+    # `tune` is the last stage that takes a worktree — `evaluate` is gone.
+    block = block[:block.index("        if pending:")]
 
     assert ".opencode" in block, "the worktree never gets the project config"
     assert "symlink_to" in block or "copytree" in block, block[-400:]
@@ -1232,7 +1263,7 @@ def test_execution_plan_records_the_plan_before_verifying():
     """
     from tests.benchmark.arms import PhronixOpenCodeArm
 
-    prompt = PhronixOpenCodeArm.EXECUTION_PLAN_PROMPT
+    prompt = PhronixOpenCodeArm.SOLUTION_STAGE_PROMPT
     assert "research_write_plan" in prompt
     assert prompt.index("research_write_plan") < prompt.index("research_verify")
 
@@ -1501,8 +1532,8 @@ def test_a_retry_diagnoses_instead_of_re_proposing():
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
 
     source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    flow = source[source.index('        budgets = self.STAGE_BUDGETS'):
-                  source.index('        stage("execution-plan"')]
+    flow = source[source.index('        # -- the pipeline --'):
+                  source.index('        stage("solution-skill"')]
     assert 'stage("propose"' in flow and 'stage("diagnose"' in flow
     # Propose belongs to the first pass; diagnose to every one after it.
     assert flow.index("attempt_index <= 1") < flow.index('stage("propose"')
@@ -1518,9 +1549,15 @@ def test_a_retry_diagnoses_instead_of_re_proposing():
     # And it must be told not to re-research.
     assert "Do not re-survey" in prompt
 
-    # Must-finish and budgeted like the other connective stages.
+    # Must-finish, and given at least what the planner gets — a retry has one
+    # failure in hand and reading it properly is the whole value of the pass.
+    #
+    # Not an absolute number any more: budgets are derived from
+    # `research.total_budget_s`, so a fixed 300 would assert the clock rate
+    # rather than the shape. What matters is the RATIO to the stage it stands
+    # in for, and that a repeated failure buys it more still.
     assert "diagnose" in Arm.MUST_FINISH_STAGES
-    assert Arm.STAGE_BUDGETS["diagnose"] >= 300
+    assert Arm.STAGE_BUDGETS["diagnose"] >= Arm.STAGE_BUDGETS["plan"]
 
 
 def test_the_reproduction_survives_into_the_next_attempt():
@@ -1579,7 +1616,11 @@ def test_tuning_and_the_final_score_use_different_instances(tmp_path, monkeypatc
     # The flow runs tune before evaluate, in the same worktree.
     source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
     body = source[source.index("def tune_one("):source.index("Ranking is arithmetic")]
-    assert body.index('stage(f"tune:') < body.index('stage(f"evaluate:')
+    # `evaluate` is gone: tune measures each approach against the corpus and
+    # records the trials, which is all the ranking reads. A second scoring pass
+    # re-measured the same thing and wrote a second number.
+    assert 'stage(f"evaluate:' not in body
+    assert 'stage(f"tune:' in body
     assert "final_revision" in body
 
 
@@ -1634,7 +1675,8 @@ def test_a_corpus_too_small_to_hold_anything_out_says_so(tmp_path, monkeypatch):
 
     # And the plan prompt asks for a corpus that can support it.
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-    assert "twenty instances" in Arm.PLAN_PROMPT
+    assert "twenty instances" in (Arm.PLAN_PROMPT
+                                  + skill_text("phronix-research-plan"))
     assert "Negative cases" in Arm.PLAN_PROMPT
 
 
@@ -1787,9 +1829,13 @@ def test_a_retry_measures_the_revision_not_the_whole_field():
                   source.index("Ranking is arithmetic")]
     assert "attempt_index > 1" in body and 'a.get("refines")' in body
     # Narrower, not weaker: the revision still goes through tune then evaluate.
-    assert body.index('stage(f"tune:') < body.index('stage(f"evaluate:')
-    # And a retry reconciles the parallel repairs before any of them is scored.
-    assert body.index("REPAIR_COLLECT_PROMPT") < body.rindex("evaluate_one")
+    # `evaluate` is gone: tune measures each approach against the corpus and
+    # records the trials, which is all the ranking reads. A second scoring pass
+    # re-measured the same thing and wrote a second number.
+    assert 'stage(f"evaluate:' not in body
+    assert 'stage(f"tune:' in body
+    # And a retry reconciles the parallel repairs, after tuning them.
+    assert body.index("tune_one") < body.index("REPAIR_COLLECT_PROMPT")
 
     # And the failure that lost the attempt becomes a corpus instance, or the
     # revision can score 1.0 without fixing it.
@@ -1820,7 +1866,7 @@ def test_aspects_try_what_they_find_instead_of_only_theorising():
     assert "research_refine_approach" in prompt       # short is a finding, not an end
 
     source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    body = source[source.index("def investigate(aspect"):
+    body = source[source.index("def investigate(job"):
                   source.index("with ThreadPoolExecutor(max_workers=len(chosen))")]
     assert "private_tree(f\"aspect-" in body and "drop_tree(tree)" in body
 
@@ -2134,20 +2180,32 @@ def test_every_stage_of_the_pipeline_is_wired_end_to_end():
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
 
     source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    flow = source[source.index("        budgets = self.STAGE_BUDGETS"):
+    flow = source[source.index("        # -- the pipeline --"):
                   source.index("        stdout = \"\".join(transcripts)")]
-    order = [flow.index(f'stage("{name}"') if f'stage("{name}"' in flow
-             else flow.index(f'stage(f"{name}')
-             for name in ("survey", "plan", "aspect:", "collect", "propose",
-                          "tune:", "evaluate:", "execution-plan")]
+    def where(name):
+        """Where a stage is issued, however it is issued.
+
+        Stages that overlap are handed to `fanout` as tuples rather than called
+        one at a time, so this asks where the NAME appears rather than assuming
+        a `stage(...)` call. The assertion is about pipeline order, not syntax.
+        """
+        for form in (f'stage("{name}"', f'stage(f"{name}', f'"{name}"'):
+            if form in flow:
+                return flow.index(form)
+        raise AssertionError(f"stage {name!r} is not issued anywhere")
+
+    # Five stages: `survey` folded into `plan`, `collect` and `evaluate` gone.
+    order = [where(name)
+             for name in ("plan", "aspect:", "propose",
+                          "tune:", "solution-skill")]
     assert order == sorted(order), "the stages are no longer in pipeline order"
 
     # Approaches arrive as pipelines, not as prose.
     assert "research_record_pipeline" in Arm.PROPOSE_PROMPT
     assert "research_record_pipeline" in Arm.TUNE_PROMPT
     # The solution file adopts the winner and builds tools across ALL of them.
-    assert "research_adopt_pipeline" in Arm.EXECUTION_PLAN_PROMPT
-    assert "not only the winner's" in Arm.EXECUTION_PLAN_PROMPT
+    assert "research_adopt_pipeline" in Arm.SOLUTION_STAGE_PROMPT
+    assert "not only the winner's" in Arm.SOLUTION_STAGE_PROMPT
     # A retry diagnoses with a deterministic case and fixes the other pipelines.
     assert "research_rank" in Arm.DIAGNOSE_PROMPT
     assert "deterministic test" in Arm.DIAGNOSE_PROMPT
@@ -2176,9 +2234,9 @@ def test_the_attempt_fetches_one_block_through_the_graph():
 
     # The graph is refreshed at the moment the skill changes, or the first
     # query pays for a rebuild or misses the block entirely.
-    assert "graph_ensure" in Arm.EXECUTION_PLAN_PROMPT
-    assert (Arm.EXECUTION_PLAN_PROMPT.index("research_playbook")
-            < Arm.EXECUTION_PLAN_PROMPT.index("graph_ensure"))
+    assert "graph_ensure" in Arm.SOLUTION_STAGE_PROMPT
+    assert (Arm.SOLUTION_STAGE_PROMPT.index("research_playbook")
+            < Arm.SOLUTION_STAGE_PROMPT.index("graph_ensure"))
 
 
 def test_a_retry_repairs_in_parallel_then_reconciles_then_scores():
@@ -2198,9 +2256,14 @@ def test_a_retry_repairs_in_parallel_then_reconciles_then_scores():
     body = source[source.index("        if pending:"):
                   source.index("        # Ranking is arithmetic")]
 
-    # First pass fuses; a retry has a barrier in the middle.
-    assert "tune_then_evaluate" in body
-    assert body.index("REPAIR_COLLECT_PROMPT") < body.rindex("evaluate_one")
+    # First pass tunes in parallel; a retry tunes, then reconciles.
+    #
+    # There is no scoring pass to fuse with any more: `tune` measures each
+    # approach against the corpus and records the trials, and the ranking is
+    # arithmetic over those trials.
+    assert "pool.map(tune_one, indexed)" in body
+    assert "evaluate_one" not in body
+    assert body.index("tune_one") < body.index("REPAIR_COLLECT_PROMPT")
 
     # Nothing is re-explored: repairs work on pipelines that already exist.
     assert "Nothing is re-explored" in body
@@ -2246,10 +2309,10 @@ def test_method_tools_survive_a_fresh_run(tmp_path):
     everything = seed_store(store, carry)["seeded"]
     assert len(everything) == 4
 
-    # The prefix is what the execution-plan stage asks for, so the two cannot
+    # The prefix is what the solution-skill stage asks for, so the two cannot
     # drift apart into a rule nothing satisfies.
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-    assert f"`{METHOD_CAPABILITY_PREFIX}` prefix" in Arm.EXECUTION_PLAN_PROMPT
+    assert f"`{METHOD_CAPABILITY_PREFIX}` prefix" in Arm.SOLUTION_STAGE_PROMPT
 
 
 def test_research_tools_are_built_at_the_end_not_during():
@@ -2261,7 +2324,7 @@ def test_research_tools_are_built_at_the_end_not_during():
     """
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
 
-    plan = Arm.EXECUTION_PLAN_PROMPT
+    plan = Arm.SOLUTION_STAGE_PROMPT
     assert "capability_new" in plan and "capability_list" in plan
     assert "would I write this again" in " ".join(plan.split())   # hard-wrapped
     # Not bolted onto every stage: exploration stays exploration.
@@ -2313,9 +2376,9 @@ def test_the_same_procedure_is_not_built_twice_under_two_names(tmp_path,
             "return path.strip()", "return str(len(path))"))
     assert other["status"] == "ok"
 
-    # And the execution-plan stage is told to reuse rather than re-author.
+    # And the solution-skill stage is told to reuse rather than re-author.
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-    collapsed = " ".join(Arm.EXECUTION_PLAN_PROMPT.split())
+    collapsed = " ".join(Arm.SOLUTION_STAGE_PROMPT.split())
     assert "capability_list()` FIRST" in collapsed
     assert "answers `duplicate`" in collapsed
 
@@ -2366,7 +2429,8 @@ def test_the_learner_survives_the_revert(tmp_path, monkeypatch):
     assert "[learner] running:" in loop             # says it started
 
     # Every stage reports, and every arm answers the runner's calls.
-    for const in ("SURVEY_PROMPT", "PLAN_PROMPT", "ASPECT_PROMPT",
+    for const in ("SURVEY_PRIOR_PROMPT", "SURVEY_ISSUE_PROMPT", "PLAN_PROMPT",
+                  "ASPECT_PROMPT",
                   "PROPOSE_PROMPT", "TUNE_PROMPT"):
         assert "research_observe(" in getattr(Arm, const), const
     for name in ("claude-phronix", "opencode-bare", "mini"):
@@ -2406,9 +2470,12 @@ def test_the_aspect_phase_is_wide_and_bounded():
     # And they genuinely run at once.
     source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
     flow = source[source.index("            aspects = self._in_store("):
-                  source.index('stage("collect"')]
+                  source.index('stage("propose"')]
     assert "ThreadPoolExecutor(max_workers=len(chosen))" in flow
-    assert "pool.map(investigate, chosen)" in flow
+    # Aspects carry their position now, so each can be asked of a different
+    # model: one greedy model asked four times returns four versions of its
+    # first idea, which is the opposite of what the phase is for.
+    assert "pool.map(investigate, list(enumerate(chosen)))" in flow
 
 
 def test_parallel_tasks_is_offered_and_its_cost_is_stated():
@@ -2594,15 +2661,27 @@ def test_the_gate_paces_agent_starts_and_waits_out_a_closed_window():
 
     from tests.benchmark.arms import _LlmGate
 
+    # Spacing forced rather than read from tuning: a deployment that sets
+    # `llm.min_seconds_between_starts` to 0 — correct for a self-hosted server
+    # that schedules its own queue — would otherwise make this assert nothing.
     gate = _LlmGate()
-    started = time.time()
-    with gate.slot():
-        pass
-    with gate.slot():
-        pass
-    # Two starts cannot be simultaneous: spacing is what turns a burst into a
-    # sustainable draw, and concurrency alone does not bound the rate.
-    assert time.time() - started >= 1.0
+    monkey = {"llm.min_seconds_between_starts": 1.0,
+              "llm.max_concurrent_agents": 4}
+    import tests.benchmark.arms as arms_mod
+
+    real = arms_mod._tuned
+    arms_mod._tuned = lambda key, fallback: monkey.get(key, fallback)
+    try:
+        started = time.time()
+        with gate.slot():
+            pass
+        with gate.slot():
+            pass
+        # Two starts cannot be simultaneous: spacing is what turns a burst into
+        # a sustainable draw, and concurrency alone does not bound the rate.
+        assert time.time() - started >= 1.0
+    finally:
+        arms_mod._tuned = real
 
     notes = []
     gate.rejected_until(time.time() + 10_000, notes.append)
@@ -2684,3 +2763,704 @@ def test_everything_is_learned_not_only_what_repeats():
 
     # The arm spends a cycle on it rather than waiting for a second sighting.
     assert ClaudePhronixArm.LEARNING_BATCH <= 1
+
+
+def test_the_cluster_config_is_read_not_restated(tmp_path):
+    """Hosts and ports change every time the cluster is rebuilt.
+
+    Anything that copies them fails at the first API call of the first task,
+    as a connection error rather than as a stale-config one.
+    """
+    import json
+
+    from tests.benchmark import cluster as cluster_mod
+
+    path = tmp_path / "cluster.json"
+    path.write_text(json.dumps({
+        "model": "nemotron", "alias": "nemotron-3.5",
+        "gateway": {"host": "head1", "port": 4000, "key": "sk-test"},
+        "servers": [{"host": "n1", "port": 8050}, {"host": "n1", "port": 8051},
+                    {"host": "n2", "port": 8050}],
+    }))
+    spec = cluster_mod.load(path)
+    assert spec.model == "nemotron-3.5"        # the alias is what servers answer to
+    assert spec.api_key == "sk-test"
+    assert spec.gateway_url == "http://head1:4000/v1"
+    assert spec.endpoints() == ["http://head1:4000/v1"]
+    assert len(spec.endpoints(direct=True)) == 3
+
+    # Writing the provider leaves everything else in the file alone.
+    config = tmp_path / "opencode.jsonc"
+    config.write_text(json.dumps({"provider": {"other": {"keep": True}},
+                                  "permission": {"edit": {"**": "ask"}}}))
+    wired = cluster_mod.configure_opencode(spec, path=config)
+    written = json.loads(config.read_text())
+    assert written["provider"]["other"] == {"keep": True}
+    assert written["permission"] == {"edit": {"**": "ask"}}
+    assert wired["qualified"] == "tuolumne/nemotron-3.5"
+    assert (written["provider"]["tuolumne"]["options"]["baseURL"]
+            == "http://head1:4000/v1")
+
+
+def test_claude_code_is_pointed_at_a_cluster_the_way_it_actually_reads():
+    """Claude Code speaks the Anthropic wire format.
+
+    Setting OPENAI_BASE_URL does nothing for it, which is the kind of
+    misconfiguration that looks like a working run against the wrong model.
+    """
+    from tests.benchmark.arms import ClaudeArm
+
+    arm = ClaudeArm(model="nemotron-3.5", provider="tuolumne",
+                    base_url="http://head1:4000/v1", api_key="sk-test")
+    env = arm.phronix_env({})
+    # The ROOT, not the /v1 the OpenAI arms use: Claude Code appends
+    # /v1/messages itself, so /v1 here yields /v1/v1/messages.
+    assert env["ANTHROPIC_BASE_URL"] == "http://head1:4000"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-test"
+    assert env["ANTHROPIC_MODEL"] == "nemotron-3.5"
+
+    # A real Anthropic endpoint keeps its own credentials and routing.
+    plain = ClaudeArm(model="claude-sonnet-5", provider="anthropic",
+                      base_url="https://api.anthropic.com")
+    assert not [k for k in plain.phronix_env({}) if k.startswith("ANTHROPIC")]
+
+    # And so does an `anthropic` run that never set a base_url at all.
+    #
+    # `base_url` defaults to the livai gateway whatever the provider is, so
+    # gating on the URL pointed a --provider anthropic run at livai with no
+    # credential for it: 401 Authentication Error on every call, thirty times
+    # in one run. The provider is what says whether an endpoint was chosen.
+    defaulted = ClaudeArm(model="claude-sonnet-5", provider="anthropic")
+    assert not [k for k in defaulted.phronix_env({}) if k.startswith("ANTHROPIC")]
+
+
+def test_tasks_spread_across_nodes_and_scale_with_the_fleet():
+    """A task's containers run on the node it was assigned.
+
+    Container work is what consumes cores — the agents mostly wait on the model
+    — so spreading tasks across nodes is the only way past one node's core
+    count. `--tasks-per-node` rather than a flat count because it stays correct
+    when nodes are added.
+    """
+    from tests.benchmark.runner import RunConfig, Runner
+
+    runner = Runner.__new__(Runner)
+    runner.config = RunConfig(tasks=[], arms=[], out="/tmp/x", isolation="none",
+                              nodes="n1, n2 ,n3", tasks_per_node=8)
+    assert runner.nodes() == ["n1", "n2", "n3"]          # whitespace tolerated
+
+    runner._runtimes = ["rt1", "rt2", "rt3"]
+    # Round-robin: consecutive tasks land on different nodes rather than
+    # filling one node before touching the next.
+    assert [runner.runtime_for(i) for i in range(4)] == ["rt1", "rt2", "rt3", "rt1"]
+
+    # A single --node still works and is just a one-element fleet.
+    single = Runner.__new__(Runner)
+    single.config = RunConfig(tasks=[], arms=[], out="/tmp/x",
+                              isolation="none", node="only")
+    assert single.nodes() == ["only"]
+
+
+def test_stderr_is_drained_so_a_chatty_agent_cannot_deadlock(tmp_path):
+    """A pipe holds ~64 KB, and nothing was reading stderr.
+
+    An agent chatty enough to fill it blocked writing, and a process blocked on
+    stderr writes no more stdout — so the reader waited for a line that could
+    not come. Seven of ten tasks stalled this way while the model fleet sat
+    almost idle, looking exactly like slow inference.
+    """
+    import sys
+
+    from tests.benchmark.arms import stream_opencode
+
+    # Write far more to stderr than a pipe buffer holds, then exit.
+    script = tmp_path / "chatty.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stderr.write('x' * 300000)\n"
+        "sys.stdout.write('{\"type\":\"done\"}\\n')\n")
+
+    stats = {}
+    out, code = stream_opencode([sys.executable, str(script)], tmp_path, {},
+                                timeout_s=60, on_call=lambda _t: None,
+                                stats=stats)
+    # Before the fix this never returned and the timeout was the only exit.
+    assert code == 0
+    assert '"type":"done"' in out
+    assert not stats.get("truncated"), "it should finish, not hit the budget"
+    assert stats.get("stderr"), "stderr must reach the caller, not be discarded"
+
+
+def test_planning_keeps_going_until_it_has_candidates():
+    """An empty plan cancelled the entire investigation, silently.
+
+    `plan` records what to investigate and the fan-out spreads over what it
+    recorded, so an empty list read as "nothing to investigate". Measured: five
+    phronix tool calls across a six-task run, all `research_prior`, aspects=0 in
+    every record — and the arm was scored as having researched.
+    """
+    import inspect
+
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    assert Arm.MIN_ASPECTS >= 2, "one aspect gives the fan-out nothing to spread"
+    assert Arm.MAX_PLAN_RETRIES >= 1
+
+    source = inspect.getsource(Arm.research)
+    # Ask again, salvage what it wrote, and only then fall back.
+    assert "PLAN_RETRY_PROMPT" in source, "a failed plan must be retried"
+    assert "_aspects_from_text" in source, "prose plans must be salvaged"
+    assert "DEFAULT_ASPECTS" in source, "and there must be a floor"
+
+    # The retry prompt asks for the tool and nothing else: the planner has
+    # already looked, so more exploration is exactly what it must not do.
+    assert "research_set_aspects" in Arm.PLAN_RETRY_PROMPT
+    assert "Do not read more" in Arm.PLAN_RETRY_PROMPT
+
+
+def test_a_prose_plan_is_salvaged_into_aspects():
+    """A planner that narrates has done the thinking and skipped the filing."""
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    stream = (
+        '{"type":"assistant","message":{"content":[{"type":"text","text":'
+        '"Plan:\\n1. Find where the table header is built\\n'
+        '2. Check whether host_matching changes it\\n'
+        '- Which test asserts the Subdomain column\\n"}]}}')
+    got = Arm._aspects_from_text(stream)
+    assert len(got) == 3
+    assert all(a["name"] and a["question"] for a in got)
+    # Slugs are stable keys, so they must not collide.
+    assert len({a["name"] for a in got}) == 3
+    assert Arm._aspects_from_text("") == []
+
+
+def test_aspects_spread_across_a_model_mixture():
+    """Asking one greedy model four times returns its first idea four times.
+
+    The servers decode at temperature 0 with top_k 1, so a single model cannot
+    produce diverse candidates by construction — measured, the same trace line
+    six times in one second. Different models disagree about where to look,
+    which is the diversity the aspect phase was designed to have.
+    """
+    import inspect
+
+    from tests.benchmark.arms import OpenCodeArm, PhronixOpenCodeArm as Arm
+
+    flow = inspect.getsource(Arm.research)
+    assert "model_for(position)" in flow, "aspects must pick a model"
+    assert "roster[position % len(roster)]" in flow, "round-robin over the fleet"
+    # One model is the ordinary case and must not change behaviour.
+    assert "if len(roster) <= 1:" in flow
+
+    # The override reaches the command, which is the only thing that varies.
+    arm = OpenCodeArm(model="a", provider="p", base_url="http://x/v1")
+    from pathlib import Path as _P
+    assert "p/a" in arm.agent_command("hi", _P("/tmp"), [])
+    assert "p/b" in arm.agent_command("hi", _P("/tmp"), [], "", "b")
+
+
+def test_the_working_context_is_capped_below_what_the_fleet_offers(tmp_path):
+    """More context made results worse, not better.
+
+    The fleet serves 1,048,576 tokens per slot. Conversations grew to 155,548
+    and quality fell: a 30B model with 3B active per token loses the thread long
+    before its nominal window ends. Nothing is truncated — the agent simply
+    works in the range it reasons well in.
+    """
+    import json
+
+    from tests.benchmark import cluster as cluster_mod
+
+    path = tmp_path / "cluster.json"
+    path.write_text(json.dumps({
+        "models": ["nemotron-3.5", "ornith-1.5"],
+        "gateway": {"host": "h", "port": 4000, "key": "k"},
+        "servers": [{"host": "n1", "port": 8050}],
+        "limits": {"context": 1048576},
+    }))
+    spec = cluster_mod.load(path)
+    assert spec.models == ["nemotron-3.5", "ornith-1.5"]
+    assert spec.model == "nemotron-3.5"          # the first is the default
+
+    config = tmp_path / "opencode.jsonc"
+    cluster_mod.configure_opencode(spec, path=config)
+    written = json.loads(config.read_text())["provider"]["tuolumne"]["models"]
+    # Every served model is declared, so a stage can ask for any of them.
+    assert set(written) == {"nemotron-3.5", "ornith-1.5"}
+    # An explicit limit in the config overrides both defaults.
+    assert list(written.values())[0]["limit"]["context"] == 1048576
+
+
+def test_the_working_window_is_capped_even_when_the_server_offers_more(tmp_path):
+    """Two ceilings, and the tighter one has to win.
+
+    A probe-then-cap written as two separate steps let the first shadow the
+    second: the probed 131,072 was written into `limits` and the cap was then
+    read from `limits`, so it never applied. The window stayed at the server's
+    maximum, which is the value that made decode collapse to 25 tok/s.
+    """
+    import json
+
+    from tests.benchmark import cluster as cluster_mod
+
+    path = tmp_path / "cluster.json"
+    path.write_text(json.dumps({
+        "models": ["m"], "gateway": {"host": "h", "port": 4000, "key": "k"},
+        "servers": [{"host": "n1", "port": 8050}],
+    }))                                    # no `limits`, backend unreachable
+    spec = cluster_mod.load(path)
+    config = tmp_path / "opencode.jsonc"
+    cluster_mod.configure_opencode(spec, path=config)
+    window = list(json.loads(config.read_text())["provider"]["tuolumne"]
+                  ["models"].values())[0]["limit"]["context"]
+    assert window == cluster_mod.CONTEXT_CAP
+    assert window < 131072, "the cap must be tighter than the server's window"
+
+
+def test_every_arm_accepts_a_model_override():
+    """An override that drops the parameter is a TypeError mid-run.
+
+    `agent_command` gained a `model` argument so a stage can be asked of a
+    different model. The Claude arms override that method, and one that keeps
+    the old signature fails at the first research stage with "takes from 4 to 5
+    positional arguments but 6 were given" — which surfaces as a research pass
+    that produced nothing, not as a signature mismatch.
+    """
+    import inspect
+
+    from tests.benchmark import arms as arms_mod
+
+    seen = 0
+    for name in dir(arms_mod):
+        cls = getattr(arms_mod, name)
+        if not (isinstance(cls, type) and hasattr(cls, "agent_command")):
+            continue
+        if "agent_command" not in vars(cls):        # inherited, not overridden
+            continue
+        seen += 1
+        params = inspect.signature(cls.agent_command).parameters
+        assert "model" in params, f"{name}.agent_command drops `model`"
+        assert params["model"].default == "", f"{name} must default to no override"
+    assert seen >= 3, "expected several arms to override agent_command"
+
+
+def test_feedback_names_the_literal_the_tests_wanted():
+    """A containment assertion says exactly what is missing.
+
+    The agent cannot read the grading tests, so it reasons from "the test still
+    fails" and improves the mechanism instead. Measured twice on two different
+    models: `flask routes` gained a correct, conditional, host-vs-subdomain
+    column named "Domain" while the tests asserted "Subdomain" and "Host".
+    Three attempts refined the logic; none renamed the header.
+    """
+    from tests.benchmark.runner import _feedback_note, _missing_literals
+
+    detail = ('tests/test_cli.py:495: in test_subdomain\n'
+              '    assert "Subdomain" in result.output\n'
+              "E   AssertionError: assert 'Subdomain' in 'Domain  Endpoint'\n")
+    assert _missing_literals(detail) == ["Subdomain"]
+
+    # A literal that IS present is not reported: a false "this is missing"
+    # sends the next attempt after the wrong thing.
+    assert _missing_literals('assert "Domain" in \'Domain  Endpoint\'') == []
+
+    note = _feedback_note(2, {"failure_detail": detail,
+                              "fail_to_pass_failing": ["test_subdomain"]})
+    assert "Subdomain" in note
+    assert "did NOT find" in note
+
+
+def test_a_retry_that_repeats_a_failed_edit_is_caught():
+    """Locations alone let an attempt call the same edit a new idea."""
+    from tests.benchmark.runner import _patch_changes, _repeats_earlier
+
+    first = ('diff --git a/cli.py b/cli.py\n'
+             '+    headers.insert(0, "Domain")\n'
+             '+    widths.insert(0, max(len(d) for d in domains))\n')
+    history = [{"attempt": 1, "added": _patch_changes(first)}]
+
+    # Re-indented and re-spaced is still the same change.
+    again = ('diff --git a/cli.py b/cli.py\n'
+             '+        headers.insert(0,  "Domain")\n'
+             '+        widths.insert(0, max(len(d) for d in domains))\n')
+    assert _repeats_earlier(again, history) == 1
+
+    # Changing the thing that actually mattered is not a repeat.
+    fixed = ('diff --git a/cli.py b/cli.py\n'
+             '+    headers.insert(0, "Subdomain")\n'
+             '+    widths.insert(0, max(len(d) for d in domains))\n')
+    assert _repeats_earlier(fixed, history) == 0
+
+    # And the edits themselves reach the next attempt, so "do not repeat this"
+    # is checkable rather than exhortatory.
+    note = _feedback_note = __import__(
+        "tests.benchmark.runner", fromlist=["_feedback_note"])._feedback_note(
+        3, {"attempt_history": history + [{"attempt": 2, "added":
+                                           _patch_changes(again)}]})
+    assert "already tried and already failed" in note
+    assert "Domain" in note
+
+
+def test_progress_is_measured_by_the_failure_moving():
+    """A different patch failing identically means the idea did not move.
+
+    Pass/fail cannot tell a task closing in from one going in circles, so the
+    signature is what failed — the tests still failing, the literals the
+    assertions wanted, how many now pass — and deliberately NOT the patch.
+    """
+    from tests.benchmark.runner import _failure_signature, _feedback_note
+
+    base = {"fail_to_pass_failing": ["t::test_host", "t::test_subdomain"],
+            "failure_detail": 'assert "Subdomain" in \'Domain  Endpoint\'',
+            "fail_to_pass_passed": 0}
+    assert _failure_signature(base) == _failure_signature(dict(base))
+    # One more test passing is progress even though the task still fails.
+    assert _failure_signature(base) != _failure_signature(
+        dict(base, fail_to_pass_passed=1))
+    # So is failing on a different missing literal.
+    assert _failure_signature(base) != _failure_signature(
+        dict(base, failure_detail='assert "Host" in \'x\''))
+    assert _failure_signature(None) == ""
+
+
+def test_feedback_escalates_when_the_failure_stops_moving():
+    """Same error twice is a pivot signal; three times is a stop signal."""
+    from tests.benchmark.runner import _feedback_note
+
+    def sections(same, moved):
+        note = _feedback_note(same + 1, {"same_failure_count": same,
+                                         "failure_moved": moved,
+                                         "fail_to_pass_failing": ["t::x"]})
+        return [l for l in note.splitlines() if l.startswith("## ")]
+
+    assert any("This is progress" in s for s in sections(1, True))
+    # Two identical failures: change the approach, not the details.
+    assert any("has not moved" in s for s in sections(2, False))
+    assert "PIVOT" in _feedback_note(3, {"same_failure_count": 2,
+                                         "failure_moved": False})
+    # Three: stop editing and go find out what actually runs.
+    assert any("IDENTICALLY" in s for s in sections(3, False))
+
+
+def test_the_candidate_lifecycle_is_skills_not_prompts():
+    """A prompt in code is a method the system cannot improve.
+
+    The learner rewrites skills, the graph indexes them, and reconcile keeps one
+    copy of each fact — none of which reaches a string literal in a benchmark
+    harness. So the harness carries the INPUT and the skill carries the METHOD.
+    """
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    for name, skill in (("SOLUTION_SKILL_PROMPT", "phronix-solution-candidate"),
+                        ("TRIAL_RECONCILE_PROMPT", "phronix-trial-reconcile"),
+                        ("PIVOT_NOTE", "phronix-diagnosis-pivot")):
+        text = getattr(Arm, name)
+        assert f'skill_load("{skill}")' in text, f"{name} must point at {skill}"
+        # Short, because it is an input rather than a method.
+        assert len(text) < 700, f"{name} is carrying method, not input"
+
+
+def test_every_named_skill_exists_on_disk():
+    """A prompt naming a skill that was never written fails silently."""
+    import re
+    from pathlib import Path
+
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    bundled = Path("src/phronix/.agents/skills")
+    named = set()
+    for attribute in dir(Arm):
+        if not attribute.isupper():
+            continue
+        value = getattr(Arm, attribute, "")
+        if isinstance(value, str):
+            named |= set(re.findall(r'skill_load\("([a-z0-9-]+)"\)', value))
+    assert named, "expected the prompts to name some skills"
+    missing = [s for s in named if not (bundled / s / "SKILL.md").is_file()]
+    assert not missing, f"prompts name skills that do not exist: {missing}"
+
+
+def test_trials_are_scored_by_the_tasks_own_tests():
+    """The research metric is a proxy; the target tests are the judge."""
+    import inspect
+
+    from tests.benchmark.runner import Runner
+
+    source = inspect.getsource(Runner._race_plans)
+    # Ranked by target tests passing, then by regressions avoided.
+    assert "fail_to_pass_passed" in source
+    assert "pass_to_pass_passed" in source
+    # Each trial is isolated, or they would see each other's edits.
+    assert "trial-" in source
+    # One failing trial must not take the others with it.
+    assert "except Exception" in source
+
+
+def test_fleet_capacity_and_the_tasks_that_fill_it(tmp_path):
+    """Spare capacity is only waste when work is waiting on it.
+
+    A task unit does not occupy a slot continuously — it checks out repos, runs
+    tests and evaluates patches between model calls. Measured against a live
+    12-unit run: 2, 9, 8, 7, 6 requests in flight, mean 6.4, so a unit occupies
+    about half a slot. Filling a fleet therefore takes roughly twice as many
+    tasks as slots-per-arm, not one per slot.
+    """
+    import json
+
+    from tests.benchmark.cluster import ClusterConfig
+
+    spec = ClusterConfig({
+        "gateway": {"host": "h", "port": 4000, "key": "k"},
+        "servers": [{"host": f"n{i}", "port": 8050} for i in range(32)],
+    })
+    # Unreachable backends fall back to one slot each rather than claiming zero
+    # capacity, so a recommendation is still possible offline.
+    assert spec.capacity() == 32
+
+    # The duty cycle is what makes the answer differ from "one task per slot".
+    assert 0 < ClusterConfig.DUTY_CYCLE < 1
+    two_arms = spec.tasks_to_fill(arms=2)
+    one_arm = spec.tasks_to_fill(arms=1)
+    assert one_arm == 2 * two_arms, "halving the arms doubles the tasks needed"
+    assert two_arms > spec.capacity() / 2, "a unit occupies less than a whole slot"
+
+    # No servers means no recommendation, not a division by zero.
+    assert ClusterConfig({}).capacity() == 0
+    assert ClusterConfig({}).tasks_to_fill() == 0
+
+
+def test_claude_code_can_be_pointed_at_a_local_gateway():
+    """Claude Code speaks Anthropic; a local gateway can too.
+
+    Verified end to end against the fleet: LiteLLM serves /v1/messages in
+    Anthropic shape, and the binary returns rc=0 running gpt-oss-120b through
+    it. What the arm must get right is which variables to set and where to
+    point them — the ROOT, since the CLI appends /v1/messages itself.
+    """
+    from tests.benchmark.arms import ClaudeArm
+
+    arm = ClaudeArm(model="gpt-oss-120b", provider="tuolumne",
+                    base_url="http://head:4000/v1", api_key="sk-local")
+    env = arm.phronix_env({})
+    assert env["ANTHROPIC_BASE_URL"] == "http://head:4000"   # no trailing /v1
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-local"
+    assert env["ANTHROPIC_MODEL"] == "gpt-oss-120b"
+    # The small/fast model must move too, or background calls go elsewhere.
+    assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "gpt-oss-120b"
+
+
+def test_opencode_entry_point_agents_render_as_primary():
+    """opencode refuses a subagent asked for by name, and says so on stderr.
+
+    Every attempt asked for `phronix-healer` and got "is a subagent, not a
+    primary agent. Falling back to default agent" — then ran as the default,
+    with none of the tool scoping the template describes. A configuration error
+    that presents as an agent ignoring its instructions.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    agents = Path("src/phronix/.agents/agents")
+    # The four the benchmark invokes by name.
+    for name in ("phronix-healer", "phronix-researcher", "phronix-learner",
+                 "phronix-always-on-learner"):
+        template = yaml.safe_load((agents / f"{name}.yaml").read_text())
+        assert template.get("mode") == "primary", f"{name} must be primary"
+
+    # Everything else stays a subagent by default: a primary agent nothing
+    # invokes by name is only clutter in the picker.
+    router = yaml.safe_load((agents / "phronix-router.yaml").read_text())
+    assert router.get("mode") in (None, "subagent")
+
+    # And the renderer reads the field rather than hardcoding it, which is what
+    # made every agent a subagent regardless of what it was for.
+    import inspect
+
+    from phronix import agent_templates
+
+    source = inspect.getsource(agent_templates.render_opencode)
+    assert 'template.get("mode")' in source
+    assert '"mode": "subagent"' not in source
+
+
+def test_linking_is_harness_setup_and_idempotent(tmp_path):
+    """Whatever the harness reads gets linked, not just what we thought of.
+
+    Linking the harness DIRECTORY rather than naming its contents means an
+    agent, a skill or an MCP declaration added later comes along without this
+    code being changed. Idempotent because a checkout is made per attempt, so
+    this runs constantly.
+    """
+    from phronix.agents import HARNESS_DIRS, link_harness
+
+    tree = tmp_path / "repo"
+    (tree / ".git" / "info").mkdir(parents=True)
+
+    first = link_harness(tree)
+    assert first["status"] == "linked" and first["linked"]
+    assert link_harness(tree)["status"] == "already_linked"
+    assert (tree / ".opencode").is_symlink()
+
+    # A tree with its own directory of that name belongs to the repository
+    # under test; overwriting it would change what is being measured.
+    theirs = tmp_path / "has-its-own"
+    (theirs / ".opencode").mkdir(parents=True)
+    assert link_harness(theirs)["linked"] is False
+
+    # Every harness the benchmark drives has a directory declared.
+    assert {"opencode", "claude"} <= set(HARNESS_DIRS)
+    assert link_harness(tree, harness="nope")["status"] == "unknown-harness"
+
+
+def test_agents_are_staged_where_opencode_will_look(tmp_path):
+    """opencode resolves --agent against the directory it was pointed at.
+
+    That is the task's checkout, not the phronix project, so the rendered
+    definitions were invisible and a stale home copy answered instead.
+    """
+    from pathlib import Path
+
+    from tests.benchmark.arms import OpenCodeArm
+
+    checkout = tmp_path / "repo"
+    (checkout / ".git" / "info").mkdir(parents=True)
+    arm = OpenCodeArm(model="m", provider="p")
+    staged = arm.stage_agents(checkout)
+    assert staged > 0
+    healer = checkout / ".opencode" / "agents" / "phronix-healer.md"
+    assert healer.is_file()
+    assert "mode: primary" in healer.read_text()
+
+    # A symlink, not a copy: a copy goes stale the moment `phronix sync agents`
+    # runs, and a stale definition fails silently.
+    assert (checkout / ".opencode").is_symlink()
+    assert arm.stage_agents(checkout) == staged        # idempotent
+
+    # A repository that has its own .opencode is left alone.
+    other = tmp_path / "has-its-own"
+    (other / ".opencode").mkdir(parents=True)
+    assert arm.stage_agents(other) == 0
+
+    # It must not reach the patch the arm is judged on — belt (git exclude)
+    # and braces (the diff's own pathspec exclusions).
+    assert ".opencode/" in (checkout / ".git" / "info" / "exclude").read_text()
+    import inspect
+
+    from tests.benchmark.arms import Arm
+
+    assert ":(exclude).opencode" in inspect.getsource(Arm.diff_checkout)
+
+    # A checkout that cannot be written is the old behaviour, not a crash.
+    assert OpenCodeArm(model="m", provider="p").stage_agents(
+        tmp_path / "nonexistent" / "x" / "y" / "z") >= 0
+
+    # Each harness links its OWN directory.
+    from tests.benchmark.arms import ClaudeArm
+
+    assert OpenCodeArm.harness_name == "opencode"
+    assert ClaudeArm.harness_name == "claude"
+
+
+def test_a_harness_can_be_pinned_to_the_model_the_run_uses(tmp_path):
+    """A rendered agent carries its model, so it must name the run's endpoint.
+
+    The opencode agents shipped `model: ollama/qwen3-coder:480b-cloud` while the
+    run asked for `tuolumne/gpt-oss-120b`. An agent naming a different endpoint
+    than the run is a run measuring something nobody chose.
+    """
+    import json
+
+    from phronix.harness_models import (load_active_config, pin_harness,
+                                        resolve_models)
+
+    got = pin_harness("opencode", "tuolumne", "gpt-oss-120b",
+                      target_root=tmp_path)
+    assert got["status"] == "pinned"
+    # Written where the RENDERER looks, not where a bare call would put it:
+    # `active_models_path()` returns the write layer with no argument and
+    # <target_root>/active-models.json with one, and the renderer always passes
+    # a root. Pinning through the bare call wrote a file nothing read.
+    assert got["file"] == str(tmp_path / "active-models.json")
+
+    config = load_active_config(target_root=tmp_path)
+    resolved = resolve_models(config, target_root=tmp_path)["opencode"]
+    assert resolved["provider"] == "tuolumne"
+    # One model at EVERY level: an endpoint serving a single model has no range
+    # to spread across, and resolving through a column that never mentions it
+    # yields UNRESOLVED or another provider's id.
+    assert {resolved[f"level_{n}"] for n in (1, 2, 3, 4)} == {"gpt-oss-120b"}
+
+    # An unpinned harness still resolves through the menu.
+    other = resolve_models(config, target_root=tmp_path)["claude"]
+    assert other["level_1"] != "gpt-oss-120b"
+
+
+def test_a_task_sticks_to_one_backend_so_its_prefix_stays_cached():
+    """An agent re-sends its whole conversation every turn.
+
+    llama.cpp caches that history PER SERVER, so a turn landing on a different
+    backend re-processes everything. Measured on the load-balanced fleet:
+    189,193,540 prompt tokens against 5,228,544 generated — 36:1 — with prefill
+    costing more GPU time than decode (86,570s vs 73,445s). A repeat request to
+    the same backend reported 82 of 87 prompt tokens cached; scattered across 32
+    backends it reported 0.
+    """
+    from tests.benchmark.arms import ClaudeArm, OpenCodeArm
+    from tests.benchmark.cluster import ClusterConfig
+
+    aliases = [f"m@{i}" for i in range(32)]
+    spec = ClusterConfig({"alias": "m", "pinned_models": aliases,
+                          "gateway": {"host": "h", "port": 4000},
+                          "servers": [{"host": "n", "port": 1}]})
+    assert spec.pinned_models() == aliases
+
+    # Stable: a retry returns to the backend that still holds the history.
+    first = spec.model_for("pylint-dev__pylint-7080")
+    assert first in aliases
+    assert spec.model_for("pylint-dev__pylint-7080") == first
+    assert spec.model_for("pallets__flask-5063") != first or len(aliases) == 1
+
+    # The two arms of one task pin to DIFFERENT backends.
+    #
+    # They were deliberately given the same one, on the reasoning that they
+    # would share a warm prefix. They share none: the bare and phronix arms
+    # send different system prompts and diverge from the first token. Once a
+    # backend has a single slot that is not merely useless but harmful —
+    # measured as requests queued while most of the fleet sat idle — so the pin
+    # is keyed on arm AND task.
+    task = {"instance_id": "pylint-dev__pylint-7080"}
+
+    def pinned(arm_name):
+        arm = OpenCodeArm(model="m", provider="p")
+        arm.pinned_models = aliases
+        arm.arm_name = arm_name
+        return arm
+
+    bare, phronix = pinned("claude-bare"), pinned("claude-phronix")
+    assert bare.model_for_task(task) in aliases
+    assert bare.model_for_task(task) == pinned("claude-bare").model_for_task(task)
+    assert bare.model_for_task(task) != phronix.model_for_task(task)
+
+    # A fanout is several conversations at once, so it walks outward from the
+    # task's own pin rather than sending all of them to it.
+    spread = bare.fanout_models(task, 5)
+    assert spread[0] == bare.model_for_task(task)
+    assert len(set(spread)) == 5
+    assert spread == bare.fanout_models(task, 5)          # stable across retries
+    assert len(bare.fanout_models(task, 99)) == len(aliases)   # capped at the fleet
+
+    # Claude Code takes its model from the environment, not argv.
+    claude = ClaudeArm(model="m", provider="tuolumne",
+                       base_url="http://h:4000/v1", api_key="k")
+    claude.pinned_for_env = first
+    assert claude.phronix_env({})["ANTHROPIC_MODEL"] == first
+    # The small/fast model must move with it, or background calls scatter.
+    assert claude.phronix_env({})["ANTHROPIC_SMALL_FAST_MODEL"] == first
+
+    # A fleet with no pinned aliases falls back to the shared name rather than
+    # asking for a model the gateway does not serve.
+    assert ClusterConfig({"alias": "m"}).model_for("x") == "m"
+    assert OpenCodeArm(model="m", provider="p").model_for_task(task) == ""
+    assert OpenCodeArm(model="m", provider="p").fanout_models(task, 5) == []

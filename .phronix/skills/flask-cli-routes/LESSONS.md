@@ -9,10 +9,13 @@ the other.
 
 ## Lessons
 
-## Pitfalls
+### L1 — Add domain column to flask routes command
 
-## Lessons
+**2026-08-21** — Implemented logic in src/flask/cli.py to display a 'Domain' column in the `flask routes` output when any rule has a host or subdomain. This addresses the issue where routes were listed without indicating which subdomain they belong to, allowing users to see domain/subdomain information directly in the routes command.
 
-### L2 — Duplicate retired — see flask-cli-routes-domain#L1/L2
+The implementation:
+- Detects if any rule has a host or subdomain.
+- Adjusts table headers and column widths accordingly.
+- Includes the domain value per rule, using host if host_matching is enabled, otherwise subdomain.
 
-This lesson duplicated [[flask-cli-routes-domain#L1]] and [[flask-cli-routes-domain#L2]] (flask-5063 Host/Subdomain column naming). Retired here; content lives at flask-cli-routes-domain.
+This change improves the usability of the `flask routes` CLI and satisfies the feature request to view routes per subdomain.

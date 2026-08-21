@@ -244,6 +244,81 @@ def sync_agents(target_root: Optional[Path] = None) -> Dict[str, Any]:
     return result
 
 
+#: The per-harness directories a working tree needs to see.
+#:
+#: Whatever a harness reads from the project — agent definitions, its MCP
+#: server declaration, skills — lives under one directory per harness. Linking
+#: the whole directory rather than naming its contents means something added
+#: later is picked up without editing this list.
+HARNESS_DIRS = {
+    "opencode": ".opencode",
+    "claude": ".claude",
+    "copilot": ".github",
+    "codex": ".codex",
+}
+
+
+def link_harness(target: Path, harness: str = "opencode",
+                 source_root: Optional[Path] = None) -> Dict[str, Any]:
+    """Make the project's harness config visible from another working tree.
+
+    A harness resolves `--agent`, its MCP servers and its skills against the
+    directory it was pointed at. Point it at a checked-out repository — which is
+    what a benchmark task is — and it finds none of them, then falls back to a
+    default and says so only on stderr:
+
+        agent "phronix-healer" is a subagent, not a primary agent.
+        Falling back to default agent
+
+    So every invocation silently ran as the default agent, with none of the tool
+    scoping its definition describes.
+
+    A SYMLINK rather than a copy, and idempotent. Copies go stale the moment
+    `sync_agents` re-renders, and a stale definition fails the same silent way.
+    One source of truth means a re-render reaches every linked tree at once, and
+    anything added to the harness directory later comes along without this
+    function knowing about it.
+
+    A tree with its own directory of that name is left alone: it belongs to the
+    repository under test, and overwriting it would change what is being
+    measured.
+    """
+    relative = HARNESS_DIRS.get(harness)
+    if not relative:
+        return {"status": "unknown-harness", "harness": harness, "linked": False}
+
+    source = Path(source_root or Path(__file__).resolve().parents[2]) / relative
+    if not source.is_dir():
+        return {"status": "nothing-to-link", "source": str(source), "linked": False}
+
+    destination = Path(target) / relative
+    try:
+        if destination.is_symlink():
+            if destination.resolve() == source.resolve():
+                return {"status": "already_linked", "target": str(destination),
+                        "source": str(source), "linked": True}
+            destination.unlink()
+        elif destination.exists():
+            return {"status": "occupied", "target": str(destination),
+                    "linked": False}
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.symlink_to(source, target_is_directory=True)
+
+        # Keep it out of the tree's own bookkeeping. Harmless where the tree is
+        # not a repository.
+        exclude = Path(target) / ".git" / "info" / "exclude"
+        if exclude.parent.is_dir():
+            current = exclude.read_text() if exclude.is_file() else ""
+            if f"{relative}/" not in current:
+                exclude.write_text(current + f"\n{relative}/\n")
+        return {"status": "linked", "target": str(destination),
+                "source": str(source), "linked": True}
+    except OSError as exc:
+        # Falling back to the default agent is how it behaved before this
+        # existed; it is not worth failing the caller over.
+        return {"status": "failed", "error": str(exc), "linked": False}
+
+
 def ensure_agents_setup(
     target_root: Optional[Path] = None, force: bool = False
 ) -> Dict[str, Any]:

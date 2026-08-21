@@ -1032,6 +1032,217 @@ task. An expired allocation once produced six tasks of empty results that looked
 like agent failures.
 
 
+Running the benchmark on a local GPU fleet
+==========================================
+
+The comparison needs thousands of agent turns against an identical model, which
+rules out a metered API. The fleet is eight nodes of an MI300A machine serving
+one open-weight model, with everything below chosen against a measurement
+rather than a default.
+
+The machine and what it forces
+------------------------------
+
+Each MI300A APU has 128 GB of unified HBM and there are four per node, so eight
+nodes give 32 independent model servers. Three properties of the environment
+shape the deployment more than the GPUs do:
+
+* **Lustre cannot host container storage.** It has no user extended attributes,
+  so an overlay backend fails ``lsetxattr /boot`` and a vfs backend fails
+  ``pivot_root`` on permissions. Podman's image store must live on the
+  node-local SSD (``/l/ssd``, 200 GB xfs). ``/tmp`` is not an alternative — it
+  is tmpfs, and therefore RAM.
+* **Model weights must be node-local too.** Sixty-odd GB of MXFP4 read from
+  Lustre by 32 servers at once is a self-inflicted denial of service. Weights
+  are staged once to each node's SSD with ``dcp`` (mpifileutils) and loaded from
+  there.
+* **The kernel keyring is a quota.** 200 keys per user, about two per container.
+  Leaked containers exhaust it and the *next* run fails at startup with an error
+  that says nothing about keys; the kill path prunes containers for this reason.
+
+``dcp`` assumes a **shared** destination and splits work by rank, so a single
+job spanning nodes writes a *fraction* of the file to each — measured as 7.9,
+15.9 and 23.8 GB of one 60 GB file. Staging therefore runs one
+``flux run -N1 -n 64 --requires=host:<node>`` per node, in parallel.
+
+Context is a pool, not a per-slot figure
+----------------------------------------
+
+``llama-server``'s ``-c`` is **divided** by ``--parallel``. ``--parallel 16 -c
+524288`` gives each slot 32 768 tokens, and an agent that exceeds it gets
+``"reason": "length"`` — which the harness reports as *agent produced no patch*.
+An entire run failed that way with nothing in the trace naming the cause.
+
+Asking for more than the model was trained on is worse than asking for less:
+``n_ctx_seq`` above ``n_ctx_train`` triggers RoPE scaling, which rescales
+positions for **every** request on that server, not only the long one. The
+``agent`` profile is therefore ``--parallel 4 -c 524288`` — four slots of
+131 072, exactly ``n_ctx_train``.
+
+Prefill dominates, so cache affinity is the main lever
+------------------------------------------------------
+
+Measured on an idle backend with a 24 072-token prompt:
+
+============================  ===================  ==========================
+request                       prefill              note
+============================  ===================  ==========================
+cold                          11 092 ms            2 170 tok/s
+same prompt again             17 ms                24 131 tokens cached
+============================  ===================  ==========================
+
+A factor of 74, and it applies to every turn of every agent, because an agent's
+context is mostly the same prefix as its previous turn. Decode by comparison is
+76 tok/s single-stream and is a property of the hardware.
+
+The prompt cache is **per server**. A gateway that load-balances by least-busy
+therefore destroys the thing that matters most: consecutive turns of one agent
+land on different backends and each pays full prefill. The gateway consequently
+publishes a per-backend alias (``<model>@<n>``) alongside the shared name, and
+each task is pinned to one alias by a hash of its instance id — spreading load
+across backends while keeping any one agent's turns on the backend that already
+holds its prefix.
+
+Claude Code accepts the ``@n`` form; the ``unrecognized_model`` warning it emits
+is from a background session-title call and does not affect the run.
+
+Pinning alone was not enough, because the cache is per **slot**, not per
+server. A backend running four slots holds four unrelated conversations, and
+each arriving request evicts whichever prefix it displaces — so an agent
+returning for its next turn finds its own prefix gone and pays full prefill
+again, on the very backend that was supposed to be holding it. Measured under
+four slots: 2 314 160 prompt tokens against 33 441 generated, prefill 77% of
+GPU time.
+
+The ``solo`` profile gives each GPU a single slot. One slot holds one
+conversation, so nothing else can evict it, and the whole 131 072 window
+belongs to that conversation without dividing a pool. The capacity surrendered
+is nominal: it trades 128 concurrent requests for 32 on a fleet that had been
+running 3–22 in flight with most backends idle.
+
+That change has a sharp edge. A task's pin keeps its own turns together, but a
+research fanout is eight *separate* conversations, and sending them all to the
+task's single backend serialises them — harmless at four slots, fatal at one.
+Fanouts therefore walk outward from the task's own pin, one backend per
+position, so agents spread while each agent's turns stay put. What is pinned is
+a conversation, not a task.
+
+The same correction applies to the two arms of one task. They were given a
+shared backend on the reasoning that they would share a warm prefix; they share
+none, because the bare and phronix arms send different system prompts and
+diverge from the first token. The pin key is therefore ``arm:instance``.
+
+Measured across the change, same six tasks:
+
+========================================  ============  ============
+                                          4 slots       1 slot
+========================================  ============  ============
+prompt tokens per generated token         69            6
+prefill share of GPU time                 77%           60%
+aggregate fleet decode                    2 844 tok/s   3 306 tok/s
+tasks resolved                            1 of 6        2 of 5
+========================================  ============  ============
+
+One slot then reveals the next constraint rather than ending the story: 32
+concurrent requests for a workload of two arms times six tasks times an
+eight-wide fanout, observed as 9 requests in flight and 31 queued with 23
+backends idle. Per-agent action rate reads unchanged at 0.30/s because queue
+time is time between actions.
+
+Two slots is the response, and it is not a return to the old failure. What made
+four slots harmful was eviction *destroying* a prefix; ``--cache-ram`` now parks
+the evicted conversation instead, so eviction costs a memory copy rather than
+eleven seconds of re-prefill. The protection that was missing then exists now,
+which is why the same nominal setting has a different meaning.
+
+What "throughput" means here
+----------------------------
+
+A benchmark task is the wrong unit: one task is minutes of an agent reading
+files and running commands, and a run that has finished no tasks yet may be
+working hard or barely moving. The unit that answers the question is an **agent
+action** — one tool call, or one completed model turn — and the run-wide rate
+factors into two numbers that have different fixes:
+
+.. code-block:: text
+
+   actions/s (run)  =  actions/s per agent  x  agents in flight
+
+A low per-agent rate is a model or harness problem. A low agent count is a
+concurrency problem. Reporting only the product cannot distinguish them, and
+they were confused for hours.
+
+Two counting details matter. Turns are deduplicated **by message id**, because
+a streamed assistant message arrives as several events sharing one id and
+counting events overstated turns by 35%. Per-agent time comes from the
+transcript's own timestamps, not the file's: on Lustre ``st_ctime`` moves on
+every append, so ``mtime - ctime`` is ~0 and the per-agent rate silently
+vanishes.
+
+What was actually slowing it down
+---------------------------------
+
+Measured before and after, same six tasks, same fleet:
+
+======================  =====================  =====================
+                        before                 after
+======================  =====================  =====================
+per agent               0.30 action/s          0.76 action/s
+                        (one every 3.3 s)      (one every 1.3 s)
+fleet in flight         3–5 requests           22 requests
+======================  =====================  =====================
+
+Three causes, in order of what they cost:
+
+* **A start throttle written for a different backend.**
+  ``llm.min_seconds_between_starts: 1.5`` exists to stop a wide fanout burning
+  a metered Anthropic allocation in minutes. On a local fleet there is nothing
+  to meter, and the same 1.5 s is pure serialisation: an eight-way fanout paid
+  12 s of dead time before its last member started, every stage, every task.
+* **Fanout caps chosen when the fleet was one server.** Aspects and approach
+  evaluations are fused fanouts — the phase costs its slowest member whether
+  there are three or eight — so a cap of 5 and 3 bought nothing and left 28 of
+  32 backends idle. Now 8 and 6.
+* **Logging was suspected and cleared.** Two appends per event, against roughly
+  one event per action; at 1.3 s per action it is not the bottleneck. Worth
+  recording because it was the intuitive answer and it was wrong.
+
+Arms already ran concurrently by default; ``--serial-arms`` is the opt-out, and
+is required only where two arms would contend for one node's containers.
+
+A task unit occupies about **0.53 slots** — much of its life is spent checking
+out repositories, running tests and evaluating patches rather than talking to
+the model. Sampled against a live 12-unit run: 2, 9, 8, 7, 6 requests in
+flight. Tasks needed to fill a fleet is therefore ``capacity / (0.53 x arms)``,
+which is what ``--fill-fleet`` computes.
+
+Sampling: what the model was evaluated with
+-------------------------------------------
+
+Sampling parameters are not a matter of taste; they are part of the model's
+evaluation contract, and picking them by intuition changes the score being
+measured.
+
+For ``gpt-oss-120b`` the reference is **temperature 1.0, top-p 1.0, top-k
+disabled**. Two traps sit either side of it: ``top_k`` defaults to 50 in
+transformers and 40 in llama.cpp, so *not setting it* silently truncates the
+distribution; and turning sampling off entirely (``--temp 0 --top-k 1``) is
+argmax, which is not what the model was measured under either. Repetition,
+presence and frequency penalties stay neutral — a reasoning model revisits its
+own tokens by design, and penalising that damages exactly the traces the
+benchmark cares about.
+
+``--jinja`` is not optional. It selects the Harmony chat template, which is what
+parses tool calls and separates the reasoning channel. Without it the model
+emits tool calls as prose — observed directly as a hallucinated
+``{"tasks": [{"type": "add_file", ...}]}`` blob in place of any real tool use.
+
+Reasoning effort is the one genuine speed/accuracy dial, and it points the wrong
+way for this benchmark: low effort is what makes the fleet fast, and the
+published SWE-bench work uses medium or high, which score alike. That tension is
+unresolved and is recorded as a weakness below rather than papered over.
+
+
 Where the design is still weak
 ==============================
 
@@ -1047,6 +1258,14 @@ marketing.
 * **Label stability versus history-independence** cannot both hold. Stability
   was chosen; a rebuilt store can therefore allocate different labels than an
   incrementally grown one.
+* **Reasoning effort is set against its own evidence.** The fleet runs
+  ``gpt-oss-120b`` at low effort because that is what makes it fast, while the
+  published SWE-bench reproductions use medium or high. Speed was chosen first
+  and deliberately; the accuracy cost has not been measured.
+* **The local model is not comparable to the hosted one.** Observed directly:
+  turns that end cleanly without an edit, and tool calls emitted as prose. No
+  sampling or budget setting closes a capability gap, so bare-versus-phronix
+  within this fleet is sound while fleet-versus-hosted numbers are not.
 * **Cost.** Research plus parallel candidates plus a learning pass is several
   agent invocations per task. It buys measured knowledge instead of guesses, but
   the trade is real and the benchmark counts every token of it.

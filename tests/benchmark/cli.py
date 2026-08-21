@@ -283,6 +283,25 @@ def cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
 
+    if getattr(args, "cluster", None):
+        # The cluster's config is the source of truth for where the model is
+        # and what it is called. Resolved here, before the RunConfig is built,
+        # so every arm and the manifest all record the same endpoint.
+        from . import cluster as cluster_mod
+
+        spec = cluster_mod.load(Path(args.cluster) if args.cluster is not True
+                                else None)
+        wired = cluster_mod.configure_opencode(spec, direct=args.cluster_direct)
+        args.base_url = wired["base_url"]
+        args.model = spec.model
+        args.api_key = spec.api_key
+        args.provider = cluster_mod.PROVIDER_NAME
+        args.models = ",".join(spec.models)
+        args.pinned_models = ",".join(spec.pinned_models())
+        print(f"cluster: {spec.describe()}", file=sys.stderr)
+        print(f"         opencode provider '{wired['provider']}' -> "
+              f"{wired['file']}", file=sys.stderr)
+
     if "opencode-phronix" in arms and "opencode-phronix-frozen" not in arms:
         print("note: running the learning arm without `opencode-phronix-frozen`. Any "
               "slope it shows cannot be separated from task-ordering effects, and the "
@@ -290,7 +309,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     config = RunConfig(
         tasks=task_ids, arms=arms, model=args.model, provider=args.provider,
-        base_url=args.base_url, max_tries=args.max_tries, timeout_s=args.timeout,
+        base_url=args.base_url, api_key=getattr(args, "api_key", "") or "",
+        max_tries=args.max_tries, timeout_s=args.timeout,
         isolation=args.isolation, fresh=not args.no_fresh, pull=not args.no_pull,
         carry_root=("" if args.no_carry else (args.carry_root or default_carry_root())),
         research_on_retry=args.research_on_retry,
@@ -300,6 +320,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         flux_job=args.flux_job, node=args.node,
         parallel_arms=args.parallel_arms,
         parallel_tasks=args.parallel_tasks,
+        attempt_candidates=int(getattr(args, "attempt_candidates", 1) or 1),
+        models=getattr(args, "models", "") or "",
+        pinned_models=getattr(args, "pinned_models", "") or "",
+        nodes=getattr(args, "nodes", "") or "",
+        tasks_per_node=int(getattr(args, "tasks_per_node", 0) or 0),
         until_pass=args.until_pass, stall_limit=args.stall_limit,
         include_hints=args.with_hints,
         reveal_target_tests=args.reveal_target_tests,
@@ -556,6 +581,32 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", default=DEFAULT_MODEL)
     run.add_argument("--provider", default=DEFAULT_PROVIDER)
     run.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    run.add_argument("--attempt-candidates", type=int, default=1,
+                     help="Attempt this many ranked research plans in parallel "
+                          "and keep whichever gets furthest on the target "
+                          "tests. 1 attempts only the top-ranked plan.")
+    run.add_argument("--models", default="",
+                     help="Comma-separated models the endpoint serves. With "
+                          "more than one, candidate-generating stages spread "
+                          "across them. Usually comes from --cluster.")
+    run.add_argument("--nodes", default="",
+                     help="Comma-separated nodes to spread tasks across. Each "
+                          "task's containers run on its assigned node over ssh.")
+    run.add_argument("--tasks-per-node", type=int, default=0,
+                     help="Concurrent tasks per node; the pool is this times "
+                          "the node count. Overrides --parallel-tasks.")
+    run.add_argument("--api-key", default="",
+                     help="Credential for --base-url. Usually comes from "
+                          "--cluster instead.")
+    run.add_argument("--cluster", nargs="?", const=True, default=None,
+                     metavar="CLUSTER_JSON",
+                     help="Take the endpoint, model, key and provider from a "
+                          "cluster.json. Overrides --base-url/--model/"
+                          "--provider, and writes opencode's provider config.")
+    run.add_argument("--cluster-direct", action="store_true",
+                     help="Address a backend llama-server directly instead of "
+                          "the gateway. opencode only — Claude Code needs the "
+                          "gateway, which is what speaks the Anthropic format.")
     run.add_argument("--isolation", default="podman", choices=("podman", "docker"))
     run.add_argument("--image-template", default="",
                      help="Override the SWE-bench image name pattern.")

@@ -16,6 +16,94 @@ type: skill
 | `X3` | References | Tried: normalize-in-is-ignored-file-helper |
 | `X4` | References | Sources consulted for normalize ignore paths |
 | `X5` | References | What has been investigated about normalize ignore paths |
+| `X6` | References | Where research on this subject stands |
+| `X48` | References | Tried: normalize_paths_before_ignore_check |
+| `X49` | References | Tried: normalize_subfilepath_in_recursive_loop |
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -91,3 +179,48 @@ Ground already covered by research on this subject.
   Looked in: Path matching utilities and ignore logic
 - **known-issues-fixes** — Has this bug or similar recursive+ignore bugs been reported/fixed before in pylint or similar linters?
   Looked in: pylint issue tracker, commit history, related projects (flake8, mypy)
+
+### X6 — Where research on this subject stands
+
+State of research on this subject as of the last stage that ran.
+
+Measured by **tests_passed** (max, target 1.0).
+
+**Still open**
+- normalize-in-is-ignored-file-helper (potential)
+- normalize_paths_before_ignore_check (potential)
+- normalize_subfilepath_in_recursive_loop (potential)
+- normalize-paths-before-ignore-check (potential tests_passed=0.0)
+- (no files changed) (potential)
+- normalize_in_is_ignored_file_helper (potential)
+
+**Where the detail is**
+- normalize-in-is-ignored-file-helper: https://github.com/pylint-dev/pylint/pull/7080
+- normalize_paths_before_ignore_check: Official PR #7080: https://github.com/pylint-dev/pylint/pull/7080
+- normalize_subfilepath_in_recursive_loop: Official PR #7080: https://github.com/pylint-dev/pylint/pull/7080
+- normalize-paths-before-ignore-check: Official PR #7080: https://github.com/pylint-dev/pylint/pull/7080
+- (no files changed): benchmark attempt
+- normalize_in_is_ignored_file_helper: https://github.com/pylint-dev/pylint/pull/7080
+- full record: research topic `pylint-dev__pylint-7080` (via research_status, only if this summary is not enough)### X47 — Tried: normalize_in_is_ignored_file_helper
+
+Add os.path.normpath(element) directly in _is_ignored_file helper function.
+
+**Hypothesis**: Normalizing element inside the helper ensures all ignore checks use consistent paths.
+
+**Status**: potential (no trials recorded yet). Investigated already — extend this rather than re-deriving it.
+
+### X48 — Tried: normalize_paths_before_ignore_check
+
+Add os.path.normpath(element) before checking ignore patterns in _is_ignored_file.
+
+**Hypothesis**: Normalizing the file path before ignore-paths matching ensures patterns are applied correctly for recursive file discovery.
+
+**Status**: potential (no trials recorded yet). Investigated already — extend this rather than re-deriving it.
+
+### X49 — Tried: normalize_subfilepath_in_recursive_loop
+
+Normalize subfilepath during recursive directory traversal before applying ignore-paths patterns.
+
+**Hypothesis**: Applying os.path.normpath to each subfilepath during recursion ensures ignore-paths patterns match correctly.
+
+**Status**: potential (no trials recorded yet). Investigated already — extend this rather than re-deriving it.
