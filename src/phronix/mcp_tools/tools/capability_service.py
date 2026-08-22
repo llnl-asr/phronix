@@ -39,6 +39,7 @@ def register(mcp: Any) -> None:
         source: str = "",
         layer: str = "",
         overwrite: bool = False,
+        topic: str = "",
     ) -> str:
         """Turn a deterministic procedure into a permanent MCP tool.
 
@@ -70,6 +71,13 @@ def register(mcp: Any) -> None:
             layer: force a target layer ("project", "user", "bundled"). Defaults
                 to the layer whose audience should inherit it.
             overwrite: replace an existing capability of the same name.
+            topic: the task key, when this tool KNOWS that task — it names its
+                repository, its files, or the shape of its fix. Filed under that
+                task rather than beside the method tools, which is what lets a
+                later from-scratch run inherit how to run tests without also
+                inheriting this task's answer. Leave empty for a genuine method
+                tool: one that would work unchanged on a repository you have
+                never seen.
 
         The module is compiled and checked for ``register`` BEFORE it is saved, so
         a broken capability is rejected now rather than failing at the next server
@@ -84,7 +92,7 @@ def register(mcp: Any) -> None:
         try:
             return json.dumps(
                 new(name, description, source=source or None,
-                    layer=layer or None, overwrite=overwrite),
+                    layer=layer or None, overwrite=overwrite, topic=topic),
                 indent=2,
             )
         except Exception as exc:

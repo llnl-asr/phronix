@@ -1,6 +1,6 @@
 ---
 name: pylint-dev
-description: Research on pylint dev.
+description: Research on pylint dev. Approaches tried: (no files changed).
 subject: pylint-dev
 type: skill
 ---
@@ -9,68 +9,7 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `I1` | Instructions | How to evaluate a change to pylint dev |
 | `X1` | References | Where research on this subject stands |
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -82,14 +21,6 @@ type: skill
 
 ## Instructions
 
-### I1 — How to evaluate a change to pylint dev
-
-Figure of merit: **ignored-paths-effectiveness** (min, target 0.0).
-
-Measured by: Run `pylint --recursive=y src/` with the repository's pyproject.toml settings and count the number of messages originating from files that match any `ignore-paths` pattern. The metric is this count; zero indicates perfect respect of ignore-paths.
-
-Cases differ along: expected, match_scope, path_form, pattern_type.
-
 ## Rules
 
 ## References
@@ -98,10 +29,14 @@ Cases differ along: expected, match_scope, path_form, pattern_type.
 
 State of research on this subject as of the last stage that ran.
 
-Measured by **ignored-paths-effectiveness** (min, target 0.0).
-
 **Still open**
-- aspect not yet answered: ignore-paths parsing
-- aspect not yet answered: recursive flag interaction
-- aspect not yet answered: pattern matching semantics
-- aspect not yet answered: path normalization
+- (no files changed) (potential)
+- aspect not yet answered: regex-lookahead-fix
+- aspect not yet answered: fallback-punct-tag-handling
+- aspect not yet answered: include-punct-flag
+- aspect not yet answered: strip-punct-and-emit
+- aspect not yet answered: configurable-punct-tag-behavior
+
+**Where the detail is**
+- (no files changed): benchmark attempt
+- full record: research topic `pylint-dev__pylint-5859` (via research_status, only if this summary is not enough)

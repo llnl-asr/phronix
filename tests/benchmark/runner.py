@@ -1261,6 +1261,10 @@ class Runner:
         arm.arm_name = arm_name
         arm.include_hints = self.config.include_hints
         arm.reveal_target_tests = self.config.reveal_target_tests
+        # Research asks for this: it decides whether the solution is built
+        # before the attempt or after the trials that measure it.
+        arm.attempt_candidates = int(
+            getattr(self.config, "attempt_candidates", 1) or 1)
         arm_dir = self.out / arm_name
         arm_dir.mkdir(parents=True, exist_ok=True)
         results_path = arm_dir / "results.jsonl"
@@ -1289,23 +1293,24 @@ class Runner:
                       f"research and skills from {self.config.carry_root}",
                       flush=True)
         elif getattr(arm, "uses_phronix", False):
-            # Fresh keeps the METHOD tools, and only those.
+            # Fresh seeds NO capabilities, and the store is not where that is
+            # enforced.
             #
-            # A `probe_` capability knows how to run one area's tests, or set a
-            # fixture up in a given shape. It carries nothing about any
-            # particular task, so seeding it does not pre-train the run — it
-            # hands it the shell scripting every previous run had to derive from
-            # nothing. Excluding it would make "from scratch" mean "without
-            # tools", which is a claim about tooling rather than about learning.
-            tools: List[str] = []
-            if self.config.carry_root:
-                tools = seed_store(store_root, Path(self.config.carry_root),
-                                   kinds=("capabilities",),
-                                   method_tools_only=True)["seeded"]
-            print(f"  [{arm_name}] fresh: no earlier skills or research seeded — "
-                  f"the bundled framework"
-                  + (f" plus {len(tools)} reusable research tool(s)" if tools
-                     else "") + ", nothing task-specific", flush=True)
+            # It used to seed every `probe_`-prefixed tool, on the reasoning
+            # that a method tool carries nothing about any task. The reasoning
+            # was right and the test was not: the prefix is chosen by whichever
+            # agent wrote the tool, and `probe_fix_max_to_sum_powers_filter`
+            # applies one benchmark task's fix outright. A from-scratch run was
+            # being handed answers under a naming convention.
+            #
+            # What replaces it is a live filter — the MCP server serves the
+            # bundled tools plus whatever this session authors, and nothing
+            # from any earlier run's layer. So the run still builds and calls
+            # its own tools, and there is no seeded set to get wrong.
+            print(f"  [{arm_name}] fresh: the bundled framework only — no "
+                  f"earlier skills, research or capabilities; tools this run "
+                  f"builds are served to it and to nothing after it",
+                  flush=True)
 
         # The session the arm writes into, and whether it may read outside it.
         arm.research_session = self.config.research_session
@@ -1568,10 +1573,51 @@ class Runner:
                 tracer.attempt(attempt_index, touched, attempt.verdict or {},
                                attempt.steps, attempt.tokens_total,
                                previous=previous_verdict)
-                tracer.tools(f"attempt-{attempt_index}",
-                             workdir / f"attempt-{attempt_index}" / "opencode.jsonl")
+                # Recorded on the attempt, not only traced.
+                #
+                # A phronix attempt that calls no phronix tools is a plain
+                # agent wearing phronix's name, and it scored identically to
+                # one that used its memory — the difference lived in a trace
+                # line nobody aggregates. Research already treats zero calls as
+                # fatal for exactly this reason; an attempt is the same state.
+                # The evaluation's turn joins the task's conversation, so the
+                # next attempt inherits what was changed and what the tests
+                # said rather than starting from the issue again.
+                # Subject and store, so the conversation is kept by AREA and
+                # outlives this task — two bugs in one area are worked by
+                # different tasks, often in the same run.
+                arm.conversation_subject = getattr(
+                    arm, "research_topic_binding", "") or instance_id
+                arm.conversation_root = Path(store_root) / ".phronix"
+                try:
+                    arm.record_verdict(
+                        workdir, f"evaluation of attempt {attempt_index}",
+                        verdict=attempt.verdict, patch=attempt.patch or "",
+                        skill=getattr(arm, "pinned_skill", ""),
+                        subject_dir=arm.subject_dir(
+                            workdir / f"attempt-{attempt_index}"))
+                except Exception as exc:     # bookkeeping never fails a task
+                    # Reported, not swallowed.
+                    #
+                    # A bare `pass` here hid an `AttributeError` for a whole
+                    # run: every evaluation turn was silently missing, the
+                    # conversations held one turn each instead of two, and
+                    # nothing said so. Bookkeeping must not fail a task — but
+                    # it must not fail invisibly either, because the thing it
+                    # records is what the next attempt reads.
+                    if tracer:
+                        tracer.event("conversation-unrecorded",
+                                     f"could not add the evaluation turn: "
+                                     f"{type(exc).__name__}: {exc}")
+                attempt.phronix_calls = tracer.tools(
+                    f"attempt-{attempt_index}",
+                    workdir / f"attempt-{attempt_index}" / "opencode.jsonl") or 0
                 tracer.tools(f"learn-{attempt_index}",
                              workdir / f"attempt-{attempt_index}" / "learn.jsonl")
+                if arm.uses_phronix and not attempt.phronix_calls:
+                    tracer.event("tools", "** this attempt used NO phronix "
+                                          "tools — it is a plain agent result "
+                                          "under a phronix label")
             # Carried outside the tracer block: the comparison must hold even
             # when tracing is off.
             previous_verdict = attempt.verdict or previous_verdict
@@ -1699,7 +1745,24 @@ class Runner:
         # at the top of the ranking by one nothing has tried.
         if arm.uses_phronix and not arm.store_readonly and result.resolved:
             topic = getattr(arm, "research_topic_binding", "")
-            if topic:
+            # Which plans solved it, when the winning attempt raced several.
+            #
+            # Without the names this called `attempted_approach`, which reads
+            # the ranking — and on a pass whose candidates came from the ideas
+            # rather than from recorded approaches there is no ranking, so a
+            # task that had just been solved twice over reported "no approach
+            # was followed". Measured on pylint-7080: two plans SOLVED it, one
+            # failed, and only the failure reached the ledger.
+            winners = [t["plan"] for t in
+                       ((result.attempts or [])[-1].trials or [])
+                       if t.get("resolved") and t.get("plan")]
+            if topic and winners:
+                for plan in winners:
+                    self._mark_outcome(
+                        arm, store_root, topic, worked=True, approach=plan,
+                        why=(f"solved the task in {result.tries} attempt(s), "
+                             f"tried against the target tests"), tracer=tracer)
+            elif topic:
                 self._mark_outcome(arm, store_root, topic, worked=True,
                                    why=f"passed in {result.tries} attempt(s)",
                                    tracer=tracer)
@@ -1800,8 +1863,13 @@ class Runner:
                     got = arm.generate(instance, store_root, work,
                                        trial_container, on_call=say, plan=plan)
                     (work / "patch.diff").write_text(got.patch or "")
-                    base = measure_baseline(trial_container, instance,
-                                            timeout_s=self.config.timeout_s)
+                    # `baseline_failures`, which is what the function is
+                    # called. `measure_baseline` never existed — this whole
+                    # path would have raised NameError the first time a run
+                    # used parallel candidates, and it was only ever exercised
+                    # structurally.
+                    base = baseline_failures(trial_container, instance,
+                                             timeout_s=self.config.timeout_s)
                     verdict = evaluate(
                         trial_container, instance, got.patch,
                         known_failures=base.get("pre_existing_failures"))
@@ -1821,6 +1889,8 @@ class Runner:
                              f"{plan['name']}: "
                              f"{'SOLVED' if verdict.get('resolved') else 'failed'} "
                              f"({score[0]} target test(s) passing)")
+
+        from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=len(plans)) as pool:
             list(pool.map(try_plan, list(enumerate(plans, 1))))
@@ -1931,8 +2001,21 @@ class Runner:
                     tracer.begin("checkout",
                                  f"exporting /testbed for attempt {attempt_index}")
                 arm.prepare_checkout(container, store_root, attempt_dir)
-                notes = (workdir / f"attempt-{attempt_index - 1}" / "attempt-notes.md"
-                         if attempt_index > 1 else None)
+                # The whole exchange, not the harness's digest of it.
+                #
+                # `attempt-notes.md` is a summary the harness wrote, choosing
+                # what it guessed research would need — a component with no way
+                # to tell which half-sentence in the transcript was the clue.
+                # `exchange.md` is what was asked, what was said, what changed
+                # and how it was judged, and the plan stage summarises it
+                # itself. Falls back to the digest where an older attempt wrote
+                # no exchange.
+                previous = workdir / f"attempt-{attempt_index - 1}"
+                notes = None
+                if attempt_index > 1:
+                    exchange = previous / "exchange.md"
+                    notes = (exchange if exchange.is_file()
+                             else previous / "attempt-notes.md")
                 # Research on retry only, when asked for.
                 #
                 # By default research runs before every attempt, including the
@@ -2008,31 +2091,23 @@ class Runner:
                         tracer.tools(f"research-{attempt_index}",
                                      attempt_dir / f"research-{attempt_index}.jsonl")
 
-                    # A corrector that fails and changes nothing is decoration.
-                    # One bounded revision pass, once per attempt: the plan the
-                    # agent is about to follow has just been judged unfit, and
-                    # following it anyway is how a run spends a full attempt on
-                    # a plan its own checker rejected.
-                    allowance = (arm.research_allowance(attempt_index)
-                                 if hasattr(arm, "research_allowance")
-                                 else arm.research_budget_s)
-                    if ((research.get("record") or {}).get("verdict") == "fail"
-                            and arm.research_spent_s < allowance):
-                        if tracer:
-                            tracer.event("recheck",
-                                         "corrector rejected the plan — revising "
-                                         "before the attempt uses it")
-                        redo = arm.research(instance, store_root, attempt_dir,
-                                            attempt_index=attempt_index + 1,
-                                            notes=notes, on_call=narrate)
-                        arm.research_spent_s += float((redo or {}).get("elapsed_s") or 0)
-                        attempt.research_s += float((redo or {}).get("elapsed_s") or 0)
-                        attempt.research_cost_usd += float((redo or {}).get("cost_usd") or 0)
-                        if redo:
-                            if research_log is not None:
-                                research_log.append(redo)
-                            if tracer:
-                                tracer.research(attempt_index, redo)
+                    # No revision pass. The ideas go straight to the tests.
+                    #
+                    # `research_verify` used to be able to send a finished pass
+                    # back to the start, and a second full research pass would
+                    # run before the attempt. Its bar is the figure of merit
+                    # and the trials on the corpus research built for itself —
+                    # a proxy, and one nothing satisfies now that candidates
+                    # are measured against the task's own tests instead.
+                    #
+                    # Measured on pylint-7080: three ideas explored, three
+                    # solution skills written, and eleven seconds later the
+                    # whole pass was re-run because the proxy was unhappy. The
+                    # candidates were sitting there, executable, unattempted.
+                    #
+                    # What judges them is the next few minutes: every plan
+                    # tried, every result measured against the real target
+                    # tests, and each marked against the plan that produced it.
 
                 # Measured once per instance and cached; needed here because a
                 # candidate cannot be judged without knowing what was already
@@ -2073,6 +2148,10 @@ class Runner:
                     # Merge what worked, or question what they all assumed.
                     arm.reconcile_trials(instance, store_root, attempt_dir,
                                          trials, on_call=narrate_attempt)
+                    # Where the merge put it, so the result points at the
+                    # solution rather than only asserting there is one.
+                    attempt.solution_skill = arm.solution_skill_path(
+                        store_root, arm.research_topic(instance))
                 else:
                     outcome = arm.generate(instance, store_root, attempt_dir,
                                            container, on_call=narrate_attempt)
@@ -2172,7 +2251,31 @@ class Runner:
         # 2 implemented the same incomplete fix and failed the same way. The
         # refusal, the refinement and the burial were all built and all inert,
         # because each of them keys off a status nothing set until too late.
-        if arm.uses_phronix and not arm.store_readonly and not attempt.resolved:
+        # Every plan that ran, marked by what its own trial did.
+        #
+        # This is what `choose` used to stand in for. It named one approach as
+        # "followed" before anything was tried, so the ledger recorded a guess;
+        # now each candidate was actually implemented and actually measured, and
+        # a plan that failed on the real tests is the strongest evidence the
+        # system can have about it. Marked whether or not the attempt as a whole
+        # resolved: in a race the winner and the losers are both results.
+        marked_plans = False
+        if arm.uses_phronix and not arm.store_readonly:
+            topic = getattr(arm, "research_topic_binding", "")
+            for trial in (attempt.trials or []) if topic else []:
+                if not trial.get("plan"):
+                    continue
+                marked_plans = True
+                self._mark_outcome(
+                    arm, store_root, topic, worked=bool(trial.get("resolved")),
+                    approach=trial["plan"], tracer=tracer,
+                    why=(f"try {attempt_index}: tried against the target tests, "
+                         f"{trial.get('target_tests_passed', 0)} passing"
+                         + (f"; trial error: {trial['error']}"
+                            if trial.get("error") else "")))
+
+        if (arm.uses_phronix and not arm.store_readonly
+                and not attempt.resolved and not marked_plans):
             topic = getattr(arm, "research_topic_binding", "")
             if topic:
                 failing = (verdict.get("fail_to_pass_failing") or [])[:2]
@@ -2187,7 +2290,8 @@ class Runner:
 
     @staticmethod
     def _mark_outcome(arm, store_root: Path, topic: str, worked: bool,
-                      why: str = "", tracer=None) -> Dict[str, Any]:
+                      why: str = "", tracer=None,
+                      approach: str = "") -> Dict[str, Any]:
         """Record how a real task went for the approach that was followed.
 
         Through the arm's own `_in_store`, which is the only place that knows
@@ -2206,7 +2310,8 @@ class Runner:
 
         try:
             decided = arm._in_store(store_root, _research.mark_attempt_outcome,
-                                    topic, worked=worked, evidence=why) or {}
+                                    topic, approach=approach, worked=worked,
+                                    evidence=why) or {}
         except Exception as exc:  # noqa: BLE001 - reported, never raised
             if tracer:
                 tracer.event("approach-unmarked",
@@ -2221,6 +2326,20 @@ class Runner:
                          + ("solved the task" if worked else
                             f"did not solve it — {why}. It will not be "
                             f"proposed again; a revision of it can be."))
+        elif decided.get("status") == "empty":
+            # Nothing to mark is not a failure to mark.
+            #
+            # Under research-on-retry, try 1 runs with research withheld, so no
+            # approach was ever proposed and the record is legitimately empty.
+            # This fired on every first attempt, warning that "the next attempt
+            # will still see this approach as live" — about an approach that
+            # does not exist.
+            #
+            # A corrector that cries wolf on the normal path teaches everyone
+            # to ignore it, which costs exactly the times it is right.
+            tracer.event("approach-none",
+                         f"no approach was followed on {topic}, so there is "
+                         f"nothing to mark — no approach was ever recorded")
         else:
             # Not decoration: an unmarked failure means the next attempt sees
             # the losing approach still ranked first, which is the exact bug

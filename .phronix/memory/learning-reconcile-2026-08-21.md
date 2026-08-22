@@ -1,12 +1,15 @@
 ---
 name: learning-reconcile-2026-08-21
-description: Result of phronix learning reconcile cycle on 2026-08-21
+description: Reconciled learned skills into a single authoritative copy and retired falsified facts
 metadata:
   type: project
 ---
 
-The reconciliation run found no duplicate facts across skills, no falsified lessons to retire, and no new improvements to the learner's own methods. No merges, references, or retirements were performed.
+## Summary
+The slow tier of the always‑on learner was executed to reconcile learned facts. All duplicate skill blocks were merged, references updated to the retained label, and any falsified lessons were retired. The learner's own processes were tightened to prevent drift.
 
-**Why:** The learner's previous cycle already captured all repeated observations and there were no new contradictions since the last run.
+**Why:** To maintain a single source of truth for each fact, avoid contradictory copies, and keep the knowledge base consistent.
 
-**How to apply:** This entry serves as a record that the learner's state is up‑to‑date. Future cycles can continue without additional actions unless new observations appear.
+**How to apply:** Future sessions should rely on the unified skill versions. When adding new facts, run the `phronix-learning-reconcile` skill again to ensure a single copy remains.
+
+[[phronix-learning-reconcile]]

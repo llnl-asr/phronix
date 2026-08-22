@@ -1,6 +1,6 @@
 ---
 name: note
-description: Research on note. Covers does pylint emit W0511 for punctuation-only notes; does pylint suppress warnings for alphanumeric notes; how does pylint treat notes mixing punctuation and alphanumeric.
+description: Research on note. Covers does the parser correctly identify punctuation-only note tags; are punctuation-only notes filtered out by the ignore mechanism. Approaches tried: pylint/checkers/misc.py.
 subject: note
 type: skill
 ---
@@ -26,15 +26,38 @@ type: skill
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## Instructions
 
 ### I1 — How to evaluate a change to note
 
-Figure of merit: **punctuation_note_warnings** (max, target 1.0).
+Figure of merit: **fixme-punctuation-fom** (max, target 1.0).
 
-Measured by: Run `pylint --notes='!?.' <file>` and count W0511 warnings for note tags that are solely punctuation. The metric is the number of such warnings emitted; a higher count means the fix works.
+Measured by: run pylint with --notes on a file containing a punctuation tag and count W0511 warnings for that line
 
-Cases differ along: count, location, note_type.
+Cases differ along: file_path, note_type.
 
 ## Rules
 
@@ -44,11 +67,18 @@ Cases differ along: count, location, note_type.
 
 State of research on this subject as of the last stage that ran.
 
-Measured by **punctuation_note_warnings** (max, target 1.0).
+Measured by **target-tests-passed** (max, target 0.0).
 
 **Still open**
-- aspect not yet answered: punctuation_note_warning
-- aspect not yet answered: alphanumeric_note_suppression
-- aspect not yet answered: mixed_note_behavior
-- aspect not yet answered: location_effect
-- aspect not yet answered: multiple_notes_handling
+- pylint/checkers/misc.py (potential)
+- note_normalization (potential)
+- punctuation_note_tags (potential)
+- aspect not yet answered: validate-1
+- aspect not yet answered: tuning-3-used-for-rapid-iteration
+- aspect not yet answered: held-out-1
+
+**Where the detail is**
+- pylint/checkers/misc.py: benchmark attempt
+- note_normalization: analysis based on issue description
+- punctuation_note_tags: issue
+- full record: research topic `pylint-dev__pylint-5859` (via research_status, only if this summary is not enough)

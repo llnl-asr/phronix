@@ -19,6 +19,7 @@ nothing at all.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -349,7 +350,7 @@ def test_filing_findings_is_never_truncated():
     """
     from tests.benchmark.arms import PhronixArm
 
-    assert "aspect-record" in PhronixArm.MUST_FINISH_STAGES
+    assert "build-solution" in PhronixArm.MUST_FINISH_STAGES
     assert "aspect" not in PhronixArm.MUST_FINISH_STAGES
     # The connective stages too: each one turns several paid-for stages into the
     # input for the next, so truncating one discards all of them.
@@ -357,7 +358,7 @@ def test_filing_findings_is_never_truncated():
     # finding, so there was nothing left for it to reconcile. Its retry-path
     # counterpart survives, where several repairs DO have to be reconciled
     # against one failure.
-    for stage in ("plan", "repair-collect", "propose", "solution-skill"):
+    for stage in ("plan", "build-solution"):
         assert stage in PhronixArm.MUST_FINISH_STAGES, stage
 
 
@@ -368,14 +369,13 @@ def test_every_stage_the_driver_runs_has_a_budget():
     # The pipeline is five stages: `survey` folded into `plan`, `collect`
     # dropped because each aspect files its own finding, `evaluate` dropped
     # because `tune` already measures against the corpus.
-    for stage in ("plan", "aspect", "aspect-record", "aspect-recheck",
-                  "propose", "tune", "diagnose", "repair-collect"):
+    for stage in ("plan", "explore"):
         assert stage in PhronixArm.STAGE_BUDGETS, stage
 
     # And `solution-skill` must NOT have one: it writes up what the timed
     # phases collected, so a budget there would put the write-up on a clock.
-    assert "solution-skill" not in PhronixArm.STAGE_BUDGETS
-    assert "solution-skill" in PhronixArm.UNTIMED_STAGES
+    assert "build-solution" not in PhronixArm.STAGE_BUDGETS
+    assert "build-solution" in PhronixArm.UNTIMED_STAGES
 
 
 def test_the_agents_own_summary_wins_over_a_derived_one():
@@ -505,19 +505,6 @@ def test_prior_work_does_not_offer_an_unrelated_subject(isolated_layers):
     assert "research it properly" in unrelated["advice"]
 
 
-def test_the_early_stages_actually_consult_prior_work():
-    """Wiring the lookup up is the whole point; a tool nobody calls is inert."""
-    from tests.benchmark.arms import PhronixArm as arm
-
-    # The survey runs as two overlapping halves; consulting prior work is the
-    # job of the half that queries our own store.
-    assert "research_prior" in arm.SURVEY_PRIOR_PROMPT
-    assert "graph_query" in arm.SURVEY_PRIOR_PROMPT  # reaches subjects terms miss
-    plan = arm.PLAN_PROMPT + skill_text("phronix-research-plan")
-    assert "research_prior" in plan                # so aspects are not wasted
-    assert "research_prior" in arm.PROPOSE_PROMPT  # so approaches are not re-proposed
-
-
 def test_one_subject_gets_one_skill_however_the_words_are_ordered(isolated_layers):
     """Two runs on the same subsystem must accumulate, not fork.
 
@@ -623,19 +610,19 @@ def test_an_evaluator_worktree_carries_the_harness_scaffolding():
     started in a bare worktree comes up with none of the research tools and
     cannot record a trial.
 
-    It fails quietly: the stage exits in about two seconds, the ranking still
-    reports scores, and those scores are the predictions the propose stage wrote
-    rather than measurements. A real run showed three evaluators at `max 2s`
-    with a ranking of 1.0 / 1.0 / 0.9 — an argmax over guesses, which is exactly
-    what the figure of merit exists to prevent.
+    It fails quietly: the stage exits in about two seconds having recorded
+    nothing, and the build stage then constructs the solution out of however
+    many findings did survive — without any signal that an idea was explored by
+    an agent that could not write down what it found.
     """
     import re
     from pathlib import Path
 
     source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    # `private_tree` is what hands an explorer its worktree, and exploring is
+    # the only stage that takes one now.
     block = source[source.index("tree = checkout / SCRATCH_DIR"):]
-    # `tune` is the last stage that takes a worktree — `evaluate` is gone.
-    block = block[:block.index("        if pending:")]
+    block = block[:block.index("        def drop_tree(")]
 
     assert ".opencode" in block, "the worktree never gets the project config"
     assert "symlink_to" in block or "copytree" in block, block[-400:]
@@ -764,6 +751,12 @@ def test_fresh_seeds_only_the_framework(tmp_path):
 
     A run with no bundled skills is not a clean evaluation of the approach; it
     is an evaluation of a different, crippled system.
+
+    "The framework" is the pipeline's own skills, and nothing else in the
+    bundle. This once asserted that everything shipped was seeded, which made
+    the bundle's contents the definition of clean — so when two task skills
+    were committed into the skeleton, every fresh run inherited a write-up of
+    two of the tasks it was about to be measured on, and this test agreed.
     """
     from phronix.layers import bundled_root
     from tests.benchmark.isolation import fresh_store
@@ -773,8 +766,14 @@ def test_fresh_seeds_only_the_framework(tmp_path):
 
     shipped = {p.name for p in (bundled_root() / "skills").glob("*") if p.is_dir()}
     seeded = {p.name for p in (store / "skills").glob("*") if p.is_dir()}
-    assert shipped and shipped <= seeded
+    framework = {name for name in shipped if name.startswith("phronix-")}
+
+    assert framework and framework <= seeded, "the pipeline's own skills must be seeded"
+    assert not (seeded - framework), (
+        f"a fresh run inherited non-framework skills: {sorted(seeded - framework)}")
     assert not list((store / "research").glob("*.json"))
+    assert not list((store / "capabilities").glob("*.py")), (
+        "a fresh run must author its own tools, not inherit an earlier run's")
 
 
 def test_fresh_ignores_the_learned_folder_entirely(tmp_path):
@@ -1255,19 +1254,6 @@ def test_attempt_time_and_cost_separate_research_from_solving():
     assert row["research_s"] == 922.0 and row["research_cost_usd"] == 0.31
 
 
-def test_execution_plan_records_the_plan_before_verifying():
-    """A pass that found the fix, measured it at 1.0 and wrote the playbook
-    still verified as `invariants fail: no plan recorded`, because the agent
-    did the work and skipped the bookkeeping. The corrector only knows what is
-    on record, so successful research reported as failed.
-    """
-    from tests.benchmark.arms import PhronixOpenCodeArm
-
-    prompt = PhronixOpenCodeArm.SOLUTION_STAGE_PROMPT
-    assert "research_write_plan" in prompt
-    assert prompt.index("research_write_plan") < prompt.index("research_verify")
-
-
 def test_failed_approach_can_be_refined_when_it_was_right_but_incomplete(tmp_path,
                                                                          monkeypatch):
     """Blanket refusal was too blunt.
@@ -1346,24 +1332,6 @@ def test_refinement_is_bounded_so_one_wrong_idea_cannot_eat_every_attempt(
     assert "diagnosis is what is wrong" in exhausted["error"]
 
 
-def test_retry_research_is_told_to_classify_the_failure_first():
-    """Refining and abandoning are opposite moves, and the test output is what
-    distinguishes them — so the prompt must ask for the classification before it
-    asks for approaches, not offer refinement as an afterthought.
-    """
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-
-    note = Arm.RESUME_NOTE
-    assert "research_refine_approach" in note
-    assert "attempt-notes.md" in note
-    assert note.index("classify") < note.index("research_refine_approach")
-    assert "research_refine_approach" in Arm.PROPOSE_PROMPT
-
-    # Both placeholders are filled, or the agent is handed a literal "{topic}".
-    filled = note.replace("{skill}", "s").replace("{topic}", "t")
-    assert "{" not in filled
-
-
 def test_failed_approach_is_burned_between_tries_not_after_the_task(tmp_path,
                                                                     monkeypatch):
     """The status the whole mechanism keys off was set too late.
@@ -1390,7 +1358,9 @@ def test_failed_approach_is_burned_between_tries_not_after_the_task(tmp_path,
     # candidate has been replaced at the top of the ranking by one nothing has
     # tried, and marking there would burn an approach that never ran.
     tail = source[source.index("A task that PASSED"):]
-    assert "worked=True" in tail[:900]
+    # Wider than it was: the success path now names the plans that solved it,
+    # so the comment explaining why sits between the marker and the call.
+    assert "worked=True" in tail[:1800]
     assert "worked=False" not in tail[:900]
 
 
@@ -1519,111 +1489,6 @@ def test_phronix_tool_mining_reads_both_harness_transcripts(tmp_path):
     assert errors and "skill_write" in errors[0]
 
 
-def test_a_retry_diagnoses_instead_of_re_proposing():
-    """The revision pass ran `propose` again — the whole candidate space, a
-    second time — so a pass holding a specific failure output spent its budget
-    re-deriving alternatives instead of reading the one piece of evidence the
-    first pass did not have. Measured on pylint-7080: the attempt failed by a
-    missing normalisation and the revision answered with four fresh candidates
-    rather than the one-line fix to the approach that had everything else right.
-    """
-    from pathlib import Path
-
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    flow = source[source.index('        # -- the pipeline --'):
-                  source.index('        stage("solution-skill"')]
-    assert 'stage("propose"' in flow and 'stage("diagnose"' in flow
-    # Propose belongs to the first pass; diagnose to every one after it.
-    assert flow.index("attempt_index <= 1") < flow.index('stage("propose"')
-    assert flow.index('stage("diagnose"') > flow.index('stage("propose"')
-
-    prompt = Arm.DIAGNOSE_PROMPT
-    assert "research_refine_approach" in prompt
-    assert "attempt-notes.md" in prompt
-    # It must build the failing case before concluding: the last attempt's own
-    # reproduction passed, which is why it shipped a fix that did not work.
-    assert "reproduction" in prompt and "{scratch}" in prompt
-    assert prompt.index("reproduction") < prompt.index("research_refine_approach")
-    # And it must be told not to re-research.
-    assert "Do not re-survey" in prompt
-
-    # Must-finish, and given at least what the planner gets — a retry has one
-    # failure in hand and reading it properly is the whole value of the pass.
-    #
-    # Not an absolute number any more: budgets are derived from
-    # `research.total_budget_s`, so a fixed 300 would assert the clock rate
-    # rather than the shape. What matters is the RATIO to the stage it stands
-    # in for, and that a repeated failure buys it more still.
-    assert "diagnose" in Arm.MUST_FINISH_STAGES
-    assert Arm.STAGE_BUDGETS["diagnose"] >= Arm.STAGE_BUDGETS["plan"]
-
-
-def test_the_reproduction_survives_into_the_next_attempt():
-    """A diagnosis the next attempt cannot run is a note, not a corrector.
-
-    The rule the whole retry path exists to enforce is that a task must not fail
-    twice the same way. That needs an executable check crossing the boundary:
-    the diagnosis writes a reproduction of the exact failure, and the attempt
-    runs it and may not report done while it still fails.
-    """
-    from tests.benchmark.arms import (PHRONIX_PLAN_SUFFIX, RESEARCH_SCRATCH,
-                                      PhronixOpenCodeArm as Arm)
-
-    # One agreed location, or the two halves never meet.
-    where = f"{RESEARCH_SCRATCH}/repro"
-    assert "{scratch}" in Arm.DIAGNOSE_PROMPT
-    assert "{repro}" in PHRONIX_PLAN_SUFFIX
-    filled = (PHRONIX_PLAN_SUFFIX.replace("{topic}", "t").replace("{skill}", "s")
-              .replace("{repro}", where))
-    assert where in filled and "{" not in filled
-
-    # And the attempt is told the one thing that makes it a corrector.
-    assert "Do not report done" in filled
-    assert "fail before your change and pass after" in filled
-
-
-def test_tuning_and_the_final_score_use_different_instances(tmp_path, monkeypatch):
-    """Refinement moved OUT of the evaluation stage.
-
-    Putting it there was the obvious choice and the wrong one: an approach
-    adjusted in response to the held-out set has been tuned on it, and nothing
-    downstream can falsify anything afterwards. Tuning gets its own stage, its
-    own instances (train + validate, 80%) and the right to refine; evaluation
-    sees `test` only, once, and may not change anything.
-    """
-    from pathlib import Path
-
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-    from phronix import research
-
-    assert research.TUNING_PHASES == ("train", "validate")
-    ratios = research.DEFAULT_SPLIT
-    tuning = sum(ratios[p] for p in research.TUNING_PHASES)
-    assert abs(tuning - 0.8) < 1e-9 and abs(ratios["test"] - 0.2) < 1e-9
-
-    tune, evaluate = Arm.TUNE_PROMPT, Arm.EVALUATE_PROMPT
-    # Only tuning may refine, and only it may see the tuning instances.
-    assert "research_refine_approach" in tune
-    assert "research_refine_approach" not in evaluate
-    assert "**train** and\n   **validate**" in tune or "train" in tune
-    assert "held out" in tune
-    # Evaluation is the final measurement and says so.
-    assert "ONLY the **test**" in evaluate
-    assert "FINAL measurement" in evaluate
-
-    # The flow runs tune before evaluate, in the same worktree.
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    body = source[source.index("def tune_one("):source.index("Ranking is arithmetic")]
-    # `evaluate` is gone: tune measures each approach against the corpus and
-    # records the trials, which is all the ranking reads. A second scoring pass
-    # re-measured the same thing and wrote a second number.
-    assert 'stage(f"evaluate:' not in body
-    assert 'stage(f"tune:' in body
-    assert "final_revision" in body
-
-
 def test_evaluation_scores_what_tuning_left_behind(tmp_path, monkeypatch):
     """Tuning may refine more than once, and each revision is a new key.
 
@@ -1677,7 +1542,8 @@ def test_a_corpus_too_small_to_hold_anything_out_says_so(tmp_path, monkeypatch):
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
     assert "twenty instances" in (Arm.PLAN_PROMPT
                                   + skill_text("phronix-research-plan"))
-    assert "Negative cases" in Arm.PLAN_PROMPT
+    assert "Negative cases" in (Arm.PLAN_PROMPT
+                                  + skill_text("phronix-research-plan"))
 
 
 def test_target_test_files_come_from_the_test_patch():
@@ -1814,69 +1680,6 @@ def test_the_figure_of_merit_cannot_be_renamed_once_measured(tmp_path, monkeypat
     assert research.rank_approaches(topic)["ranking"][0]["score"] == 1.0
 
 
-def test_a_retry_measures_the_revision_not_the_whole_field():
-    """The first pass explores; a retry already knows where the answer is and
-    holds a reproduction of the exact failure. Re-tuning unrelated candidates
-    spends the budget that should measure the one informed by what the task did
-    — and lets a fresh corpus-scored approach outrank the revision.
-    """
-    from pathlib import Path
-
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    body = source[source.index("        pending = [a for a in"):
-                  source.index("Ranking is arithmetic")]
-    assert "attempt_index > 1" in body and 'a.get("refines")' in body
-    # Narrower, not weaker: the revision still goes through tune then evaluate.
-    # `evaluate` is gone: tune measures each approach against the corpus and
-    # records the trials, which is all the ranking reads. A second scoring pass
-    # re-measured the same thing and wrote a second number.
-    assert 'stage(f"evaluate:' not in body
-    assert 'stage(f"tune:' in body
-    # And a retry reconciles the parallel repairs, after tuning them.
-    assert body.index("tune_one") < body.index("REPAIR_COLLECT_PROMPT")
-
-    # And the failure that lost the attempt becomes a corpus instance, or the
-    # revision can score 1.0 without fixing it.
-    assert "research_add_instances" in Arm.DIAGNOSE_PROMPT
-    assert "**test**-phase instance" in Arm.DIAGNOSE_PROMPT
-
-
-def test_aspects_try_what_they_find_instead_of_only_theorising():
-    """Aspects were read-only, so every candidate reached the ranking as a
-    prediction and the first measurement happened stages later.
-
-    Measured repeatedly: a research pass ended with its top-ranked approach
-    scoring 0.0 and every other candidate unmeasured, so the attempt
-    implemented the only thing carrying a number — a number that said it did
-    not work. The aspect stage is where a measured candidate is cheapest to
-    produce: the agent is already in the code, with the corpus declared.
-    """
-    from pathlib import Path
-
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-
-    prompt = Arm.ASPECT_PROMPT
-    assert "{workspace}" in prompt                    # its own worktree
-    assert "research_record_trial" in prompt
-    assert "research_add_approach" in prompt
-    # Tuning instances only. `test` is held out here as everywhere else.
-    assert "**train** and\n  **validate**" in prompt or "held out" in prompt
-    assert "research_refine_approach" in prompt       # short is a finding, not an end
-
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    body = source[source.index("def investigate(job"):
-                  source.index("with ThreadPoolExecutor(max_workers=len(chosen))")]
-    assert "private_tree(f\"aspect-" in body and "drop_tree(tree)" in body
-
-    # Trying takes longer than reading — but not as long as was assumed. The
-    # ceiling was 540s against a measured 118s wall for three aspects, and the
-    # aspects are a barrier, so an over-generous ceiling is what a straggler
-    # holds `collect` open for.
-    assert 180 <= Arm.STAGE_BUDGETS["aspect"] <= 300
-
-
 def test_one_worktree_helper_serves_every_parallel_stage():
     """Aspects and evaluators both need isolation for the same reason, and the
     symlinked `.opencode` is the part that is easy to forget: without it the
@@ -1916,54 +1719,6 @@ def test_a_failing_verifier_has_two_doors_and_both_are_actions():
     assert "Investigating in prose and carrying on is not a third" in collapsed
     # Bounded, so the decision cannot become the work.
     assert "at most a few steps" in collapsed
-
-
-def test_the_measured_change_is_kept_as_evidence_not_as_the_method(
-        tmp_path, monkeypatch):
-    """The patch is what the method produced ONCE, on one instance.
-
-    Keeping it is worth doing — it is evidence the approach was really applied
-    and measured, and a reference if a step turns out ambiguous. It is not the
-    solution: a diff solves one instance, while the skill is filed under a
-    subject and has to solve the next one too. So it lives in a file, is
-    referenced rather than carried, and the attempt is pointed at the STEPS.
-    """
-    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path))
-    from pathlib import Path
-
-    from phronix import research
-    from tests.benchmark.arms import PHRONIX_PLAN_SUFFIX
-
-    topic = "carry-the-diff"
-    research.add_approach(topic, "fix", "s", hypothesis="h")
-    key = research.load(topic)["approaches"][0]["key"]
-
-    diff = "--- a/pylint/lint/pylinter.py\n+++ b/pylint/lint/pylinter.py\n@@\n-old\n+new"
-    noted = research.record_change(topic, key, diff)
-    assert noted["status"] == "ok"
-    assert noted["files"] == ["pylint/lint/pylinter.py"] and noted["lines"] == 2
-
-    patch = Path(noted["patch"])
-    assert patch.is_file() and patch.read_text().startswith("--- a/pylint")
-
-    # Referenced, never carried: nothing on the approach is patch-sized.
-    entry = research.approach_detail(topic, key)["approach"]
-    assert entry["change_patch"] == str(patch)
-    assert all(len(str(v)) < 200 for v in entry.values() if isinstance(v, str))
-
-    huge = research.record_change(topic, key, "x" * (research.CHANGE_LIMIT + 1))
-    assert huge["status"] == "error" and "debris" in huge["error"]
-
-    # Captured by the harness with git diff, not written out by an agent.
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    body = source[source.index("def tune_one("):source.index("Ranking is arithmetic")]
-    assert '["git", "diff"], cwd=target' in body and "record_change" in body
-
-    # And the attempt follows the METHOD. It is never told to replay a diff.
-    collapsed = " ".join(PHRONIX_PLAN_SUFFIX.split())
-    assert "Follow the skill's `Steps to solve ...` block" in collapsed
-    assert "a method, not a recording" in collapsed
-    assert "git apply" not in collapsed
 
 
 def test_the_playbook_flags_a_patch_without_carrying_it(tmp_path, monkeypatch):
@@ -2166,316 +1921,6 @@ def test_the_solution_file_carries_every_pipeline_best_first(tmp_path, monkeypat
     assert "win_tool" in body and "fallback_tool" in body and "last_tool" in body
     # Ranked: the fallback block is ordered by the same metric.
     assert body.index("fallback_tool") < body.index("last_tool")
-
-
-def test_every_stage_of_the_pipeline_is_wired_end_to_end():
-    """The flow, as specified: survey, plan, aspects in parallel, collect,
-    propose approaches AS pipelines, tune each in place in parallel, evaluate
-    against held-out data, write the solution file with every approach ranked
-    and a tool for every deterministic step, run the task, and on failure
-    diagnose with a deterministic test case and refine across approaches.
-    """
-    from pathlib import Path
-
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    flow = source[source.index("        # -- the pipeline --"):
-                  source.index("        stdout = \"\".join(transcripts)")]
-    def where(name):
-        """Where a stage is issued, however it is issued.
-
-        Stages that overlap are handed to `fanout` as tuples rather than called
-        one at a time, so this asks where the NAME appears rather than assuming
-        a `stage(...)` call. The assertion is about pipeline order, not syntax.
-        """
-        for form in (f'stage("{name}"', f'stage(f"{name}', f'"{name}"'):
-            if form in flow:
-                return flow.index(form)
-        raise AssertionError(f"stage {name!r} is not issued anywhere")
-
-    # Five stages: `survey` folded into `plan`, `collect` and `evaluate` gone.
-    order = [where(name)
-             for name in ("plan", "aspect:", "propose",
-                          "tune:", "solution-skill")]
-    assert order == sorted(order), "the stages are no longer in pipeline order"
-
-    # Approaches arrive as pipelines, not as prose.
-    assert "research_record_pipeline" in Arm.PROPOSE_PROMPT
-    assert "research_record_pipeline" in Arm.TUNE_PROMPT
-    # The solution file adopts the winner and builds tools across ALL of them.
-    assert "research_adopt_pipeline" in Arm.SOLUTION_STAGE_PROMPT
-    assert "not only the winner's" in Arm.SOLUTION_STAGE_PROMPT
-    # A retry diagnoses with a deterministic case and fixes the other pipelines.
-    assert "research_rank" in Arm.DIAGNOSE_PROMPT
-    assert "deterministic test" in Arm.DIAGNOSE_PROMPT
-
-
-def test_the_attempt_fetches_one_block_through_the_graph():
-    """Loading the whole solution skill is paid for on every subsequent step.
-
-    Each api call carries the entire conversation again, so a block loaded once
-    and never used costs its tokens once per step — and these attempts run to
-    dozens of steps. The graph resolves a heading to exactly its markdown
-    section, so the attempt locates, fetches that section, and acts.
-    """
-    from tests.benchmark.arms import (PHRONIX_PLAN_SUFFIX,
-                                      PhronixOpenCodeArm as Arm)
-
-    collapsed = " ".join(PHRONIX_PLAN_SUFFIX.split())
-    assert "graph_query(question=" in collapsed
-    assert "graph_get_node" in collapsed
-    # Locate before loading: the query must come before the whole-skill fallback.
-    assert collapsed.index("graph_query") < collapsed.index("Fall back to")
-    # The fallback still exists — a graph miss must not strand the attempt.
-    assert 'skill_load("{skill}")' in PHRONIX_PLAN_SUFFIX
-    # And the reason is stated, because a rule without one gets optimised away.
-    assert "re-read on every subsequent step" in collapsed
-
-    # The graph is refreshed at the moment the skill changes, or the first
-    # query pays for a rebuild or misses the block entirely.
-    assert "graph_ensure" in Arm.SOLUTION_STAGE_PROMPT
-    assert (Arm.SOLUTION_STAGE_PROMPT.index("research_playbook")
-            < Arm.SOLUTION_STAGE_PROMPT.index("graph_ensure"))
-
-
-def test_a_retry_repairs_in_parallel_then_reconciles_then_scores():
-    """The retry mirrors the research pass, because the problem is the same:
-    several agents work in parallel on separate approaches, and what each learns
-    about the failing case bears on the others.
-
-    Fusing tune into evaluate here would score each revision before anybody had
-    reconciled what the repairs found — and the case that defeated the last
-    attempt is precisely what every candidate now has to answer.
-    """
-    from pathlib import Path
-
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    body = source[source.index("        if pending:"):
-                  source.index("        # Ranking is arithmetic")]
-
-    # First pass tunes in parallel; a retry tunes, then reconciles.
-    #
-    # There is no scoring pass to fuse with any more: `tune` measures each
-    # approach against the corpus and records the trials, and the ranking is
-    # arithmetic over those trials.
-    assert "pool.map(tune_one, indexed)" in body
-    assert "evaluate_one" not in body
-    assert body.index("tune_one") < body.index("REPAIR_COLLECT_PROMPT")
-
-    # Nothing is re-explored: repairs work on pipelines that already exist.
-    assert "Nothing is re-explored" in body
-
-    collect = Arm.REPAIR_COLLECT_PROMPT
-    assert "converge" in collect and "contradict" in collect
-    assert "no new approaches are\nproposed" in collect
-
-
-def test_method_tools_survive_a_fresh_run(tmp_path):
-    """`--fresh` withholds what earlier runs LEARNED, not what they built.
-
-    A `probe_` capability knows how to run one area's tests, or set a fixture up
-    in a given shape. It carries nothing about any particular task, so seeding
-    it does not pre-train the run — it hands it the shell scripting every
-    previous run had to derive from nothing. Excluding it would make "from
-    scratch" mean "without tools", which is a claim about tooling rather than
-    about learning.
-    """
-    from tests.benchmark.isolation import METHOD_CAPABILITY_PREFIX, seed_store
-
-    carry = tmp_path / "carry"
-    for kind, names in (("capabilities", ["probe_run_area_tests.py",
-                                          "apply_ignore_paths_fix.py"]),
-                        ("skills", ["pylint-ignore-paths.md"]),
-                        ("research", ["pylint-dev-pylint-7080.json"])):
-        (carry / kind).mkdir(parents=True)
-        for name in names:
-            (carry / kind / name).write_text("x")
-
-    store = tmp_path / "store" / ".phronix"
-    store.mkdir(parents=True)
-    seeded = seed_store(store, carry, kinds=("capabilities",),
-                        method_tools_only=True)["seeded"]
-
-    assert seeded == ["capabilities/probe_run_area_tests.py"], seeded
-    # The task-specific capability, the skill and the research stay behind.
-    assert not (store / "capabilities" / "apply_ignore_paths_fix.py").exists()
-    assert not (store / "skills").exists()
-    assert not (store / "research").exists()
-
-    # A full carry-over still takes everything.
-    everything = seed_store(store, carry)["seeded"]
-    assert len(everything) == 4
-
-    # The prefix is what the solution-skill stage asks for, so the two cannot
-    # drift apart into a rule nothing satisfies.
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-    assert f"`{METHOD_CAPABILITY_PREFIX}` prefix" in Arm.SOLUTION_STAGE_PROMPT
-
-
-def test_research_tools_are_built_at_the_end_not_during():
-    """Building tools mid-investigation interrupts the investigation.
-
-    The end of the pass costs one stage and pays back on every task that
-    follows — and by then the pass knows which steps it actually repeated,
-    which is the only reliable way to tell a reusable tool from a guess.
-    """
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-
-    plan = Arm.SOLUTION_STAGE_PROMPT
-    assert "capability_new" in plan and "capability_list" in plan
-    assert "would I write this again" in " ".join(plan.split())   # hard-wrapped
-    # Not bolted onto every stage: exploration stays exploration.
-    for prompt in (Arm.ASPECT_PROMPT, Arm.PROPOSE_PROMPT, Arm.TUNE_PROMPT):
-        assert "capability_list()" not in prompt
-
-
-def test_the_same_procedure_is_not_built_twice_under_two_names(tmp_path,
-                                                               monkeypatch):
-    """Solution tools are task-shaped, so a step in one task's pipeline is a
-    step in another's — and research passes that never see each other author
-    the same procedure repeatedly.
-
-    Each copy then has to be maintained, verified and chosen between, and an
-    agent facing three tools with the same body and different names has been
-    handed a decision nobody meant to give it.
-    """
-    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path))
-    from phronix import capabilities
-
-    body = ('def register(mcp):\n'
-            '    @mcp.tool()\n'
-            '    def {name}(path: str) -> str:\n'
-            '        """{doc}"""\n'
-            '        return path.strip()\n')
-
-    first = capabilities.new("normalise_path_for_match", "normalise a path",
-                             source=body.format(name="normalise_path_for_match",
-                                                doc="Normalise a path."))
-    assert first["status"] == "ok"
-
-    # Same procedure, different name, different prose, extra comment.
-    twin = ('def register(mcp):\n'
-            '    @mcp.tool()\n'
-            '    def strip_leading_dot(path: str) -> str:\n'
-            '        """Quite different wording here."""\n'
-            '        # and a comment the other one lacks\n'
-            '        return path.strip()\n')
-    second = capabilities.new("strip_leading_dot", "strip ./ from a path",
-                              source=twin)
-    assert second["status"] == "duplicate"
-    assert second["use"] == "normalise_path_for_match"
-    assert not (tmp_path / ".phronix" / "capabilities"
-                / "strip_leading_dot.py").exists()
-
-    # A genuinely different procedure is unaffected.
-    other = capabilities.new("count_matches", "count matches", source=body.format(
-        name="count_matches", doc="Count matches.").replace(
-            "return path.strip()", "return str(len(path))"))
-    assert other["status"] == "ok"
-
-    # And the solution-skill stage is told to reuse rather than re-author.
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-    collapsed = " ".join(Arm.SOLUTION_STAGE_PROMPT.split())
-    assert "capability_list()` FIRST" in collapsed
-    assert "answers `duplicate`" in collapsed
-
-
-def test_the_learner_survives_the_revert(tmp_path, monkeypatch):
-    """The research flow went back to the committed one; the learner did not.
-
-    It is orthogonal to the flow — it reads observations rather than stages, so
-    nothing about it depended on the shape that was removed. Two clocks: every
-    ten seconds it NOTICES, which is arithmetic over what has been reported;
-    every minute it RECONCILES, which is one agent turning what repeated into
-    lessons and tools. Aggressive capture, periodic compaction.
-    """
-    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path))
-    from pathlib import Path
-
-    from phronix import research
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm, build
-
-    # The channel: an append, so reporting cannot block the stage reporting.
-    monkeypatch.setenv("PHRONIX_RESEARCH_TOPIC", "task-a")
-    assert research.observe("normalising the path before matching fixed cases",
-                            worked=True, stage="tune")["status"] == "ok"
-    monkeypatch.setenv("PHRONIX_RESEARCH_TOPIC", "task-b")
-    research.observe("normalizing paths before the match fixed nine cases",
-                     worked=True, stage="aspect")
-    research.observe("the green test masked the bug", worked=False,
-                     stage="survey")
-
-    # Noticing is arithmetic, and it groups by what a report CLAIMS: two agents
-    # describing one finding never word it the same way.
-    noticed = research.notice()
-    assert noticed["new"] == 3
-    assert len(noticed["repeats"]) == 1
-    assert noticed["candidates"][0]["across_tasks"] is True
-
-    # Two clocks, and the fast one cannot be a model call: an invocation costs
-    # the better part of a minute before it does anything.
-    assert Arm.LEARNING_NOTICE_INTERVAL <= 10
-    assert Arm.LEARNING_RECONCILE_INTERVAL >= 6 * Arm.LEARNING_NOTICE_INTERVAL
-
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    loop = source[source.index("    def start_learning(self, store_root: Path"):
-                  source.index("    def _learning_products(")]
-    assert "daemon=True" in loop
-    assert "research_mod.notice" in loop            # fast tier, no agent
-    assert "stream_opencode(" in loop               # slow tier, one agent
-    assert "[learner] running:" in loop             # says it started
-
-    # Every stage reports, and every arm answers the runner's calls.
-    for const in ("SURVEY_PRIOR_PROMPT", "SURVEY_ISSUE_PROMPT", "PLAN_PROMPT",
-                  "ASPECT_PROMPT",
-                  "PROPOSE_PROMPT", "TUNE_PROMPT"):
-        assert "research_observe(" in getattr(Arm, const), const
-    for name in ("claude-phronix", "opencode-bare", "mini"):
-        assert build(name, model="m", provider="p",
-                     base_url="u").stop_learning() == []
-
-
-def test_the_aspect_phase_is_wide_and_bounded():
-    """Aspects fan out with no merge above them, which changes what width costs.
-
-    The tuning tree pays a merge level per doubling, so widening it made the
-    pass slower — measured, six merge levels cost 840s against 444s for both
-    fan-outs together. Aspects have no such tax: they investigate, write
-    findings, and `collect` reads all of them, so the phase costs its slowest
-    member whether there are three or eight. Widening buys coverage and costs
-    only tokens.
-
-    The ceiling is the other half. Aspects are a barrier, so one straggler holds
-    `collect` and everything after it for as long as its budget allows —
-    measured, three aspects took 118s wall against a 540s ceiling, which never
-    bound the common case and bound the bad one far too late.
-    """
-    from pathlib import Path
-
-    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
-
-    assert Arm.max_parallel_aspects >= 5
-    # Near the measured maximum, so the barrier is predictable.
-    assert Arm.STAGE_BUDGETS["aspect"] <= 300
-    assert Arm.STAGE_BUDGETS["aspect-record"] <= 180
-
-    # Filing findings is still must-finish: a write-up cut half way loses
-    # everything the investigation paid for.
-    assert "aspect-record" in Arm.MUST_FINISH_STAGES
-    assert "aspect" not in Arm.MUST_FINISH_STAGES
-
-    # And they genuinely run at once.
-    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    flow = source[source.index("            aspects = self._in_store("):
-                  source.index('stage("propose"')]
-    assert "ThreadPoolExecutor(max_workers=len(chosen))" in flow
-    # Aspects carry their position now, so each can be asked of a different
-    # model: one greedy model asked four times returns four versions of its
-    # first idea, which is the opposite of what the phase is for.
-    assert "pool.map(investigate, list(enumerate(chosen)))" in flow
 
 
 def test_parallel_tasks_is_offered_and_its_cost_is_stated():
@@ -2908,14 +2353,20 @@ def test_planning_keeps_going_until_it_has_candidates():
 
     source = inspect.getsource(Arm.research)
     # Ask again, salvage what it wrote, and only then fall back.
-    assert "PLAN_RETRY_PROMPT" in source, "a failed plan must be retried"
+    # `PLAN_MORE_PROMPT`, not a re-plan: the ideas already judged good are
+    # kept and the next round is asked only for the shortfall.
+    assert "PLAN_MORE_PROMPT" in source, "a short plan must be asked for more"
     assert "_aspects_from_text" in source, "prose plans must be salvaged"
     assert "DEFAULT_ASPECTS" in source, "and there must be a floor"
 
     # The retry prompt asks for the tool and nothing else: the planner has
     # already looked, so more exploration is exactly what it must not do.
-    assert "research_set_aspects" in Arm.PLAN_RETRY_PROMPT
-    assert "Do not read more" in Arm.PLAN_RETRY_PROMPT
+    assert "research_set_aspects" in Arm.PLAN_MORE_PROMPT
+    # It must ADD to what survived rather than start over, and it must carry
+    # the judgement that said more were needed.
+    # It must ADD to what survived rather than start over.
+    assert "Keep the ones above" in Arm.PLAN_MORE_PROMPT
+    assert "{kept}" in Arm.PLAN_MORE_PROMPT and "{report}" in Arm.PLAN_MORE_PROMPT
 
 
 def test_a_prose_plan_is_salvaged_into_aspects():
@@ -2948,7 +2399,7 @@ def test_aspects_spread_across_a_model_mixture():
     from tests.benchmark.arms import OpenCodeArm, PhronixOpenCodeArm as Arm
 
     flow = inspect.getsource(Arm.research)
-    assert "model_for(position)" in flow, "aspects must pick a model"
+    assert "roster[position % len(roster)]" in flow, "exploring must pick a backend"
     assert "roster[position % len(roster)]" in flow, "round-robin over the fleet"
     # One model is the ordinary case and must not change behaviour.
     assert "if len(roster) <= 1:" in flow
@@ -3464,3 +2915,1338 @@ def test_a_task_sticks_to_one_backend_so_its_prefix_stays_cached():
     assert ClusterConfig({"alias": "m"}).model_for("x") == "m"
     assert OpenCodeArm(model="m", provider="p").model_for_task(task) == ""
     assert OpenCodeArm(model="m", provider="p").fanout_models(task, 5) == []
+
+
+# --- the pipeline as it is now: plan, explore, build ------------------------
+#
+# These replace seventeen tests that described the previous pipeline (survey,
+# aspect, collect, propose, tune, evaluate, execution-plan). Those stages are
+# gone, so their tests went with them — but the invariants several of them
+# guarded are still invariants, and this is where they live now.
+
+def test_the_pipeline_is_three_stages_in_order():
+    """plan -> explore -> build-solution, and nothing in between."""
+    from pathlib import Path
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        stdout = \"\".join(transcripts)")]
+
+    order = [flow.index(s) for s in ('stage("plan"', 'stage(f"explore:',
+                                     'stage("build-solution"')]
+    assert order == sorted(order), "the stages are out of pipeline order"
+
+    # The removed stages must not creep back in under their old names.
+    for gone in ('stage("survey', 'stage("collect"', 'stage("propose"',
+                 'stage(f"tune:', 'stage(f"evaluate:', 'stage("execution-plan"'):
+        assert gone not in flow, gone
+
+
+def test_exploring_is_bounded_and_building_is_not():
+    """The two halves of the clock, and why they differ.
+
+    Exploring will consume whatever it is given — an agent reads the whole
+    repository if allowed — so it is bounded. Building writes up what exploring
+    found: its input is fixed, it is forbidden from exploring, and cutting it
+    throws away every minute spent producing that input.
+    """
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert Arm.STAGE_BUDGETS["plan"] == 300        # five minutes, three ideas
+    assert Arm.STAGE_BUDGETS["explore"] == 120     # two minutes, all at once
+    assert "build-solution" not in Arm.STAGE_BUDGETS
+    # The correctors are unbudgeted too: they read what a budgeted stage
+    # produced and write a judgement, so there is nothing to run away into.
+    assert set(Arm.UNTIMED_STAGES) == {"build-solution", "validate-ideas",
+                                       "validate-exploration", "complete-plan"}
+
+
+def test_a_retry_gets_more_time_than_the_try_before_it():
+    """Time goes where the task turns out to be hard.
+
+    A task solved on the first attempt never pays for this; one that has failed
+    has shown the cheap reading of the problem does not work.
+    """
+    from phronix.tuning import get
+
+    per_try = float(get("research.retry_budget_multiple", 1.5))
+    stuck = float(get("research.stuck_budget_multiple", 1.5))
+    assert per_try > 1.0 and stuck > 1.0
+
+    def scale(attempt, same_failures):
+        out = per_try ** max(0, attempt - 1)
+        return out * (stuck if same_failures >= 2 else 1.0)
+
+    assert scale(2, 0) > scale(1, 0)          # a retry gets more
+    assert scale(2, 2) > scale(2, 0)          # a repeated failure more again
+
+
+def test_every_stage_prompt_is_a_pointer_to_a_skill():
+    """The method is a skill; the prompt carries only the per-run input.
+
+    A prompt in code is a method the system cannot edit — the learner improves
+    skills, the graph indexes them, and reconcile keeps one copy of each fact,
+    none of which reaches a string literal in a benchmark harness.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    skills = Path(__file__).parent.parent / "src" / "phronix" / ".agents" / "skills"
+    for prompt, skill in ((Arm.PLAN_PROMPT, "phronix-research-plan"),
+                          (Arm.EXPLORE_PROMPT, "phronix-explore-idea"),
+                          (Arm.BUILD_SOLUTION_PROMPT, "phronix-build-solution"),
+                          (Arm.FINALIZE_PROMPT, "phronix-stage-finalize")):
+        assert skill in prompt, f"{skill} is never loaded"
+        assert (skills / skill / "SKILL.md").is_file(), skill
+        # A pointer, not a second copy of the method. The shared notes are
+        # not part of the pointer — they are appended to every stage alike.
+        from tests.benchmark.arms import OBSERVE_NOTE
+        pointer = prompt.replace(OBSERVE_NOTE, "")
+        assert len(pointer) < 1200, f"{skill}'s prompt is carrying the method"
+
+
+def test_building_the_solution_prefers_tools_over_prose():
+    """A deterministic step becomes an MCP tool; only judgement stays prose.
+
+    A pipeline of tool calls runs in seconds on the next task. The same pipeline
+    written as paragraphs costs a later agent a multi-step derivation per step,
+    and it will get one of them subtly wrong.
+    """
+    from pathlib import Path
+
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+             / "skills" / "phronix-build-solution" / "SKILL.md").read_text()
+    assert "capability_new" in skill
+    assert "pipeline" in skill.lower()
+    # And the result has to be findable by a later task.
+    assert "graph_ensure" in skill
+
+
+def test_a_remembered_skill_is_tried_before_solving_from_scratch(tmp_path):
+    """Retrieval-first is the point of carrying a store between runs.
+
+    `topic_skill` matches only the task's own topic, so a SECOND task on a
+    repository already researched found nothing and began from zero — the store
+    held a pipeline for exactly its subject and nothing asked for it.
+    """
+    from tests.benchmark.arms import PhronixOpenCodeArm, _bundled_skill_names
+
+    arm = PhronixOpenCodeArm(model="m", provider="p")
+    calls = {}
+
+    def fake_search(query, *a, **k):
+        calls["query"] = query
+        return [{"name": "phronix-context-economy"},   # bundled: not a memory
+                {"name": "pylint-ignore-paths"}]       # learned: this one
+
+    import phronix.skills as skills_module
+    original, skills_module.search = skills_module.search, fake_search
+    try:
+        arm._in_store = lambda root, fn, *a, **k: fn(*a, **k)
+        got = arm.recalled_skill(tmp_path, {"repo": "pylint-dev/pylint"})
+    finally:
+        skills_module.search = original
+
+    assert got == "pylint-ignore-paths"
+    assert "pylint" in calls["query"]           # searched by subject, not id
+    # A bundled skill is not a memory: it ships with the framework and would
+    # announce a "remembered solution" that was never learned here.
+    assert "phronix-context-economy" in _bundled_skill_names()
+
+    # No repo, nothing to recall — and no crash.
+    assert arm.recalled_skill(tmp_path, {}) == ""
+
+
+def test_recall_refuses_a_hit_that_is_not_about_this_subject(tmp_path):
+    """Search always answers; a store with nothing relevant still ranks something.
+
+    Measured: a pylint task was told to try a remembered skill called `status`.
+    Requiring the subject in the name is crude and checkable, which is what a
+    corrector has to be.
+    """
+    from tests.benchmark.arms import PhronixOpenCodeArm
+
+    arm = PhronixOpenCodeArm(model="m", provider="p")
+    arm._in_store = lambda root, fn, *a, **k: fn(*a, **k)
+
+    import phronix.skills as skills_module
+    original = skills_module.search
+    skills_module.search = lambda *a, **k: [{"name": "status"},
+                                            {"name": "notes-parsing"}]
+    try:
+        assert arm.recalled_skill(tmp_path, {"repo": "pylint-dev/pylint"}) == ""
+    finally:
+        skills_module.search = original
+
+
+def test_a_plan_must_record_three_ideas():
+    """The pipeline explores exactly what the plan records.
+
+    A plan with two ideas is a pipeline that explores two, and the solution is
+    built from the ideas — so a missing idea is a direction never considered.
+    Asking again is the cheapest corrector there is, and each retry gets the
+    FULL plan budget rather than what the first attempt left over.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert Arm.MIN_ASPECTS >= 3
+    assert Arm.MAX_PLAN_RETRIES >= 3
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        # Explore every idea at once.")]
+    assert "while tries_at_plan < self.MAX_PLAN_RETRIES" in flow
+    # Predict, then correct: the validator decides which ideas survive, and
+    # the COUNT of survivors decides whether the plan runs again.
+    assert 'stage("validate-ideas"' in flow
+    assert "if len(ideas) >= self.MIN_ASPECTS:" in flow
+    # "Plan MORE", not "plan again": the ideas the validator kept stay, and
+    # the next round is asked only for the shortfall — with the validator's
+    # report so it does not put up what was just rejected.
+    assert "PLAN_MORE_PROMPT" in flow
+    assert "kept_n=len(ideas)" in flow and "needed=needed" in flow
+    assert "report=" in flow
+    # And it gets MORE time, because the previous budget was demonstrably not
+    # enough for what it was asked.
+    assert "round_budget_multiple" in flow
+
+
+def test_the_plan_correctors_actually_resolve():
+    """Every name the plan's fallback path uses must exist at runtime.
+
+    Both were wrong at once and neither showed up until a live run: the salvage
+    called a bare `_aspects_from_text` (a staticmethod on the class) and the
+    fallback a bare `DEFAULT_ASPECTS` (a class attribute). Each is a NameError
+    raised only when a plan records too few ideas — which is exactly the moment
+    the correctors exist to handle, so the failure path failed.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert callable(getattr(Arm, "_aspects_from_text", None))
+    assert len(Arm.DEFAULT_ASPECTS) >= 3
+    assert isinstance(Arm.PLAN_MORE_PROMPT, str) and Arm.PLAN_MORE_PROMPT
+    assert isinstance(Arm.EXPLORE_MORE_PROMPT, str) and Arm.EXPLORE_MORE_PROMPT
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        # Explore every idea at once.")]
+    # Bare references to class members are the bug; they must be qualified.
+    assert "self._aspects_from_text(" in flow
+    assert "self.DEFAULT_ASPECTS" in flow
+    assert "= _aspects_from_text(" not in flow
+    assert "list(DEFAULT_ASPECTS)" not in flow
+
+
+def test_two_tasks_in_one_arm_do_not_share_a_topic(tmp_path):
+    """Tasks run concurrently in threads within ONE arm object.
+
+    `research_topic_binding` was a plain attribute, so task A set it, task B
+    overwrote it, and A's next store read resolved under B's topic. Measured
+    live: `pallets__flask-4045` explored `note_parsing`, which is
+    `pylint-dev__pylint-5859`'s idea, while its own ideas read back as zero.
+    """
+    import threading
+    from tests.benchmark.arms import PhronixOpenCodeArm
+
+    arm = PhronixOpenCodeArm(model="m", provider="p")
+    seen, ready = {}, threading.Barrier(2)
+
+    def work(name):
+        arm.research_topic_binding = name
+        ready.wait(timeout=5)          # both threads have now set theirs
+        seen[name] = arm.research_topic_binding
+
+    threads = [threading.Thread(target=work, args=(n,))
+               for n in ("task-a", "task-b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert seen == {"task-a": "task-a", "task-b": "task-b"}, seen
+
+
+def test_the_store_env_is_mutated_by_one_thread_at_a_time():
+    """`os.environ` is process-global; save-and-restore is not thread safety.
+
+    It only makes the corruption harder to see: the restore writes back
+    whichever value that thread happened to capture, which may be another
+    thread's.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    body = source[source.index("    def _in_store(self, store_root"):
+                  source.index("    def _in_store_locked(")]
+    assert "_STORE_ENV_LOCK" in body, "the env mutation is not serialised"
+
+
+def test_every_stage_has_a_corrector_and_correctors_are_unbudgeted():
+    """Predictor/corrector, applied to research itself.
+
+    Each budgeted stage is a PREDICTION — that these are the right questions,
+    that two minutes answers one. Each is followed by a check that says whether
+    the prediction held, and the check is unbudgeted: it reads what an earlier
+    stage produced and cannot run away into exploring.
+
+    Putting a clock on a corrector could only ever cut the cheap half of the
+    loop, which is the half that decides whether the expensive half runs again.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    # The predictors have budgets.
+    assert set(Arm.STAGE_BUDGETS) == {"plan", "explore"}
+    # The correctors do not.
+    for corrector in ("validate-ideas", "validate-exploration"):
+        assert corrector in Arm.UNTIMED_STAGES
+        assert corrector not in Arm.STAGE_BUDGETS
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        stdout = \"\".join(transcripts)")]
+
+    # Both correctors are issued with an explicit zero budget, which is what
+    # `stream_opencode` reads as "no watchdog at all".
+    for corrector, prompt in (("validate-ideas", "VALIDATE_IDEAS_PROMPT"),):
+        issued = f'stage("{corrector}", self.{prompt}, 0'
+        assert issued in flow, corrector
+        # And as the validator agent, which has no way to read files or run
+        # commands — the instruction not to explore was ignored in practice.
+        assert flow[flow.index(issued):flow.index(issued) + 200].count(
+            "agent=self.validator_agent_name") == 1, corrector
+
+    # Exploration is judged PER IDEA, so the corrector is issued inside the
+    # idea's own thread with its name in the stage label. Judging a list is
+    # bounded by the list, and a list of one is the smallest useful unit: an
+    # idea that answered its question is complete whatever the others are
+    # still doing.
+    per_idea = 'stage(f"validate-exploration:{name}",'
+    assert per_idea in flow
+    assert "VALIDATE_ONE_EXPLORATION_PROMPT" in flow
+    assert flow[flow.index(per_idea):flow.index(per_idea) + 320].count(
+        "agent=self.validator_agent_name") == 1
+
+    # And each loop can actually go round again.
+    assert "MAX_PLAN_RETRIES" in flow
+    assert "MAX_EXPLORE_ROUNDS" in flow
+
+
+def test_a_thin_finding_carries_its_gap_not_just_a_flag():
+    """A corrector's verdict must be data.
+
+    Recovering it by reading the validator's English is a corrector that fails
+    quietly the first time it phrases itself unusually.
+    """
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    import phronix.research as research_module
+    original = research_module.status
+    research_module.status = lambda topic: {
+        "notices": [{"kind": "thin", "what": "relative-form",
+                     "detail": "the relative form was never tried"},
+                    {"kind": "note", "what": "something else"},
+                    {"kind": "thin", "what": "relative-form",
+                     "detail": "restated"}]}                        # duplicate
+    try:
+        got = Arm._thin_gaps("t")
+    finally:
+        research_module.status = original
+
+    # The DETAIL travels with it: a pass told only "thin" repeats the first
+    # one; a pass told what was missing closes the gap.
+    assert got == {"relative-form": "the relative form was never tried"}, got
+
+
+def test_both_loops_are_incremental_and_buy_more_time_each_round():
+    """A round that fell short is asked for the SHORTFALL, not for the lot.
+
+    Re-planning from scratch throws away the ideas the validator just kept,
+    re-derives them at full cost, and often produces the same weak ones again
+    because nothing told it which they were. Re-exploring from scratch discards
+    what the first pass established.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        stdout = \"\".join(transcripts)")]
+
+    # Plan: keep what survived, ask for the difference, carry the report.
+    # Over-asked, because the validator culls: a request for exactly the
+    # missing one is lost entirely to a single rejection.
+    assert "max(self.MIN_ASPECTS - len(ideas), self.PLAN_OVERASK)" in flow
+    assert "PLAN_MORE_PROMPT" in flow
+    assert 'report = last_output.get("validate-ideas", "") or report' in flow
+
+    # Explore: an idea that came back thin is re-explored on its own, told
+    # what was missing, without waiting for or disturbing the others.
+    assert "EXPLORE_MORE_PROMPT" in flow
+    assert "self._thin_gaps, topic)" in flow and ".get(name, \"\")" in flow
+    assert "do not redo it" in Arm.EXPLORE_MORE_PROMPT.lower()
+
+    # Both rounds get more time than the one before.
+    assert flow.count("round_budget_multiple") >= 2
+
+
+def test_every_stage_is_bound_to_its_own_task_even_in_a_pool_thread():
+    """`TOPIC_ENV` binds a research call to one record whatever key is passed.
+
+    It has to be set for EVERY stage, and the fanout stages run in pool
+    threads. Reading it from a thread-local looked right and was not: a pool
+    worker inherits nothing, so the explore agents ran unbound and the
+    descriptive keys they invent were resolved fuzzily into whatever record
+    matched.
+
+    Measured: `sympy__sympy-24066`'s idea `exp-dimension-fix` was filed under
+    `pallets__flask-5063`, and sympy-24066 finished its plan with zero ideas.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    body = source[source.index("        def stage(name: str, prompt: str"):
+                  source.index("        # The pipeline, in full.")]
+
+    # From the enclosing call's local, which every thread the closure reaches
+    # sees correctly — not from anything per-thread or per-arm.
+    assert 'stage_env["PHRONIX_RESEARCH_TOPIC"] = topic' in body
+    # Strip comments: the code must not read the thread-local, but the comment
+    # explaining why is allowed to name it.
+    code = "\n".join(line for line in body.splitlines()
+                     if not line.lstrip().startswith("#"))
+    assert "self.research_topic_binding" not in code, \
+        "a stage must not take its topic from thread-local state"
+
+
+def test_recall_reads_the_search_envelope_not_its_keys(tmp_path):
+    """`skills.search` returns {status, query, count, results}.
+
+    Iterating the dict yields those four KEYS, so the first "skill name" it
+    produced was `status` — which is what a pylint task was told to try as a
+    remembered solution. The subject filter then rejected every key, so recall
+    silently returned nothing from then on and retrieval-first never fired.
+    """
+    from tests.benchmark.arms import PhronixOpenCodeArm
+
+    arm = PhronixOpenCodeArm(model="m", provider="p")
+    arm._in_store = lambda root, fn, *a, **k: fn(*a, **k)
+
+    import phronix.skills as skills_module
+    original = skills_module.search
+    skills_module.search = lambda *a, **k: {
+        "status": "ok", "query": "q", "count": 1,
+        "results": [{"skill": "pylint-fixme-notes-regex-boundary",
+                     "subject": "pylint-fixme-notes-regex-boundary"}]}
+    try:
+        got = arm.recalled_skill(tmp_path, {"repo": "pylint-dev/pylint"})
+    finally:
+        skills_module.search = original
+
+    assert got == "pylint-fixme-notes-regex-boundary", got
+
+
+def test_a_skill_from_another_issue_is_not_named_as_this_task_s():
+    """`topic_skill` falls back to fuzzy resolution, and two issues in one
+    repository resolve to each other.
+
+    Measured: both `pylint-dev__pylint-5859` (fixme notes) and
+    `pylint-dev__pylint-7080` (recursive ignore-paths) returned
+    `normalize-ignore-paths`. The prompt states "this task has been researched
+    already, and the result is a single skill", so the planner put up
+    `ignore_type_behavior` and `ignore_recursion` for a punctuation-regex bug.
+
+    Wrong-and-confident is worse than absent: an empty answer costs a fresh
+    start; this costs a plan round the corrector then has to undo.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert callable(getattr(Arm, "_skill_is_for", None))
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    body = source[source.index("            skill = self._in_store(store_root, research_module.topic_skill"):]
+    body = body[:body.index("files = self.attachments(")]
+    assert "self._skill_is_for(store_root, skill, topic)" in body
+    # Offered as knowledge rather than dropped: a skill for a neighbouring bug
+    # still knows where the behaviour lives and what was refuted.
+    assert "offered as knowledge" in body
+
+
+def test_the_plan_is_checked_for_a_metric_and_a_corpus_too():
+    """The ideas had a corrector; the plan's other two outputs did not.
+
+    So a task could reach `build-solution` with `0 inst` and `fom=-` — a
+    solution built with nothing to measure it against, and no signal anything
+    was missing. Measured across one six-task run: three of six.
+
+    The check is arithmetic over the record rather than a judgement, which is
+    what lets it be trusted. A corrector that can be talked out of its verdict
+    is not a corrector.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    import phronix.research as research_module
+    original = research_module.status
+    try:
+        research_module.status = lambda topic: {}
+        gaps = Arm._plan_gaps("t", 8)
+        assert any("figure of merit" in g for g in gaps)
+        assert any("corpus" in g for g in gaps)
+
+        research_module.status = lambda topic: {
+            "fom": {"name": "failed_tests"},
+            "instances": list(range(8))}
+        assert Arm._plan_gaps("t", 8) == []
+
+        # A corpus that is present but too thin is still a gap, and the
+        # message says how many there are.
+        research_module.status = lambda topic: {
+            "fom": {"name": "x"}, "instances": [1, 2]}
+        thin = Arm._plan_gaps("t", 8)
+        assert len(thin) == 1 and "there are 2" in thin[0]
+    finally:
+        research_module.status = original
+
+    # And the corrector that closes them runs with no clock.
+    assert "complete-plan" in Arm.UNTIMED_STAGES
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        stdout = \"\".join(transcripts)")]
+    assert 'stage("complete-plan"' in flow
+    # Re-checked afterwards, with a settle: the corrector's write and this
+    # read race, and a false "still incomplete" reports the corrector as
+    # broken exactly when it worked.
+    assert flow.count("self._plan_gaps") >= 3
+    assert "time.sleep" in flow
+    assert "still incomplete after the corrector" in flow
+
+
+def test_an_attempt_records_whether_it_used_phronix_at_all():
+    """Research with zero phronix calls is fatal; an attempt was only traced.
+
+    Both are the same state — a plain agent under a phronix label — and the
+    attempt version scored identically to one that used its memory, because
+    the difference lived in a trace line nobody aggregates.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import AttemptOutcome
+
+    assert hasattr(AttemptOutcome(), "phronix_calls")
+
+    runner = (Path(__file__).parent / "benchmark" / "runner.py").read_text()
+    assert "attempt.phronix_calls = tracer.tools(" in runner
+    assert "it is a plain agent result" in runner
+
+    # And the census returns its count rather than only tracing it.
+    trace = (Path(__file__).parent / "benchmark" / "trace.py").read_text()
+    body = trace[trace.index("    def tools(self, phase: str"):]
+    body = body[:body.index("\ndef ")]
+    assert "return 0" in body and "return sum(counts.values())" in body
+
+
+def test_an_empty_record_is_not_reported_as_a_failure_to_mark():
+    """Nothing to mark is not a failure to mark.
+
+    Under research-on-retry try 1 runs with research withheld, so no approach
+    was proposed and the record is legitimately empty. The corrector fired on
+    every first attempt, warning that "the next attempt will still see this
+    approach as live" — about an approach that does not exist.
+
+    A corrector that cries wolf on the normal path teaches everyone to ignore
+    it, which costs exactly the times it is right.
+    """
+    from pathlib import Path
+
+    runner = (Path(__file__).parent / "benchmark" / "runner.py").read_text()
+    body = runner[runner.index("    def _mark_outcome("):]
+    body = body[:body.index("\n    @staticmethod", 10) if "\n    @staticmethod" in body[10:]
+                else len(body)]
+
+    # An empty record gets its own, non-alarming event...
+    assert 'elif decided.get("status") == "empty":' in body
+    assert '"approach-none"' in body
+    # ...and the alarm is reserved for a record that exists and did not update.
+    alarm = body.index('"approach-unmarked"', body.index('"approach-none"'))
+    assert "will still see this approach as live" in body[alarm:alarm + 400]
+
+
+def test_the_plan_loop_keeps_asking_and_then_uses_what_it_has():
+    """The planner proposes a third idea; the validator rejects it as filler.
+
+    Measured: `2 good idea(s) kept, asking for 1 more` four rounds running, at
+    an escalating budget each time. Neither side is misbehaving — there simply
+    is no good third idea for that task — so the harness accepts what there is.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    # Bounded by the number of rounds, not by giving up early: it keeps
+    # asking (differently) and then explores whatever survived.
+    assert Arm.MAX_PLAN_RETRIES >= 5
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        # Explore every idea at once.")]
+    assert "while tries_at_plan < self.MAX_PLAN_RETRIES" in flow
+    # Two real ideas are explored as they are; the generic angles are only for
+    # a plan that produced nothing at all.
+    assert "if not ideas:" in flow
+    assert "rather than padding to" in flow
+
+
+def test_the_agent_definition_reaches_the_harness_not_just_its_name():
+    """A restriction in a file nobody passes is not a restriction.
+
+    `--agents {"name": {"description": name}}` gave Claude Code an agent with
+    default tools, so `phronix-validator` — which declares no Read, Edit or
+    Bash — read and edited files 67 times in one run.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    spec = Arm._agent_spec("phronix-validator")
+    tools = spec.get("tools") or []
+    # The whole list, not the first wrapped line: a half-passed tool list is
+    # worse than none, because it looks configured.
+    assert len(tools) >= 6, tools
+    # The line is at CHANGING things, not seeing them: denying reading too made
+    # the validator ask the user for the files it had been handed.
+    for forbidden in ("Edit", "Bash", "Write"):
+        assert forbidden not in tools
+    assert spec.get("prompt"), "the agent's own instructions must be passed too"
+
+    # An unknown agent degrades to a name rather than raising.
+    assert Arm._agent_spec("no-such-agent") == {"description": "no-such-agent"}
+
+
+def test_a_stalled_plan_is_asked_differently_rather_than_abandoned():
+    """Four rounds of `2 kept, asking for 1 more` is a bad question, not a
+    task with only two ideas.
+
+    So the ask changes shape: the kept ideas go in as one-sentence summaries,
+    the request is for what they do not cover, and it asks for MORE than the
+    shortfall because the validator culls.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    # Over-ask: a request for exactly the missing one is lost to a single
+    # rejection.
+    assert Arm.PLAN_OVERASK >= 3
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        # Explore every idea at once.")]
+    assert "max(self.MIN_ASPECTS - len(ideas), self.PLAN_OVERASK)" in flow
+    # It keeps asking; a flat round changes the ask rather than ending it.
+    assert "stuck_rounds >= self.MAX_PLAN_STALLS" not in flow
+    assert "Change the axis, do not rephrase." in flow
+
+    # The kept ideas are compressed, so the planner cannot elaborate on them.
+    assert Arm._one_sentence("First. Second.") == "First."
+    assert Arm._one_sentence("x" * 300).endswith("…")
+
+    # And the method for finding a genuinely different angle is in the skill.
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+             / "skills" / "phronix-research-plan" / "SKILL.md").read_text()
+    assert "do not cover" in skill and "axis" in skill
+
+
+def test_two_bugs_in_one_repository_do_not_share_a_solution_skill():
+    """Naming a harvested skill after the AREA is what lets knowledge
+    accumulate — but the area has to be narrower than the repository.
+
+    Measured: `pallets__flask-4045` (a blueprint name containing a dot) and
+    `pallets__flask-5063` (a domain column in `flask routes`) both harvested to
+    a skill called `flask`, and `pylint-dev__pylint-5859` to one called `note`.
+    `topic_skill` then handed each attempt the other's pipeline as its own.
+
+    One repeated token is the repository, not a subject.
+    """
+    from phronix.research import _subject_of
+
+    shared_word_only = {"approaches": [{"name": "flask-routes-fix"},
+                                       {"name": "flask-domain-fix"}]}
+    a = _subject_of(shared_word_only, "pallets__flask-5063")
+    b = _subject_of(shared_word_only, "pallets__flask-4045")
+    assert a != b, (a, b)
+    assert a == "pallets-flask-5063"
+
+    # Two shared words is a real area, and both tasks in it may share a skill.
+    area = {"approaches": [{"name": "normalize-ignore-paths"},
+                           {"name": "normalize-ignore-recursive"}]}
+    assert _subject_of(area, "pylint-dev__pylint-7080") == "ignore-normalize"
+
+    # And with nothing to go on, the task's own slug — never the repo's, which
+    # every task in the split would share.
+    assert _subject_of({}, "sympy__sympy-24066") == "sympy-sympy-24066"
+
+
+def test_a_restricted_agent_is_actually_denied_the_built_in_tools():
+    """Declaring an agent's tools does not take the built-in ones away.
+
+    `--agents {... "tools": [...]}` says which MCP tools the agent may reach.
+    Measured after passing the full definition: `phronix-validator`, which
+    declares only phronix tools and is told "judging is not investigating",
+    still read and edited files 18 times. `--disallowedTools` is what removes
+    them.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import ClaudePhronixArm, ClaudeArm
+
+    for cls in (ClaudePhronixArm, ClaudeArm):
+        arm = cls(model="m", provider="tuolumne",
+                  base_url="http://h:4000/v1", api_key="k")
+        cmd = arm.agent_command("p", Path("/tmp"), [],
+                                agent="phronix-validator")
+        assert "--disallowedTools" in cmd, cls.__name__
+        denied = cmd[cmd.index("--disallowedTools") + 1]
+        for gone in ("Edit", "Bash", "Write"):
+            assert gone in denied, (cls.__name__, denied)
+        assert "Read" not in denied.split(","), (cls.__name__, denied)
+        # And the definition itself still travels.
+        spec = cmd[cmd.index("--agents") + 1]
+        assert "mcp__phronix__research_set_aspects" in spec, cls.__name__
+
+    # An agent with no declared tools keeps its defaults: the denial applies
+    # only where a restriction was actually expressed.
+    arm = ClaudePhronixArm(model="m", provider="tuolumne",
+                           base_url="http://h:4000/v1", api_key="k")
+    assert "--disallowedTools" not in arm.agent_command(
+        "p", Path("/tmp"), [], agent="no-such-agent")
+
+
+def test_an_approach_is_always_chosen_so_the_outcome_can_be_marked(isolated_layers):
+    """`choose` is willing to fail; the ledger cannot be.
+
+    Without `tune` there are no measured trials, so `choose` returns
+    `inconclusive` forever and `chosen` stays empty. `mark_attempt_outcome`
+    marks the approach that was FOLLOWED, so it then returns `empty` and
+    burn-and-refine sits inert. Measured: two approaches recorded, both
+    `status: None`, after two attempts.
+    """
+    from phronix import research
+
+    topic = "acme__widget-1"
+    research.add_approach(topic, name="first", summary="s", hypothesis="h")
+    research.add_approach(topic, name="second", summary="s", hypothesis="h")
+
+    settled = research.settle_choice(topic)
+    assert settled["status"] in ("ok", "kept")
+    assert settled["chosen"] in ("first", "second")
+
+    # Whatever it settles on, it settles on for good — the ledger has to point
+    # at the same approach the next time it is asked, or an outcome is marked
+    # against one approach and read off another.
+    again = research.settle_choice(topic)
+    assert again["status"] == "kept"
+    assert again["chosen"] == settled["chosen"]
+
+    # And with nothing recorded there is nothing to settle.
+    #
+    # A deliberately unrelated name: `acme__widget-2` fuzzy-resolves to
+    # `acme__widget-1`'s record and reports its choice, which is the same
+    # collision that had two Flask bugs sharing one skill.
+    assert research.settle_choice("zeta__unrelated-9")["status"] == "empty"
+
+
+def test_the_pipeline_ends_with_the_candidates_and_chooses_nothing():
+    """The pass stops at the candidates; the target tests do the choosing.
+
+    `settle_choice` used to run last, naming one approach as "followed" so the
+    ledger had something to mark. That was a guess made before anything was
+    tried — announced in the trace as "of 1, no measured ranking" — and it is
+    now replaced by marking each plan with what its own trial did against the
+    real tests.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    flow = source[source.index("        # The pipeline, in full."):
+                  source.index("        stdout = \"\".join(transcripts)")]
+    assert 'stage("build-solution"' in flow
+    assert "settle_choice" not in flow
+
+    runner = (Path(__file__).parent / "benchmark" / "runner.py").read_text()
+    assert "attempt.trials" in runner, "outcomes are marked from the trials now"
+
+
+def test_a_finished_research_pass_is_never_sent_back_to_the_start():
+    """A pass that produced candidates goes to the tests, not round again.
+
+    Measured on pylint-7080: three ideas explored, three solution skills
+    written, and eleven seconds later `research_verify` returned "fail" and the
+    whole pass was re-run before the attempt. Its bar is the figure of merit
+    and the trials on the corpus research built for itself — a proxy, and one
+    nothing satisfies once candidates are measured against the task's own
+    tests instead.
+    """
+    from pathlib import Path
+
+    runner = (Path(__file__).parent / "benchmark" / "runner.py").read_text()
+    body = runner[runner.index("def run_attempt"):runner.index("def _mark_outcome")]
+    assert "corrector rejected the plan" not in body
+    assert body.count("arm.research(") == 1, (
+        "research runs once per attempt: no revision pass before the tests")
+
+
+def test_the_validator_is_told_not_to_narrate_patches():
+    """Denying the tools stopped the edits and not the writing.
+
+    Measured: thirty-five `*** Begin Patch *** Update File: ...` blocks from a
+    single `validate-exploration` pass. The model could not edit, so it
+    narrated edits instead — an unbudgeted stage producing output nobody
+    applies while the verdict went unrecorded.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert "patches" in Arm.VALIDATE_EXPLORE_PROMPT
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+             / "skills" / "phronix-validate-exploration" / "SKILL.md").read_text()
+    assert "Do not write the fix" in skill
+    assert "already complete enough" in skill
+
+
+def test_one_shared_word_is_not_enough_to_resolve_a_topic(isolated_layers):
+    """A single shared token matched, so tasks read each other's records.
+
+    `sympy__sympy-24066` matched `sympy-sympy-21847` on `sympy` and inherited
+    its ideas, approaches and skill. The instance id carries its own
+    discriminator — the issue number — so it has to be the thing that matches.
+    """
+    from phronix import research
+
+    research.add_approach("sympy__sympy-21847", name="itermonomials",
+                          summary="s", hypothesis="h")
+    research.define_fom("sympy__sympy-21847", name="m", direction="max",
+                        measure="how", target=1.0)
+
+    # A different issue in the same project must NOT resolve to it.
+    assert research.resolve_topic("sympy__sympy-24066") == "sympy__sympy-24066"
+    # And no topic resolves to the OTHER one, whichever spelling comes back.
+    assert "21847" not in research.resolve_topic("sympy__sympy-24066")
+    assert "24066" not in research.resolve_topic("sympy__sympy-21847")
+
+
+def test_the_plan_corrector_is_told_the_corpus_is_counted():
+    """It fired, produced four instances where eight were required, and the
+    stage after it measured against four.
+    """
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert "the count is checked" in Arm.COMPLETE_PLAN_PROMPT
+    assert "research_add_instances" in Arm.COMPLETE_PLAN_PROMPT
+
+
+def test_a_skill_states_what_it_solved_and_the_agent_decides():
+    """Matching is the reader's job, not the retrieval's.
+
+    Every heuristic that decided FOR the agent got it wrong the same way: one
+    shared token, two Flask bugs, one skill, and a prompt asserting "this task
+    has been researched already" about a different bug's pipeline.
+
+    So the skill states the problem it solved, and the agent — the only reader
+    that can see both problems — decides whether to apply it or mine it.
+    """
+    from pathlib import Path
+    from tests.benchmark import arms
+
+    suffix = arms.PHRONIX_PLAN_SUFFIX
+    assert "may cover this task" in suffix
+    assert "Read what it says it solved" in suffix
+    # Both outcomes are spelled out, including the useful non-match.
+    assert "It is your problem" in suffix
+    assert "different problem in the same area" in suffix
+    assert "knowledge" in suffix
+    assert "cannot be delegated to the retrieval" in suffix
+
+    # And the writer is told to make that decision possible.
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+             / "skills" / "phronix-build-solution" / "SKILL.md").read_text()
+    assert "symptom" in skill and "failing test" in skill and "cause" in skill
+
+
+def test_the_failed_patch_reaches_the_plan_as_evidence():
+    """The planner saw a claim and a verdict, but never the change itself.
+
+    Without the diff it has to infer what was tried from "Implemented the fix
+    for handling dimensionless exponents" and "target 0/1" — so it re-proposes
+    the change that just failed, because nothing told it what that change was.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+    import inspect
+
+    notes = inspect.getsource(Arm._attempt_notes)
+    assert '"patch.diff"' in notes
+    assert "The change that was tried" in notes
+    # An empty diff is a different failure from a wrong one, and is named.
+    assert "Nothing was changed." in notes
+
+    # And the plan is told to read it before planning.
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+             / "skills" / "phronix-research-plan" / "SKILL.md").read_text()
+    # And summarising that artifact is the plan's FIRST step, before the
+    # metric, the corpus or any idea — everything downstream works from the
+    # plan's reading of the problem.
+    assert "### I1 — First, summarise the problem from the artifact" in skill
+    assert "Read the diff before you plan" in skill
+    assert skill.index("summarise the problem") < skill.index("research_define_fom")
+
+
+def test_the_whole_exchange_is_kept_as_an_artifact_for_the_plan(tmp_path):
+    """The harness used to hand research its own digest of the attempt.
+
+    That is a summary written by the component least able to judge what
+    matters: it cannot tell which half-sentence in a transcript is the clue. So
+    the full exchange is written down and the PLAN summarises it, which makes
+    the summary the plan's own reading of the problem rather than one it
+    inherited.
+    """
+    import json
+    from tests.benchmark.arms import PhronixOpenCodeArm
+
+    work = tmp_path / "attempt-1"
+    work.mkdir()
+    (work / "prompt.md").write_text("fix the issue in issue.md")
+    (work / "opencode.jsonl").write_text(json.dumps(
+        {"message": {"role": "assistant",
+                     "content": [{"type": "text",
+                                  "text": "I changed the regex."}]}}) + "\n")
+
+    out = PhronixOpenCodeArm.write_exchange(
+        work,
+        verdict={"resolved": False, "fail_to_pass_passed": 0,
+                 "fail_to_pass_total": 1,
+                 "fail_to_pass_failing": ["tests/test_misc.py::test_note"],
+                 "failure_detail": "AssertionError: expected W0511"},
+        patch="--- a/x.py\n+++ b/x.py\n@@\n-old\n+new\n")
+
+    text = out.read_text()
+    # All four halves of the exchange, not a selection from them.
+    assert "fix the issue in issue.md" in text          # what it was asked
+    assert "I changed the regex." in text               # what it said
+    assert "+new" in text                               # what it changed
+    assert "tests/test_misc.py::test_note" in text      # how it was judged
+    assert "AssertionError: expected W0511" in text     # what the tests printed
+    # And it says what to do with it.
+    assert "Summarise it" in text
+
+    # An empty diff is named rather than left blank: nothing changed is a
+    # different failure from a wrong change.
+    empty = PhronixOpenCodeArm.write_exchange(work, verdict={}, patch="")
+    assert "**Nothing.** The diff was empty." in empty.read_text()
+
+
+def test_a_corrector_gets_a_shorter_guard_than_the_write_up():
+    """A corrector that runs for fifteen minutes has stopped judging.
+
+    Measured: `validate-ideas` — which has no file tools and judges a list of
+    three ideas — ran the full 900s guard and was killed. Denied files, it
+    wandered through `skill list`, `memory recall`, three `skill load`s and a
+    probe, and recorded nothing.
+
+    The guard is not a work budget; it is the point at which "judging" has
+    clearly become "investigating by other means".
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert Arm.CORRECTOR_GUARD_S < Arm.MUST_FINISH_GUARD_S
+    assert Arm.CORRECTOR_GUARD_S <= 300
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    body = source[source.index("        def stage(name: str, prompt: str"):
+                  source.index("        # The pipeline, in full.")]
+    # The long guard is for the write-up only; correctors get the short one.
+    assert 'head == "build-solution"' in body
+    assert "CORRECTOR_GUARD_S" in body
+
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+             / "skills" / "phronix-validate-ideas" / "SKILL.md").read_text()
+    assert "record it and finish" in skill
+
+
+def test_the_plan_corrector_is_told_not_to_fix_the_bug():
+    """An unbudgeted corrector doing the attempt's job.
+
+    Measured: `complete-plan` spent twenty minutes on one task — ten
+    `apply_patch` calls and eight edits to `blueprints.py` — while doing the
+    thing it was asked for, splitting the dataset, three times. Every edit was
+    reverted afterwards, because research may not change the code.
+    """
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert "Do not fix the bug" in Arm.COMPLETE_PLAN_PROMPT
+    assert "apply_patch" in Arm.COMPLETE_PLAN_PROMPT
+    # And it is a corrector, so the short guard bounds it.
+    assert "complete-plan" in Arm.UNTIMED_STAGES
+    assert Arm.CORRECTOR_GUARD_S <= 300
+
+
+def test_a_task_keeps_one_conversation_across_all_its_calls(tmp_path):
+    """A task is a dozen calls, not one exchange.
+
+    Several attempts, an evaluation after each, research between them — and
+    each was starting from the issue with no idea what the previous ones had
+    established, so the third attempt could repeat the first's change.
+    """
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    Arm.append_turn(tmp_path, "attempt attempt-1",
+                    asked="fix the issue", said="I changed the regex.")
+    Arm.record_verdict(tmp_path, "evaluation of attempt 1",
+                       verdict={"resolved": False,
+                                "fail_to_pass_passed": 0,
+                                "fail_to_pass_total": 1,
+                                "fail_to_pass_failing": ["t.py::test_note"],
+                                "failure_detail": "AssertionError: no W0511"},
+                       patch="--- a/misc.py\n+++ b/misc.py\n@@\n-a\n+b\n")
+    summary = Arm.append_turn(tmp_path, "attempt attempt-2",
+                              asked="try again", said="I widened the pattern.",
+                              skill="pylint-fixme-regex")
+
+    # The full record keeps everything, in order.
+    log = (tmp_path / "conversation.md").read_text()
+    assert log.count("## Turn ") == 3
+    assert "I changed the regex." in log and "+b" in log
+
+    # The rolling summary is what the next call reads: small, ordered, and
+    # carrying what was judged rather than what was said.
+    digest = summary.read_text()
+    assert digest.index("Turn 1") < digest.index("Turn 2") < digest.index("Turn 3")
+    assert "changed misc.py" in digest
+    assert "judged NOT resolved" in digest
+    assert "t.py::test_note" in digest
+    assert "AssertionError: no W0511" in digest
+    # And the solution skill, when there is one.
+    assert "pylint-fixme-regex" in digest
+    # Small enough to attach to every later call.
+    assert len(digest) < 4000, len(digest)
+
+
+def test_every_attempt_is_given_what_was_already_tried():
+    """Attached to all of them, including the first, where it does not exist."""
+    from pathlib import Path
+    from tests.benchmark import arms
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    assert 'self.conversation_dir(workdir) / "conversation-summary.md"' in source
+    assert "context.append(history)" in source
+    # Two levels: this task's own record, and the subject's across tasks.
+    assert 'shared_dir / "subject-conversation.md"' in source
+    # And the prompt tells the agent what it is for.
+    assert "conversation-summary.md" in arms.TASK_PROMPT
+    assert "has been measured" in arms.TASK_PROMPT
+
+
+def test_a_failed_attempt_does_not_falsify_the_approach():
+    """The store recorded the correct fix as refuted.
+
+    `pallets__flask-4045` researched three angles and found the accepted one —
+    validate the blueprint name, raise where endpoint names are already
+    validated. The attempt implemented it and the check did not fire, so the
+    learner wrote "dot validation attempt falsified … should no longer be
+    considered a valid approach" and retired the lesson pointing at it.
+
+    An idea wrongly kept costs one attempt; an idea wrongly retired costs every
+    future task that would have used it.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent / "src" / "phronix" / ".agents" / "skills"
+
+    reconcile = (root / "phronix-learning-reconcile" / "SKILL.md").read_text()
+    assert "does not falsify the approach it was attempting" in reconcile
+    assert "the implementation failed" in reconcile
+    assert "keep the lesson and record the doubt" in reconcile
+
+    capture = (root / "phronix-learning-capture" / "SKILL.md").read_text()
+    assert "Say what failed, not what to abandon" in capture
+
+    build = (root / "phronix-build-solution" / "SKILL.md").read_text()
+    assert "Say what failed, not what to abandon" in build
+
+
+def test_every_idea_is_attempted_against_the_real_tests():
+    """Ideas were explored in throwaway worktrees and never attempted.
+
+    The research metric is a proxy — measured on a corpus research built
+    itself — so the idea it favours is the most promising, not the correct one.
+    Attempts are independent and the fleet has capacity, so N candidates cost
+    one attempt's wall clock and the target tests settle it.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    # The three ideas count as candidates, not just the recorded approaches —
+    # a task with three good ideas was racing one candidate, which is no race.
+    import inspect
+    source = inspect.getsource(Arm.candidate_plans)
+    assert 'record.get("aspects")' in source
+    assert "if len(out) < limit:" in source
+
+    # Each candidate gets its own attempt AND its own evaluation.
+    runner = (Path(__file__).parent / "benchmark" / "runner.py").read_text()
+    race = runner[runner.index("    def _race_plans("):]
+    race = race[:race.index("\n    def ", 10)]
+    assert "arm.generate(" in race
+    assert "evaluate(" in race
+    assert "baseline_failures(" in race
+    assert "ThreadPoolExecutor" in race
+
+    # Racing is on by default in the benchmark script.
+    bench = (Path(__file__).parent.parent / "scripts" / "swe-agent-bench.sh").read_text()
+    assert "CANDIDATES=${CANDIDATES:-3}" in bench
+    # Through EXTRA: `run-benchmark.sh` parses with an allow-list, so a flag
+    # the CLI supports is still refused unless both layers name it.
+    assert 'EXTRA+=(--attempt-candidates "$CANDIDATES")' in bench
+    forward = (Path(__file__).parent.parent / "scripts" / "run-benchmark.sh").read_text()
+    assert "--attempt-candidates) EXTRA+=" in forward
+
+    # And several passing is a distinct case from one passing.
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+             / "skills" / "phronix-trial-reconcile" / "SKILL.md").read_text()
+    assert "Several passed" in skill
+    assert "confirmed by more than one candidate" in skill
+
+
+def test_the_conversation_has_a_task_level_and_a_subject_level(tmp_path):
+    """Two levels, answering different questions.
+
+    The task's own conversation is what THIS task has tried — what stops
+    attempt three repeating attempt one. The subject's is what every task in
+    the area has tried, which is what stops a second bug in the same subsystem
+    rediscovering the first's dead ends, often in the same run.
+    """
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    task = tmp_path / "task"; task.mkdir()
+    subject = tmp_path / "store" / "conversations" / "flask-blueprints"
+    subject.mkdir(parents=True)
+
+    Arm.append_turn(task, "attempt attempt-1", asked="fix it",
+                    said="I edited blueprints.py",
+                    patch="--- a/b.py\n+++ b/b.py\n@@\n-a\n+b\n",
+                    subject_dir=subject)
+
+    # The task level keeps the detail.
+    assert "I edited blueprints.py" in (task / "conversation.md").read_text()
+
+    # The subject level keeps a line and a link — it is read by tasks that are
+    # NOT this one, which need "somebody tried this here", not the transcript.
+    shared = (subject / "subject-conversation.md").read_text()
+    assert "What has been tried on this subject" in shared
+    assert "changed b.py" in shared
+    assert "conversation.md" in shared            # the link back
+    assert "I edited blueprints.py" not in shared  # not the transcript
+
+    # A second task in the same subject appends to the same file.
+    other = tmp_path / "other"; other.mkdir()
+    Arm.append_turn(other, "attempt attempt-1", asked="a different bug",
+                    said="I looked elsewhere", subject_dir=subject)
+    assert (subject / "subject-conversation.md").read_text().count("- **Turn") == 2
+
+
+def test_only_the_arms_with_memory_keep_a_conversation():
+    """The bare arm is the control.
+
+    It carries nothing between attempts by design, and a record of what it had
+    already tried is the one capability the comparison exists to measure. It
+    wrote none of these anyway, through which class overrides `generate` — an
+    accident, not a guarantee.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    call = source.index("self.append_turn(self.conversation_dir(workdir)")
+    before = source[max(0, call - 600):call]
+    assert "if self.uses_phronix:" in before, "the bare arm must not record turns"
+
+
+def test_every_arm_can_reach_the_conversation_helpers():
+    """They lived on the phronix class while the caller lived on the base one.
+
+    `generate` is defined on `OpenCodeArm` and calls `append_turn`; the helper
+    was defined on `PhronixOpenCodeArm`. `ClaudeArm` extends the former, so
+    every bare attempt raised `AttributeError: 'ClaudeArm' object has no
+    attribute 'append_turn'` and the whole control arm reported
+    `steps=0 tok=0/0` — a benchmark with no baseline, from a method on the
+    wrong class.
+    """
+    from tests.benchmark.arms import (Arm, OpenCodeArm, ClaudeArm,
+                                      PhronixOpenCodeArm, ClaudePhronixArm)
+
+    for cls in (Arm, OpenCodeArm, ClaudeArm, PhronixOpenCodeArm,
+                ClaudePhronixArm):
+        for helper in ("append_turn", "record_verdict", "conversation_dir",
+                       "subject_dir", "write_exchange", "_narrative"):
+            assert hasattr(cls, helper), (cls.__name__, helper)
+
+
+def test_a_failed_conversation_write_is_reported_not_swallowed():
+    """A bare `except: pass` hid an AttributeError for an entire run.
+
+    Every evaluation turn was silently missing, so the conversations held one
+    turn each instead of two and nothing said so. Bookkeeping must not fail a
+    task — but it must not fail invisibly either, because what it records is
+    what the next attempt reads.
+    """
+    from pathlib import Path
+
+    runner = (Path(__file__).parent / "benchmark" / "runner.py").read_text()
+    block = runner[runner.index("arm.record_verdict("):]
+    block = block[:block.index("attempt.phronix_calls")]
+    assert "except Exception as exc:" in block
+    assert "conversation-unrecorded" in block
+    assert "\n                    pass" not in block
+
+
+def test_learning_is_a_skill_and_a_pass_writes_the_solution():
+    """A pass was the most valuable thing the system could record, and it was
+    thrown away.
+
+    Every win so far came on the first attempt, where no research runs — so
+    nothing wrote down how the task was actually solved and the next task on
+    that subject started from nothing.
+    """
+    from pathlib import Path
+    from tests.benchmark.arms import PhronixArm as Arm, OBSERVE_NOTE
+
+    # A pointer, not the method.
+    pointer = Arm.LEARN_PROMPT.replace(OBSERVE_NOTE, "")
+    assert "phronix-learn-from-attempt" in pointer
+    assert len(pointer) < 1200, len(pointer)
+    assert "PASSED" in pointer and "solution" in pointer
+
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+             / "skills" / "phronix-learn-from-attempt" / "SKILL.md").read_text()
+    # A pass writes the solution, and updates rather than forks.
+    assert "It passed: write the solution" in skill
+    assert "update it" in skill
+    # What works and what does not, in ONE skill.
+    assert "approaches that work for this task" in skill
+    assert "lessons learned" in skill
+    assert "SAME skill" in skill
+    # And the evaluation's own output is evidence, not just the verdict.
+    assert "what the tests printed" in skill
+
+    # The learn step is actually handed that output.
+    source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
+    assert 'workdir / "exchange.md"' in source
+
+
+def test_fresh_serves_core_plus_this_session_and_no_earlier_run(tmp_path, monkeypatch):
+    """`--fresh` isolates capabilities the way it already isolated research.
+
+    Research is isolated at the storage layer: without reuse a read sees the
+    current session's folder and nothing else. Capabilities were not, and the
+    gap was filled by seeding every `probe_`-prefixed tool on the reasoning
+    that a method tool carries nothing about any task. The prefix is chosen by
+    whichever agent wrote the tool, and one of them was
+    `probe_fix_max_to_sum_powers_filter` — a tool that applies one benchmark
+    task's fix outright. The run could call it without knowing it had been
+    handed anything.
+
+    So the visible set under `--fresh` is core plus current: what ships with
+    the framework, and what this process authored. Nothing from an earlier
+    run's layer.
+    """
+    from phronix import capabilities
+
+    monkeypatch.setattr(capabilities, "_SESSION_AUTHORED", {}, raising=False)
+    earlier = tmp_path / "probe_from_last_run.py"
+    earlier.write_text("def register(mcp):\n    pass\n")
+    mine = tmp_path / "probe_built_just_now.py"
+    mine.write_text("def register(mcp):\n    pass\n")
+
+    monkeypatch.setattr("phronix.layers.capability_files",
+                        lambda *a, **k: {earlier.name: earlier, mine.name: mine})
+    monkeypatch.setattr("phronix.layers.which_layer", lambda path, *a, **k: "project")
+
+    # Not fresh: everything an agent can reach is fair game.
+    monkeypatch.delenv(capabilities.FRESH_ENV, raising=False)
+    assert set(capabilities.visible_files()) == {earlier.name, mine.name}
+
+    # Fresh: only what this session built.
+    monkeypatch.setenv(capabilities.FRESH_ENV, "1")
+    capabilities._SESSION_AUTHORED[mine.stem] = str(mine)
+    assert set(capabilities.visible_files()) == {mine.name}
+
+
+def test_fresh_still_serves_the_bundled_tools(tmp_path, monkeypatch):
+    """Core is not withheld: `--fresh` is a claim about learning, not tooling."""
+    from phronix import capabilities
+
+    shipped = tmp_path / "probe_shipped.py"
+    shipped.write_text("def register(mcp):\n    pass\n")
+    monkeypatch.setattr(capabilities, "_SESSION_AUTHORED", {}, raising=False)
+    monkeypatch.setattr("phronix.layers.capability_files",
+                        lambda *a, **k: {shipped.name: shipped})
+    monkeypatch.setattr("phronix.layers.which_layer", lambda path, *a, **k: "bundled")
+    monkeypatch.setenv(capabilities.FRESH_ENV, "1")
+
+    assert set(capabilities.visible_files()) == {shipped.name}
+
+
+def test_a_task_capability_is_filed_under_its_task(tmp_path, monkeypatch):
+    """A tool that knows a task goes under that task, not beside the methods."""
+    from phronix import capabilities
+
+    store = tmp_path / "project" / ".phronix"
+    (store / "capabilities").mkdir(parents=True)
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(store.parent))
+
+    source = "def register(mcp):\n    pass\n"
+    method = capabilities.new("probe_run_pytest_here", "run pytest", source=source)
+    bound = capabilities.new(
+        "probe_fix_this_one_bug", "apply the fix",
+        # Materially different, not a comment apart: identical procedures are
+        # refused as duplicates, which is a rule this test is not about.
+        source="def register(mcp):\n    return 'applies one task's fix'\n"
+               .replace("'applies", '"applies').replace("fix'", 'fix"'),
+        topic="pylint-dev__pylint-7080")
+
+    assert method["status"] == "ok" and bound["status"] == "ok"
+    assert Path(method["file"]).parent.name == "capabilities"
+    assert Path(bound["file"]).parent.name == "pylint-dev-pylint-7080"
+    assert Path(bound["file"]).parent.parent.name == capabilities.TASK_CAPABILITY_DIR
+
+
+def test_only_the_merged_solution_outlives_the_run(tmp_path):
+    """Four skills go in, one comes out.
+
+    Each idea is written up as its own skill so the racers have something
+    executable to follow, and `reconcile_trials` then merges them into one
+    skill for the subject: the candidates that passed become the solution, the
+    ones that did not become its lessons. Promoting the candidates as well
+    would leave the next task on this subject retrieving three rejected
+    readings alongside the accepted one.
+    """
+    from tests.benchmark.isolation import CANDIDATE_MARKER, fresh_store, promote_store
+
+    store = tmp_path / "run" / ".phronix"
+    fresh_store(store)
+    merged = store / "skills" / "solution-pylint-dev-pylint-7080"
+    merged.mkdir(parents=True)
+    (merged / "SKILL.md").write_text(
+        "---\nname: solution-pylint-dev-pylint-7080\ntype: skill\n---\n\n## Index\n")
+    for candidate in ("normalize-in-is-ignored-file", "skip-subtrees"):
+        directory = store / "skills" / f"solution-pylint-dev-pylint-7080-{candidate}"
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {directory.name}\ntype: skill\n{CANDIDATE_MARKER}\n---\n")
+
+    carry = tmp_path / "carry" / ".phronix"
+    promoted = promote_store(store, carry)["promoted"]
+
+    assert any("solution-pylint-dev-pylint-7080/SKILL.md" in p for p in promoted)
+    assert not [p for p in promoted if "normalize-in-is-ignored-file" in p]
+    assert not [p for p in promoted if "skip-subtrees" in p]
+    # And they are still there for the run that built them.
+    assert (store / "skills" / "solution-pylint-dev-pylint-7080-skip-subtrees"
+            / "SKILL.md").is_file()

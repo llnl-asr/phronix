@@ -325,11 +325,27 @@ def resolve_topic(hint: str) -> str:
             if stem in seen_stems:
                 continue
             seen_stems.add(stem)
-            shared = words & {w for w in re.split(r"[^a-z0-9]+", stem) if len(w) > 3}
-            candidates.append((bool(shared), _has_research(stem),
+            stem_words = {w for w in re.split(r"[^a-z0-9]+", stem) if len(w) > 3}
+            shared = words & stem_words
+            # The DISTINGUISHING token has to match, not just any word.
+            #
+            # One shared word longer than three characters was enough, so
+            # `sympy__sympy-24066` matched `sympy-sympy-21847` on `sympy` and
+            # read the other bug's record: its ideas, its approaches, its
+            # skill. Two Flask bugs shared a skill the same way, and a test
+            # topic `acme__widget-2` reported `acme__widget-1`'s choice.
+            #
+            # An instance id carries its own discriminator — the issue number —
+            # so when the hint has one, it must be present. Where there is no
+            # number to go on, two shared words are required: one is the
+            # repository, which every task in the split has.
+            marks = {w for w in words if any(c.isdigit() for c in w)}
+            if marks:
+                enough = bool(marks & stem_words)
+            else:
+                enough = len(shared) >= 2
+            candidates.append((enough, _has_research(stem),
                                path.stat().st_mtime, stem))
-    if not candidates:
-        return hint
     if not candidates:
         return hint
     candidates.sort(reverse=True)
@@ -1705,13 +1721,36 @@ def set_aspects(topic: str, aspects: List[Dict[str, str]]) -> Dict[str, Any]:
     *against*, and so an aspect nobody covered is visible as a gap rather than an
     absence nobody noticed.
     """
-    cleaned = []
+    cleaned: List[Dict[str, str]] = []
+    dropped: List[str] = []
+    seen_names: set = set()
+    seen_questions: set = set()
+
+    def _key(text: str) -> str:
+        """Normalised enough that two phrasings of one idea collide."""
+        return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
+
     for index, aspect in enumerate(aspects or [], 1):
         name = str(aspect.get("name", "")).strip()
         question = str(aspect.get("question", "")).strip()
         if not name or not question:
             return {"status": "error",
                     "error": f"aspect {index} needs a name and a question"}
+        # Deduplicated here, deterministically, rather than left to the
+        # validator's judgement.
+        #
+        # Asking for many ideas is the right move — the validator culls, and
+        # what survives is what gets explored and then tried against the real
+        # tests — but "many" and "many DISTINCT" are different asks, and a
+        # planner under pressure to produce more will rephrase the one it
+        # already has. Each duplicate then costs an explore slot, a solution
+        # skill and a trial, all spent proving the same thing twice.
+        name_key, question_key = _key(name), _key(question)
+        if name_key in seen_names or question_key in seen_questions:
+            dropped.append(name)
+            continue
+        seen_names.add(name_key)
+        seen_questions.add(question_key)
         cleaned.append({"name": name, "question": question,
                         "where": str(aspect.get("where", "")).strip()})
     if not cleaned:
@@ -1721,9 +1760,44 @@ def set_aspects(topic: str, aspects: List[Dict[str, str]]) -> Dict[str, Any]:
     record = load(topic)
     record["aspects"] = cleaned
     _save(record)
-    return {"status": "ok", "topic": topic, "aspects": [a["name"] for a in cleaned],
-            "next": "investigate the aspects independently, then reconcile the "
-                    "approaches they produced"}
+    result = {"status": "ok", "topic": topic,
+              "aspects": [a["name"] for a in cleaned],
+              "next": "investigate the aspects independently, then reconcile the "
+                      "approaches they produced"}
+    if dropped:
+        result["dropped_as_duplicates"] = dropped
+        result["next"] = (f"{len(dropped)} idea(s) repeated one already in the "
+                          f"list and were dropped ({', '.join(dropped)}). "
+                          f"Propose ones on a different axis if you want more "
+                          f"than {len(cleaned)} explored. " + result["next"])
+    return result
+
+
+def add_aspects(topic: str, aspects: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Add ideas to the plan, keeping what is already there. Deduplicated.
+
+    :func:`set_aspects` replaces the list, which is right for one planner
+    writing the plan and wrong for several looking for ideas at once: whoever
+    saved last would erase the others. Scouts append through here instead, so
+    the plan accumulates and the count is the union of what everybody found.
+
+    The dedup is the same normalisation `set_aspects` uses and it matters more
+    here — two scouts working different angles on one failure will sometimes
+    arrive at the same idea, and the point of running them in parallel is
+    coverage, not three copies of the obvious reading.
+    """
+    topic = resolve_topic(topic)
+    record = load(topic)
+    existing = list(record.get("aspects") or [])
+    merged = existing + [a for a in (aspects or []) if isinstance(a, dict)]
+
+    outcome = set_aspects(topic, merged)
+    if outcome.get("status") != "ok":
+        return outcome
+    outcome["added"] = [name for name in outcome.get("aspects", [])
+                        if name not in {a.get("name") for a in existing}]
+    outcome["kept_from_others"] = len(existing)
+    return outcome
 
 
 def rank_approaches(topic: str) -> Dict[str, Any]:
@@ -2846,6 +2920,40 @@ def mark_attempt_outcome(topic: str, approach: str = "", worked: bool = False,
         return {"status": "ok", "topic": topic, "approach": approach,
                 "new_status": entry["status"]}
 
+    # An idea that was TRIED is an approach, whether or not one was recorded.
+    #
+    # Candidates come from the aspects as well as the approaches — a pass with
+    # three good ideas and no recorded approach still races three plans — and
+    # marking used to look only at `approaches`, so the two plans that SOLVED
+    # pylint-7080 came back `unknown` and went unrecorded while the one that
+    # failed was filed correctly. The ledger kept the losses and dropped the
+    # wins, which is the worst half to keep.
+    #
+    # So a result for a known idea creates the approach entry it belongs to.
+    # Nothing is invented: the name is one this pass planned, and the outcome
+    # is a measurement against the task's own tests.
+    for aspect in record.get("aspects", []):
+        if approach != aspect.get("name"):
+            continue
+        record.setdefault("approaches", []).append({
+            "name": approach,
+            "aspect": approach,
+            "summary": str(aspect.get("question", ""))[:400],
+            "source": "tried as a candidate",
+            "at": time.time(),
+            "status": "working" if worked else "failed",
+            "decided_at": time.time(),
+            "outcome_evidence": str(evidence)[:400],
+            "attempts": 1,
+            "metrics": {},
+            "tools": [],
+        })
+        _save(record)
+        checkpoint(topic)
+        return {"status": "ok", "topic": topic, "approach": approach,
+                "new_status": "working" if worked else "failed",
+                "recorded_from": "aspect"}
+
     return {"status": "unknown", "topic": topic, "approach": approach,
             "known": [e.get("name") for e in record.get("approaches", [])]}
 
@@ -3075,6 +3183,49 @@ def record_pipeline(topic: str, key: str,
                       for e in record.get("approaches", [])]}
 
 
+def settle_choice(topic: str, prefer: str = "") -> Dict[str, Any]:
+    """Make sure SOMETHING is chosen, so the attempt's outcome can be marked.
+
+    :func:`choose` is the proper corrector and is deliberately willing to fail:
+    it returns ``inconclusive`` below two approaches carrying the metric. That
+    is right when approaches are measured against a corpus. When they are not,
+    it can never decide, and the record keeps ``chosen`` empty forever.
+
+    What that costs is not the ranking — it is the LEDGER. `mark_attempt_outcome`
+    marks the approach that was followed, so an approach that fails is not
+    proposed again; with nothing chosen it returns ``empty`` and the whole
+    burn-and-refine mechanism sits inert. Measured: two approaches recorded,
+    both ``status: None``, after two attempts.
+
+    So this settles the question deterministically and never overrides a real
+    choice. It is bookkeeping, not judgement — which is why it cannot be
+    skipped by an agent that forgot to call something.
+    """
+    record = load(resolve_topic(topic))
+    approaches = record.get("approaches") or []
+    if not approaches:
+        return {"status": "empty"}
+    already = (record.get("chosen") or {}).get("name")
+    if already:
+        return {"status": "kept", "chosen": already}
+
+    named = ""
+    if prefer:
+        named = next((a.get("name") for a in approaches
+                      if a.get("name") == prefer), "")
+    # The most recent, because it is the one the solution was built from: the
+    # earlier ones were superseded by the reading that produced it.
+    picked = named or (approaches[-1].get("name") or "")
+    if not picked:
+        return {"status": "empty"}
+    record["chosen"] = {"name": picked,
+                        "why": "settled by default — no measured ranking",
+                        "settled": True}
+    _save(record)
+    return {"status": "ok", "chosen": picked,
+            "settled": True, "of": len(approaches)}
+
+
 def adopt_pipeline(topic: str, key: str = "") -> Dict[str, Any]:
     """Make the chosen approach's pipeline the topic's plan.
 
@@ -3281,6 +3432,22 @@ def _subject_of(record: Dict[str, Any], topic: str) -> str:
     common = [word for word, count in sorted(words.items(),
                                              key=lambda kv: (-kv[1], kv[0]))
               if count > 1][:3]
+    # TWO shared words at least, or the name is the repository.
+    #
+    # One repeated token is not a subject. Measured: both
+    # `pallets__flask-4045` (a blueprint name containing a dot) and
+    # `pallets__flask-5063` (a domain column in `flask routes`) harvested to a
+    # skill called `flask`, and `pylint-dev__pylint-5859` to one called
+    # `note`. Two unrelated bugs then shared one skill, so `topic_skill`
+    # handed each attempt the other's pipeline as though it were its own.
+    #
+    # Naming by area is right and is what lets knowledge accumulate — but the
+    # area has to be narrower than the repository, or every task in the
+    # repository lands in it. Where the vocabulary is too thin to say more, the
+    # task's own slug is the honest name: a skill per bug beats two bugs per
+    # skill.
+    if len(common) < 2:
+        common = []
     if common:
         # Alphabetical, NOT by frequency.
         #
@@ -3292,9 +3459,11 @@ def _subject_of(record: Dict[str, Any], topic: str) -> str:
         # The set of words is the stable thing, so the name is built from the
         # set.
         return _reuse_existing_subject(sorted(common))
-    # Fall back to the repository name in the topic, dropping the issue number.
-    head = re.split(r"__", str(topic))[0]
-    return _slug(head or topic)
+    # The task's own slug, not the repository's name.
+    #
+    # `re.split("__", "pallets__flask-5063")[0]` is `pallets`, which every
+    # Flask task in the split shares — the same collision one level up.
+    return _slug(str(topic))
 
 
 def _reuse_existing_subject(words: List[str]) -> str:

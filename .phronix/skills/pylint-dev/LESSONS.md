@@ -9,6 +9,6 @@ the other.
 
 ## Lessons
 
-### L1 — Lookahead regex breaks fixme detection for non-alphanumeric codetags
+### L1 — Punctuation-only tags not flagged by pylint note parser
 
-**2026-08-21** — Adding a positive lookahead `(?=\s|$)` to the regex for notes and notes_rgx in `pylint/checkers/misc.py` prevented the fixme checker from emitting messages for comment codetags that are not followed by whitespace. The test `test_non_alphanumeric_codetag` still fails. Future changes should preserve the original pattern or ensure end‑of‑line is matched without requiring a space.
+**2026-08-21** — Punctuation-only tags (e.g., "!!!") are not flagged as fixme notes by pylint's note parser, causing them to be ignored during linting.

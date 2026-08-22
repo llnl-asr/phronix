@@ -61,6 +61,13 @@ class Attempt:
     #: got two of three where the top-ranked plan got none" is the finding, and
     #: a single adopted patch hides it.
     trials: List[Dict[str, Any]] = field(default_factory=list)
+    #: The skill holding the solution this attempt produced.
+    #:
+    #: Recorded because it is the thing somebody wants to OPEN. The result says
+    #: a task passed; this says where the fix that passed it was written down,
+    #: which is what the next task on the subject retrieves and what a reader
+    #: checking the work has to find by hand otherwise.
+    solution_skill: str = ""
     #: Tokens the learning pass spent after this attempt was judged.
     tokens_learn: int = 0
     #: Seconds the learning pass took. Separate from ``wall_s`` for the same

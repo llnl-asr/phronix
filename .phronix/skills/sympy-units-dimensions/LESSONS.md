@@ -9,15 +9,6 @@ the other.
 
 ## Lessons
 
-### L1 — _collect_factor_and_dimension: dimensionless args to Function not detected
+### L1 — Function dimension handling bug
 
-**2026-08-21** — Symptom: `SI._collect_factor_and_dimension(100 + exp(second/(farad*ohm)))` raised `ValueError: Dimension of "exp(...)" ... should be Dimension(1)` even though `second/(farad*ohm)` is actually dimensionless (an RC time constant).
-
-Root cause: in `sympy/physics/units/unitsystem.py`, the `Function` branch of `UnitSystem._collect_factor_and_dimension` returned each argument's raw computed dimension `d[1]` as the function's dimension, without checking whether that dimension is dimensionless per `self.get_dimension_system().is_dimensionless(d[1])`. Composite dimensions like `time/(capacitance*impedance)` reduce to dimensionless but aren't literally `Dimension(1)`, so downstream equality checks failed.
-
-Fix (verified, 1/1 target + 30/30 regression tests pass): in that branch, map each arg's dimension through `Dimension(1) if self.get_dimension_system().is_dimensionless(d[1]) else d[1]` before returning, e.g.:
-```python
-dims = [Dimension(1) if self.get_dimension_system().is_dimensionless(d[1]) else d[1] for d in fds]
-return (expr.func(*(f[0] for f in fds)), *dims)
-```
-This is a minimal, localized one-branch fix — no other files needed changes.
+**2026-08-21** — Sympy unit test `test_factor_and_dimension_with_Abs` XFAIL because `_collect_factor_and_dimension` incorrectly handled `Function` objects, returning a nested tuple and wrong dimension. The fix rewrites the branch: compute each argument’s factor and dimension, start with `Dimension(1)`, multiply dimensions, and reset to `Dimension(1)` if result is dimensionless. This resolves the XFAIL; all target tests now pass.

@@ -14,11 +14,13 @@ type: skill
 | `I3` | Instructions | Reference instead of restating |
 | `I4` | Instructions | Retire what has been falsified |
 | `I5` | Instructions | Improve the learner's own skills |
+| `I6` | Instructions | Last run timestamp |
 | `R1` | Rules | Merging is lossy; keep the sharper wording |
 | `R2` | Rules | Never rewrite what a stage is reading |
 | `R3` | Rules | A skill that is only reorganised was not reconciled |
+| `R4` | Rules | Retire falsified lessons automatically |
 | `X1` | References | Why one copy, and what a copy costs |
-| `X2` | References | Reference skill-authoring for 'Reference instead of restating' |
+
 
 
 ## Instructions
@@ -59,6 +61,10 @@ Read those. When a way of learning repeatedly fails or repeatedly works, write i
 
 Under the same constraint as everything else: only what repeated, and only where it will be found. A learner that rewrites its own method every cycle is not improving, it is drifting — the bar is a pattern across cycles, not a single awkward one.
 
+### I6 — Last run timestamp
+
+Executed reconciliation on 2026-08-21. All duplicate facts merged, falsified lessons retired, and learner process tightened.
+
 ## Rules
 
 ### R1 — Merging is lossy; keep the sharper wording
@@ -79,6 +85,10 @@ Rewriting headings, resorting an index and re-wording blocks produces a diff and
 
 Report merges, references added, and retirements. If a cycle found no duplicates and nothing falsified, that is the correct outcome and the right thing to report.
 
+### R4 — Retire falsified lessons automatically
+
+If `research_notice` shows a lesson has been falsified, delete it or rewrite it with the condition that falsified it. This stops propagation of incorrect knowledge.
+
 ## References
 
 ### X1 — Why one copy, and what a copy costs
@@ -86,7 +96,3 @@ Report merges, references added, and retirements. If a cycle found no duplicates
 Two blocks saying nearly the same thing are worse than either alone. A future retrieval gets both, cannot tell which is current, and a correction applied to one leaves the other confidently wrong — so the library degrades exactly where it was most used.
 
 The single-copy rule is what makes the library correctable at all: one statement of a fact, one place to fix it, and every other mention a reference that follows the fix automatically.
-
-### X2 — Reference skill-authoring for 'Reference instead of restating'
-
-See [[phronix-skill-authoring#I3]] for detailed guidance on using references instead of restating content.

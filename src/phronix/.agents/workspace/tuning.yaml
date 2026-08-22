@@ -113,12 +113,29 @@ research:
 
   # Aspects a plan must produce before the investigation is worth running.
   # Below this the fan-out has nothing to spread across.
-  min_aspects: 2
+  # Three ideas, and the plan stage does not finish with fewer.
+  #
+  # The pipeline explores exactly what the plan records, so a plan with two
+  # ideas is a pipeline that explores two — measured live as `2 idea(s) at
+  # once`, with the third never asked for. The solution is built from the
+  # ideas, so a missing idea is a direction it never considers.
+  min_aspects: 3
 
   # Times to ask a planner again before salvaging its prose or falling back to
   # generic angles. Each retry is a full agent invocation, traded against the
   # investigation phase existing at all.
-  max_plan_retries: 2
+  # Generous, because each retry gets the FULL plan budget rather than a
+  # slice. Asking again is the cheapest corrector there is, and falling back to
+  # generic angles should be the last resort rather than the second one.
+  # More time each time a stage is sent back. A round that produced too few
+  # ideas, or a finding with a hole in it, has shown the previous budget was
+  # not enough for what it was asked.
+  round_budget_multiple: 1.5
+  max_explore_rounds: 2
+  # Three flat rounds and the plan is accepted as it stands: if there is no
+  # good third idea, exploring two real ones beats three more rounds of asking.
+  max_plan_stalls: 3
+  max_plan_retries: 5
 
   # Extra attempts a task may earn by failing DIFFERENTLY each time.
   #

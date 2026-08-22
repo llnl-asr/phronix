@@ -23,8 +23,8 @@ so there is no reason to.
 A line number that does not match the file means the graph is behind, not that the
 symbol moved. Force a rebuild before concluding anything.
 
-### P4 — Forcing a rebuild after a FileNotFoundError just repeats it
-
-P3 ("force a rebuild before concluding anything") assumes staleness. It does not apply once a rebuild has already thrown `FileNotFoundError` in this session — that error means a broken mcp-server install or missing rebuild input, not a stale graph, and retrying reproduces the same failure. See [[phronix-context-economy#R6]] for the fallback (skill_search / grep+Read) once this has happened once.
-
 ## Lessons
+
+### L1 — Knowledge graph rebuild failures
+
+**2026-08-21** — Repeated failures to rebuild the knowledge graph cause stale data and missed lookups. Ensure the graph rebuild process runs after any change to skills or memories, and monitor the rebuild flag. If rebuild fails, rerun the graph build manually and investigate file system permissions.

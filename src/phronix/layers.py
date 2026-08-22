@@ -315,6 +315,10 @@ def merged_files(kind: str, pattern: str = "*", start: Optional[Path] = None) ->
         if not base.is_dir():
             continue
         for path in sorted(base.glob(pattern)):
+            # `__pycache__` only becomes reachable once a pattern recurses, and
+            # a compiled copy of a module is not a second module.
+            if "__pycache__" in path.parts:
+                continue
             if path.is_file() and not path.name.startswith("."):
                 out[path.name] = path
     return out
@@ -361,8 +365,17 @@ def capability_files(start: Optional[Path] = None) -> Dict[str, Path]:
     turned a repeated manual procedure into deterministic code drops a module
     here and the MCP server loads it on the next start (see
     :func:`phronix.capabilities.load_all`).
+
+    Recursive, because capabilities are filed by scope. A tool that carries
+    nothing about any particular task sits at the top; one that knows a
+    repository, a file or a fix lives under ``capabilities/tasks/<topic>/``.
+    Both are loaded and served identically — the split exists so that a
+    from-scratch run can be given the first kind and not the second, which a
+    flat directory cannot express. Keyed on the bare filename either way, so
+    names stay unique across the tree and a later layer still shadows an
+    earlier one.
     """
-    return merged_files("capabilities", "*.py", start)
+    return merged_files("capabilities", "**/*.py", start)
 
 
 def verifier_files(start: Optional[Path] = None) -> Dict[str, Path]:

@@ -42,5 +42,11 @@ llm:
   # a research pass that fans out to 8 aspects paid 12s of dead time before the
   # last one even started, every stage, every task.
   #
-  # Put it back to 1.5 for `--provider anthropic`.
-  min_seconds_between_starts: 0.0
+  # 1.5 while running against Anthropic; 0.0 for the local fleet.
+  #
+  # The local cluster has nothing to meter and 127 backends to fill, so
+  # spacing is pure serialisation there. A metered account is the opposite:
+  # research explores three ideas at once and a retry races three candidates,
+  # so an unspaced pass opens nine sessions in a second and the window is gone
+  # before the first task finishes.
+  min_seconds_between_starts: 1.5

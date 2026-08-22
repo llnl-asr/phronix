@@ -9,12 +9,9 @@ the other.
 
 ## Lessons
 
-### L1 — --recursive=y ignored ignore-paths regexes (pylint-dev/pylint#7080)
+### L1 — Ignore-paths patterns ignored in recursive mode
 
-**2026-08-20** — Symptom: with `--recursive=y`, files matching `ignore-paths` regexes (e.g. `^src/gen/.*$`) were still linted, even though the same config works without `--recursive`.
-
-Root cause: `_is_ignored_file` in pylint/lint/expand_modules.py only tested the raw `element` path (as produced by directory walking, which can be OS-separator-inflected, relative in an unexpected form, or otherwise not matching the string shape the user's regex assumes) against `ignore_list_paths_re`. It never normalized separators or tried absolute/relative/normalized variants, so a regex anchored like `^src/gen/.*$` failed to match paths built with `os.sep` on Windows or with different relative bases during recursive walk.
-
-Fix that was verified to pass the target test: in `_is_ignored_file`, also check `_is_in_ignore_list_re` against: `os.path.normpath(element).replace(os.sep, "/")`, `os.path.abspath(element).replace(os.sep, "/")`, and `os.path.relpath(element).replace(os.sep, "/")`, in addition to the existing raw-`element` check. This was a minimal, additive OR-chain — no removal of existing checks.
-
-Unrelated: in this environment, `tests/test_self.py::TestCallbackOptions::test_generate_toml_config` and `test_generate_toml_config_disable_symbolic_names` fail regardless of this change, due to a `tomlkit.exceptions.TOMLKitError: Can't add a table to a dotted key` — this is a pre-existing tomlkit-version incompatibility in `_generate_config_file`, not caused by ignore-paths changes. Don't waste time attributing that failure to an ignore-paths fix.
+**2026-08-21** — Symptom: `pylint --recursive=y` ignored `ignore-paths` entries from pyproject.toml, causing unwanted files to be linted.
+Root cause: `_is_in_ignore_list_re` used `match`, which anchors at start and didn't handle path separators consistently; `_is_ignored_file` passed absolute paths.
+Fix: Normalize element paths to forward slashes, use `search` instead of `match`, and compare against the path relative to the current working directory.
+This change ensures ignore-paths patterns correctly filter files during recursive linting.

@@ -73,6 +73,19 @@ WATCH=""
 LIST_MODELS=""
 DRY_RUN=""
 KEEP_RUNNING=""
+#: Attempt first, research only on failure. The default, because it is the
+#: process: try the task, and if that works there is nothing to research; if it
+#: fails, the failure is the most useful input research can have. --research-
+#: first restores the old order for a comparison that wants it.
+RESEARCH_FIRST=""
+#: How many of the research pass's ideas get attempted against the real tests.
+#:
+#: Three, matching the three the plan is asked for. Each is a separate attempt
+#: in its own container, evaluated by the benchmark's own tests, run in
+#: parallel — so three candidates cost one attempt's wall clock on a fleet with
+#: capacity, and the target tests settle which idea was right rather than a
+#: proxy metric measured on a corpus research built itself.
+CANDIDATES=${CANDIDATES:-3}
 FILL_FLEET=""
 EXTRA=()
 
@@ -90,8 +103,9 @@ while [ $# -gt 0 ]; do
     --cluster)        CLUSTER="$2"; shift 2;;
     --phronix-only)   PHRONIX_ONLY=1; shift;;
     --serial-arms)    SERIAL_ARMS=1; shift;;
+    --research-first) RESEARCH_FIRST=1; shift;;
     --tries)          EXTRA+=(--tries "$2"); shift 2;;
-    --candidates)     EXTRA+=(--attempt-candidates "$2"); shift 2;;
+    --candidates)     CANDIDATES="$2"; shift 2;;
     --reuse)          EXTRA+=(--reuse); shift;;
     --watch)          WATCH=1; shift;;
     --list-models)    LIST_MODELS=1; shift;;
@@ -368,6 +382,18 @@ STAMP=$(date +%m%d-%H%M%S)-$$
 INSTALLED_OPENCODE=${INSTALLED_OPENCODE:-/p/lustre5/haridev/opencode-install/node_modules/.bin/opencode}
 [ -x "$INSTALLED_OPENCODE" ] || INSTALLED_OPENCODE=""
 
+# Computed here rather than expanded inside the heredoc, where a multi-line
+# default silently produced an empty flag and the run went back to
+# researching before it had tried anything.
+RETRY_FLAG="--research-on-retry"
+[ -n "$RESEARCH_FIRST" ] && RETRY_FLAG=""
+
+# Through EXTRA, which `run-benchmark.sh` forwards verbatim to the CLI.
+#
+# As its own line it was parsed by `run-benchmark.sh`, which does not know the
+# flag and refuses: "unknown option: --attempt-candidates".
+[ "${CANDIDATES:-1}" -gt 1 ] && EXTRA+=(--attempt-candidates "$CANDIDATES")
+
 LAUNCHER=/p/lustre5/haridev/.swe-agent-bench-$HARNESS-$STAMP.sh
 cat > "$LAUNCHER" <<EOF
 #!/bin/bash
@@ -381,6 +407,7 @@ exec bash scripts/run-benchmark.sh \\
   --nodes $NODES \\
   ${PHRONIX_ONLY:+--phronix-only} \\
   ${SERIAL_ARMS:+--serial-arms} \\
+  $RETRY_FLAG \\
   ${KEEP_RUNNING:+--no-kill} \\
   ${EXTRA[@]:-}
 EOF

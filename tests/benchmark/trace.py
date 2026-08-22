@@ -336,20 +336,34 @@ class Tracer:
                     "target_passed": target_passed, "regressions": regressions})
 
     @_guard
-    def tools(self, phase: str, transcript: Path) -> None:
-        """Mine a transcript for phronix tool calls and their failures."""
+    def tools(self, phase: str, transcript: Path) -> int:
+        """Mine a transcript for phronix tool calls; return how many there were.
+
+        The COUNT is returned, not just traced.
+
+        Research with zero phronix calls raises `ResearchCollapsed` and stops
+        the run, because continuing would measure a plain agent and report it
+        as phronix. An attempt with zero phronix calls is the same state and
+        was only a trace line — scored normally, indistinguishable in the
+        results from an attempt that used its memory and chose to ignore it.
+        Measured: four such phases in one six-task run.
+
+        Returning the number lets the caller record it per attempt, so a run
+        can be judged on whether the phronix arm was actually phronix.
+        """
         counts, errors = _mine(transcript)
         if not counts:
             self.event("tools", f"{phase}: no phronix tools called",
                        ["this is the failure mode that hid for hours — the server "
                         "was connected and nothing used it"], {"phase": phase})
-            return
+            return 0
         detail = [", ".join(f"{k}x{v}" for k, v in sorted(counts.items()))]
         for err in errors[:4]:
             detail.append(f"REJECTED {err}")
         self.event("tools", f"{phase}: {sum(counts.values())} phronix call(s), "
                             f"{len(errors)} rejected", detail,
                    {"phase": phase, "counts": counts, "errors": errors[:10]})
+        return sum(counts.values())
 
     @_guard
     def learned(self, created: List[str], store_root: Path) -> None:

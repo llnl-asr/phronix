@@ -524,6 +524,41 @@ def register(mcp: Any) -> None:
         return json.dumps(research.set_aspects(topic, rows), indent=2)
 
     @mcp.tool()
+    def research_add_aspects(topic: str, aspects: str) -> str:
+        """Add ideas to the plan without disturbing the ones already there.
+
+        Use this whenever ideas are being looked for by more than one agent at
+        a time, which is the normal case: `research_set_aspects` REPLACES the
+        list, so two scouts saving their findings would leave only whichever
+        wrote last, and the parallelism would cost more than it found.
+
+        Same shape as `research_set_aspects` — a JSON array of
+        ``{name, question, where?}``. Ideas that repeat one already recorded,
+        by name or by question, are dropped and named back to you, so proposing
+        more is cheap and proposing the same one twice is visible.
+
+        More is welcome. Three good ideas is the floor, not the target: every
+        one that survives validation is explored, written up as its own
+        solution skill, and tried against the task's real tests alongside the
+        others. An idea nobody proposed is the one thing that cannot win.
+
+        Returns JSON: {status, aspects, added, dropped_as_duplicates?, next}.
+        """
+        from phronix import research
+
+        try:
+            rows = json.loads(aspects)
+            if not isinstance(rows, list):
+                raise ValueError("aspects must be a JSON array")
+        except (ValueError, json.JSONDecodeError) as exc:
+            return json.dumps({
+                "status": "error",
+                "error": f"aspects must be a JSON array of objects: {exc}",
+                "example": ('[{"name": "upstream-history", "question": "was this '
+                            'fixed upstream, and in which function?"}]')}, indent=2)
+        return json.dumps(research.add_aspects(topic, rows), indent=2)
+
+    @mcp.tool()
     def research_prior(question: str, limit: int = 4) -> str:
         """What is ALREADY on record about this. Call this before researching.
 

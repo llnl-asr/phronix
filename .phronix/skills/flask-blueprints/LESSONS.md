@@ -9,8 +9,6 @@ the other.
 
 ## Lessons
 
-### L1 — Assert check did not satisfy test expectations
+### L1 — Blueprint names may contain dots
 
-**2026-08-21** — The added `assert "." not in name` caused an AssertionError, but the tests expect a ValueError when a dotted blueprint name is used. Asserts may be stripped in optimized mode and are not the right exception type. Replace the assert with an explicit check that raises ValueError with a clear message.
-
-Why: The test `test_dotted_name_not_allowed` still failed, showing the validation was not exercised as needed. The fix requires proper exception handling rather than an assert.
+**2026-08-21** — The test `test_route_decorator_custom_endpoint_with_dots` expects blueprint names with dot characters to be accepted. Raising a ValueError for dot in the name caused the test to fail. Blueprint names should be allowed to contain dots, or the test expectations must be updated accordingly. Remove the dot‑check to fix the failure.

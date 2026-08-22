@@ -432,8 +432,33 @@ def fresh_store(destination: Path, seed_from_bundled: bool = True) -> Path:
         source = bundled_root()
         for kind in ("skills", "agents", "verifiers"):
             origin = source / kind
-            if origin.is_dir():
+            if not origin.is_dir():
+                continue
+            if kind != "skills":
                 shutil.copytree(origin, destination / kind, dirs_exist_ok=True)
+                continue
+            # The bundle ships the PIPELINE's skills, and only those.
+            #
+            # Two task skills — one naming a sympy filter bug, one a pylint
+            # ignore-paths fix — had been committed into the skeleton, so every
+            # "from scratch" run started holding a write-up of two of the tasks
+            # it was about to be measured on. Nothing in the results would have
+            # shown it.
+            #
+            # Filtered here rather than trusted upstream: what is in the bundle
+            # is a question of what somebody committed, and this is the one
+            # place that decides what a fresh run may inherit. A skill that is
+            # part of the method is named for the framework; anything else
+            # belongs in the project layer, which `--fresh` does not read.
+            (destination / kind).mkdir(parents=True, exist_ok=True)
+            for entry in sorted(origin.iterdir()):
+                if entry.is_dir() and not entry.name.startswith("phronix-"):
+                    continue
+                if entry.is_dir():
+                    shutil.copytree(entry, destination / kind / entry.name,
+                                    dirs_exist_ok=True)
+                elif entry.is_file():
+                    shutil.copy2(entry, destination / kind / entry.name)
     (destination / "README.md").write_text(
         "Benchmark run store — seeded from the bundled phronix skeleton only.\n"
         "Skills written here were learned during this run.\n")
@@ -466,6 +491,27 @@ def _differs_from_bundled(path: Path, store_root: Path) -> bool:
         return original.read_bytes() != path.read_bytes()
     except OSError:
         return True
+
+
+#: Frontmatter marking a skill as one candidate's write-up, not a result.
+#:
+#: Written by the stage that produces them and read here, because the two are
+#: far apart: the skill is authored by an agent mid-run and the decision not to
+#: keep it is taken by the harness when the task ends. A name convention was the
+#: alternative and it is weaker — the merged skill and the candidates both begin
+#: `solution-`, and telling them apart would mean knowing the topic slug here.
+CANDIDATE_MARKER = "lifetime: candidate"
+
+
+def _is_candidate_skill(path: Path) -> bool:
+    """Is this one candidate's write-up, superseded by the merged solution?"""
+    if path.name != "SKILL.md":
+        return False
+    try:
+        head = path.read_text(errors="replace")[:400]
+    except OSError:
+        return False
+    return CANDIDATE_MARKER in head
 
 
 def promote_store(store_root: Path, carry_root: Path) -> Dict[str, Any]:
@@ -518,6 +564,17 @@ def promote_store(store_root: Path, carry_root: Path) -> Dict[str, Any]:
             # ends; promoting the session folders as well would check in the
             # intermediate state of every run that ever started.
             if "research/sessions/" in path.as_posix():
+                continue
+            # One candidate's write-up is working state too.
+            #
+            # Each idea is written up as its own skill so the racers have
+            # something executable to follow, and then `reconcile_trials`
+            # merges them into ONE skill for the subject — the winners as the
+            # solution, the losers as its lessons. Promoting the candidates as
+            # well would leave four skills where the task has one answer, and
+            # the next task on this subject would retrieve three rejected
+            # readings alongside the accepted one.
+            if _is_candidate_skill(path):
                 continue
             target = carry_root / path.relative_to(store_root)
             try:

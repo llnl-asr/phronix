@@ -7,8 +7,17 @@ the other.
 
 ## Pitfalls
 
-### P1 — skill_define reallocates a block's label when its title text changes
+### P1 — Stale learning persistence
 
-Symptom: a reconcile pass rewrites a tracker block's title to embed a fact like a running count (e.g. "...count 22..." -> "...count 23...") and existing [[skill#Label]] references to that block break or silently point at a relabeled block. Root cause: skill_define/skill_write keep a label stable only when the block's title text is unchanged across calls — mutating the title is treated as a different block, so it gets a fresh label, orphaning old references. Exact fix: keep tracker titles static/generic (no embedded counts or other mutable facts) and put anything that changes cycle-to-cycle in the body instead; when using skill_define to collapse a growing chain of near-duplicate blocks (per R4/X2), pass the same title as the original block to preserve its label.
+Repeated learning attempts fail to capture new observations, leading to stale or incorrect knowledge. When `research_observe` reports repeated failures, the learner does not adjust its capture rules, causing the same mistaken lesson to persist across cycles.
 
 ## Lessons
+
+### L1 — L2 – Update capture rules on repeated failures
+
+**2026-08-21** — When `research_observe(topic="learning", worked=false)` reports repeated failures, the learner must adjust its capture rules in `phronix-learning-capture` to record new observations. Without this, stale knowledge persists and leads to repeated false lessons. Add or modify capture rules accordingly.
+
+
+### L3 — Handle stale knowledge graph rebuild failures
+
+**2026-08-21** — The knowledge graph sometimes fails to rebuild, causing FileNotFoundError errors across multiple tasks (e.g., Flask related). When this occurs, run `graph_ensure(force=True)` to force a rebuild before relying on graph queries. Ensure the graph files exist and paths are correct.

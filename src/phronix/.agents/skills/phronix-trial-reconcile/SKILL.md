@@ -27,7 +27,30 @@ That table has already tested something research could only estimate. Approaches
 
 Record that. "The metric ranked B first and C solved it" is a finding about the metric, and the next task on this subject inherits it.
 
-### I2 — Something worked: merge, keeping the winner's spine
+### I2 — Several passed: the solution is what they agree on
+
+More than one candidate passing the benchmark's own tests is the best evidence a
+research pass can produce — several independent readings of the problem, each
+tried against the real target tests, each verified rather than argued.
+
+Write the solution skill out of the ones that **passed**:
+
+- what they have in common is the fix. If two passing candidates both change
+  the same function in the same direction, that is the answer, and it is
+  confirmed twice.
+- where they differ, prefer the smaller change. Both passed, so the extra work
+  in the larger one bought nothing measurable.
+- record that it was confirmed by more than one candidate. A later task should
+  know the difference between "this worked once" and "three readings converged
+  on this".
+
+The ones that **failed** become lessons in the same skill, one line each, saying
+what was tried and what the tests showed. Be precise about what failed: the
+implementation, or the idea. An attempt whose code did not fire tells you about
+the code — writing "this approach does not work" retires an idea that was never
+tested, and every later task inherits that.
+
+### I2b — Exactly one worked: merge, keeping the winner's spine
 
 `skill_load` the winning approach's skill and the losers'. Write ONE skill for this subject:
 

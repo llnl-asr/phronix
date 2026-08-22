@@ -33,11 +33,65 @@ reviewable, rather than from a model's scratch space.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import sys
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+#: Capabilities authored by THIS server process, name -> file.
+#:
+#: The MCP server is long-lived for the length of an agent's work and is the
+#: same process that services `capability_new`, so a tool built during a run is
+#: in memory here the moment it is written. That is what makes a from-scratch
+#: run possible without giving up tool-building: the run can author and call
+#: its own tools while seeing none of the ones earlier runs left on disk.
+_SESSION_AUTHORED: Dict[str, str] = {}
+
+#: Environment flag: serve only what this session authored.
+#:
+#: Set by the benchmark runner for `--fresh`. Deliberately an environment
+#: variable rather than a tuning key — it must hold for every agent the run
+#: starts, including ones that construct their own server, and it must be
+#: impossible for an agent to turn off from inside.
+FRESH_ENV = "PHRONIX_FRESH_CAPABILITIES"
+
+
+def session_only() -> bool:
+    """Is this process restricted to capabilities it authored itself?"""
+    return str(os.environ.get(FRESH_ENV, "")).strip().lower() in ("1", "true", "yes")
+
+
+def session_authored() -> Dict[str, str]:
+    """What this process has built, name -> file. A copy; the registry is private."""
+    return dict(_SESSION_AUTHORED)
+
+
+def visible_files() -> Dict[str, Path]:
+    """The capability modules this process may load and serve, by filename.
+
+    Normally every layer's, which is the point of layers. Under `--fresh` it is
+    CORE plus CURRENT: the framework's own bundled tools, which ship with
+    phronix and know nothing about any task, and whatever this session has
+    authored, which is by definition its own work. Everything else — the
+    project layer a previous run wrote its probes into — is filtered out.
+
+    That filter is what `--fresh` was always claiming. Seeding "method tools"
+    by filename prefix could not deliver it: `probe_` is the prefix on both a
+    generic pytest runner and a tool whose docstring is "fix itermonomials'
+    total-degree bug", so a from-scratch run was inheriting one task's answer.
+    """
+    from phronix.layers import capability_files, which_layer
+
+    found = capability_files()
+    if not session_only():
+        return found
+    # Keyed by filename here and by module name in the registry — compare on
+    # the stem, which is the one form both agree about.
+    return {name: path for name, path in found.items()
+            if Path(name).stem in _SESSION_AUTHORED
+            or which_layer(path) == "bundled"}
 
 #: What a capability module must define.
 ENTRY_POINT = "register"
@@ -134,12 +188,33 @@ def duplicates(source: str, name: str = "") -> List[Dict[str, str]]:
     return found
 
 
+#: Where a capability that knows a particular task is filed, under the layer's
+#: ``capabilities/``. Everything at the top level is a METHOD tool: it knows how
+#: to run tests, walk a tree, apply a patch — a procedure, carrying nothing
+#: about any one repository or fix.
+#:
+#: The distinction is not cosmetic. A from-scratch run should inherit the
+#: method tools, because "without prior learning" is a claim about learning and
+#: not a claim about shell scripting. It must NOT inherit a tool named for the
+#: task it is about to be measured on: `probe_fix_max_to_sum_powers_filter`
+#: applies one task's fix outright, and a run that can call it has been handed
+#: the answer. A filename prefix cannot tell the two apart — both are `probe_` —
+#: so the scope is recorded as the place the file is kept.
+TASK_CAPABILITY_DIR = "tasks"
+
+
+def task_slug(topic: str) -> str:
+    """Directory name for one task's capabilities."""
+    return re.sub(r"[^a-z0-9]+", "-", str(topic).lower()).strip("-") or "unknown"
+
+
 def new(
     name: str,
     description: str,
     source: Optional[str] = None,
     layer: Optional[str] = None,
     overwrite: bool = False,
+    topic: str = "",
 ) -> Dict[str, Any]:
     """Author a new capability and persist it to a layer.
 
@@ -175,6 +250,11 @@ def new(
 
     target = resolve_write_layer(layer)
     directory = target.dir("capabilities")
+    # A tool that knows a task is filed under that task, not beside the method
+    # tools. Both are served identically; the location is what lets a later
+    # from-scratch run inherit the methods and none of the answers.
+    if topic:
+        directory = directory / TASK_CAPABILITY_DIR / task_slug(topic)
     directory.mkdir(parents=True, exist_ok=True)
     # The same procedure, already built, under another name.
     #
@@ -197,6 +277,10 @@ def new(
                 "hint": "pass overwrite=True to replace it"}
 
     dest.write_text(text)
+    # Remembered in this process, so a from-scratch run can call what it just
+    # built. Written to disk as well, always: the run's own store keeps it, and
+    # what a run may CARRY is a separate decision made when it ends.
+    _SESSION_AUTHORED[name] = str(dest)
     try:
         from phronix.knowledge_graph import mark_dirty
 
@@ -246,11 +330,16 @@ def _verification_status(name: str) -> Dict[str, Any]:
 
 
 def listing() -> List[Dict[str, Any]]:
-    """Every visible capability, with its docstring summary and owning layer."""
-    from phronix.layers import capability_files, which_layer
+    """Every visible capability, with its docstring summary and owning layer.
+
+    Visible means the same set the server will actually serve — under `--fresh`,
+    core plus what this session built. Listing more than that would be worse
+    than useless: an agent would pick a tool by name and find it is not there.
+    """
+    from phronix.layers import which_layer
 
     out: List[Dict[str, Any]] = []
-    for filename, path in sorted(capability_files().items()):
+    for filename, path in sorted(visible_files().items()):
         summary = ""
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
@@ -277,8 +366,6 @@ def load_all(mcp: Any) -> Dict[str, Any]:
     the worst possible failure mode for a self-building system — it would make
     the framework's own learning the thing that bricks it.
     """
-    from phronix.layers import capability_files
-
     loaded: List[str] = []
     failed: List[Dict[str, str]] = []
 
@@ -288,7 +375,7 @@ def load_all(mcp: Any) -> Dict[str, Any]:
     previous = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
-        for filename, path in sorted(capability_files().items()):
+        for filename, path in sorted(visible_files().items()):
             module_name = f"phronix_capability_{Path(filename).stem}"
             try:
                 spec = importlib.util.spec_from_file_location(module_name, path)

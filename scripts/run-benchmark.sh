@@ -71,6 +71,12 @@ while [ $# -gt 0 ]; do
     --research-on-retry) EXTRA+=(--research-on-retry); shift;;
     --parallel-tasks) PARALLEL_TASKS="$2"; EXTRA+=(--parallel-tasks "$2"); shift 2;;
     --limit)   EXTRA+=(--limit "$2"); shift 2;;
+    # Every research idea attempted against the real tests, in parallel.
+    #
+    # The parser is an allow-list, so a flag the CLI understands is still
+    # refused here unless it is named — which is how "unknown option:
+    # --attempt-candidates" happened twice with the CLI supporting it all along.
+    --attempt-candidates) EXTRA+=(--attempt-candidates "$2"); shift 2;;
     -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2;;
   esac

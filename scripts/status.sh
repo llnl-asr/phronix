@@ -779,9 +779,30 @@ for r in rows:
     tries = int(r.get("tries") or 1)
     retried = f"tries={tries} " if tries > 1 else ""
     money = f" ${cost:.2f}" if cost else ""
+    # Two different things, and only one is a fault.
+    #
+    # Under research-on-retry, try 1 IS the plain first move both arms make —
+    # research is deliberately withheld — so a task solved on try 1 used no
+    # phronix tools by design, and saying "**" about it would be wrong. What
+    # it does mean is that phronix contributed nothing to that result, which
+    # matters for reading the comparison: the arms only differ on tasks that
+    # fail their first attempt.
+    #
+    # A task that went PAST try 1 and still called nothing is the real fault:
+    # research ran, wrote to the store, and the attempt ignored all of it.
+    used = sum(int(a.get("phronix_calls") or 0) for a in r.get("attempts") or [])
+    bare_run = ""
+    # The ARM's own directory name, not the path.
+    #
+    # `"phronix" in sys.argv[1]` matched every arm, because the results live
+    # under `/p/lustre5/haridev/phronix-bench/runs/...` — so the bare arm was
+    # labelled with a note about phronix input it never had.
+    if "phronix" in sys.argv[1].rstrip("/").rsplit("/", 2)[-2] and not used:
+        bare_run = ("  (try-1 win: no phronix input)" if tries <= 1
+                    else "  ** research ran and the attempt ignored it")
     line = (f"  {'PASS' if r.get('resolved') else 'fail'}  {r['instance_id']:<28} "
             f"{retried}steps={steps:<3} tok={tokens(fresh, solve)} "
-            f"time={human(solve_t):>7}{money}")
+            f"time={human(solve_t):>7}{money}{bare_run}")
     if research or learn:
         line += (f"   research tok={tokens(fresh_research, research)} "
                  f"time={human(research_t):>7}"
@@ -846,6 +867,22 @@ for r in rows:
                         if a.get("cost_usd") else ""))
             print(head)
 
+            # What each idea did, and where the answer was written down.
+            #
+            # A try that raced several plans has a real story that pass/fail
+            # cannot tell: which readings of the problem were tried, which the
+            # tests agreed with, and — the part somebody actually wants to open
+            # — the skill holding the solution that came out of it. Measured on
+            # pylint-7080: three plans, two solved it, and the run reported one
+            # line saying the task passed.
+            for t in a.get("trials") or []:
+                mark = "SOLVED" if t.get("resolved") else "failed"
+                print(f"          {mark:<7} {t.get('plan', '?'):<44}"
+                      f" {t.get('target_tests_passed', 0)} target test(s)"
+                      + (f"  [{str(t['error'])[:40]}]" if t.get("error") else ""))
+            if a.get("solution_skill"):
+                print(f"          solution: {a['solution_skill']}")
+
     grouped = OrderedDict()
     for p in passes:
         for d in p.get("stage_detail") or []:
@@ -857,16 +894,41 @@ for r in rows:
             g["max"] = max(g["max"], float(d.get("elapsed_s") or 0))
             g["cut"] += 1 if d.get("truncated") else 0
             g["starved"] = g.get("starved", 0) + int(d.get("starved") or 0)
-    if grouped:
+            # Tokens per stage, not only time.
+            #
+            # A stage that finishes inside its budget can still be the
+            # expensive one: `explore` at 120s against `build-solution` with no
+            # clock says nothing about which spent the tokens, and tokens are
+            # what the research actually costs.
+            g["tok"] = g.get("tok", 0) + int(d.get("tokens_input") or 0) \
+                + int(d.get("tokens_output") or 0)
+            g["cost"] = g.get("cost", 0.0) + float(d.get("cost_usd") or 0)
+
+    # Whether research ran at all, said outright.
+    #
+    # Under research-on-retry try 1 has none by design, so "no research" is an
+    # expected state for a task solved first time and a notable one for a task
+    # that failed — and it was only inferable from the absence of a line.
+    if not grouped:
+        print("        research: none ran"
+              + (" (solved on try 1)" if r.get("resolved") and
+                 int(r.get("tries") or 1) <= 1 else ""))
+    else:
         parts = []
         for name, g in grouped.items():
             label = SHORT.get(name, name)
             cut = f" !{g['cut']}cut" if g["cut"] else ""
             starved = f" !{g['starved']}starved" if g.get("starved") else ""
-            parts.append(f"{label} {g['n']}x max {g['max']:.0f}s{cut}{starved}"
+            tok = f" {short(g.get('tok', 0))}tok" if g.get("tok") else ""
+            parts.append(f"{label} {g['n']}x max {g['max']:.0f}s{tok}{cut}{starved}"
                          if g["n"] > 1
-                         else f"{label} {g['s']:.0f}s{cut}{starved}")
-        print("        research: " + " | ".join(parts))
+                         else f"{label} {g['s']:.0f}s{tok}{cut}{starved}")
+        total_tok = sum(g.get("tok", 0) for g in grouped.values())
+        total_cost = sum(g.get("cost", 0.0) for g in grouped.values())
+        print(f"        research: {len(passes)} pass(es), "
+              f"{human(research_t)}, {short(total_tok)}tok"
+              + (f", ${total_cost:.2f}" if total_cost else ""))
+        print("          " + " | ".join(parts))
 
 if rows:
     grand = totals["solve"] + totals["research"] + totals["learn"]

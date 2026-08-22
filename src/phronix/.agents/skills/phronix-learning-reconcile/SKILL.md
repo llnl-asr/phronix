@@ -45,6 +45,17 @@ This is most of the job. Reconciling is not mainly about adding — it is about 
 
 Delete it, or rewrite it with the condition that turned out to matter. Say which observations falsified it.
 
+**A failed attempt does not falsify the approach it was attempting.** These are different claims and only one of them was tested:
+
+- *the implementation failed* — the code that was written did not do what was intended. This is what a failing test shows.
+- *the approach is wrong* — no implementation of this idea could work. A single attempt cannot show this, and almost never does.
+
+Measured, and this is why the rule exists: `pallets__flask-4045` researched three angles and found the right one — validate the blueprint name, raise where endpoint names are already validated. The attempt implemented it and the check did not fire, so the reconciler wrote *"dot validation attempt falsified … should no longer be considered a valid approach"* and retired the lesson that would have told the next task to use it. Dot validation is the accepted fix. The store now rules out the correct answer, durably, and nothing downstream can tell.
+
+Before retiring a lesson because an attempt failed, ask what was actually shown. If the answer is "this code did not work", rewrite the lesson with that detail — *"validation added to `Blueprint.__init__` did not fire for the construction path the test uses"* is true, specific and useful. **Retire the approach only when the evidence rules out the idea itself**, not the attempt at it.
+
+When you cannot tell which it was, keep the lesson and record the doubt. An idea wrongly kept costs one attempt; an idea wrongly retired costs every future task that would have used it.
+
 ### I5 — Improve the learner's own skills
 
 The learner is subject to its own method. Every cycle — capture and reconcile alike — reports what it did through `research_observe(topic="learning")`, so the learner's own behaviour arrives in the same stream as everything else.

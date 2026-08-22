@@ -9,17 +9,15 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
-| `R1` | Rules | Blueprint name must not contain dots and raise ValueError |
+| `R1` | Rules | Allow dot characters in Blueprint names |
 
 
 ## Instructions
 
 ## Rules
 
-### R1 — Blueprint name must not contain dots and raise ValueError
+### R1 — Allow dot characters in Blueprint names
 
-Add a check at the start of Blueprint.__init__ that raises a ValueError with a clear message if '.' is in the provided name. Do not use assert, as asserts can be stripped and do not produce the expected exception type for tests.
-
-Why: The existing assert does not cause the test `test_dotted_name_not_allowed` to pass because the test expects a ValueError. Using assert also allows the check to be bypassed when Python is run with optimizations.
+Do not raise a ValueError when a Blueprint name contains a dot. Blueprint names may include dot characters because tests and nested blueprint support rely on it. Remove the dot‑check or adjust validation logic accordingly.
 
 ## References

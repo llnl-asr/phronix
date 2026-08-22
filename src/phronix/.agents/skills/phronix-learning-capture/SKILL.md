@@ -16,8 +16,9 @@ type: skill
 | `I5` | Instructions | Report your own cycle, so the learner can improve |
 | `R1` | Rules | Capture is additive; merging is the other tier's job |
 | `R2` | Rules | Write for the kind of work, not for the task |
-| `R3` | Rules | Write it small rather than not at all |
-| `R4` | Rules | Never block the pipeline |
+| `R3` | Rules | Say what failed, not what to abandon |
+| `R4` | Rules | Write it small rather than not at all |
+| `R5` | Rules | Never block the pipeline |
 | `X1` | References | Where the two tiers divide |
 
 ## Instructions
@@ -83,7 +84,27 @@ Splitting it this way is what lets capture be aggressive: nothing you add can ac
 
 "A subprocess whose output you parse needs stderr merged, or the parse loses the error" is a lesson about `bash` that every later task inherits. "pylint-7080 needed stderr merged" helps one instance and is already recorded in that task's own skill.
 
-### R3 — Write it small rather than not at all
+### R3 — Say what failed, not what to abandon
+
+A failing attempt tells you the code that was written did not work. It does not
+tell you the idea was wrong, and those are different claims with very different
+costs when recorded.
+
+Write the specific thing: *"validation added to `Blueprint.__init__` did not
+fire for the construction path the test uses"*. Do not write the general
+verdict: *"dot validation is falsified; no longer a valid approach"*.
+
+Measured on `pallets__flask-4045`: the research found the accepted fix, the
+attempt implemented it badly, and the store recorded the correct approach as
+refuted — so the next task on that repository starts with the right answer
+already ruled out, and nothing downstream can tell it was ruled out for the
+wrong reason.
+
+The asymmetry is the whole point. A lesson that is too specific wastes a little
+context; a lesson that retires a working idea costs every future task that
+would have used it.
+
+### R4 — Write it small rather than not at all
 
 Every block is read on every future retrieval of its skill, so length is the thing to be sparing with — not the writing itself. A finding worth one sentence gets one sentence.
 
@@ -91,7 +112,7 @@ The failure mode this guards against is accretion: enough long, almost-relevant 
 
 Two things still deserve nothing: an observation that says only that a tool was called, and one you cannot state without naming a single task's specifics. Those are not findings yet. Everything else gets written.
 
-### R4 — Never block the pipeline
+### R5 — Never block the pipeline
 
 Research and attempts proceed while you run and nothing waits for you. No long analyses, no held locks, no rewriting a skill another stage is mid-way through reading.
 

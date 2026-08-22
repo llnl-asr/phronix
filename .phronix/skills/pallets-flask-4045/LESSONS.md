@@ -7,8 +7,8 @@ the other.
 
 ## Pitfalls
 
-### P1 — probe_run_pytest_selection fails in this env via PluggyTeardownRaisedWarning, separate from the fix
+### P1 — Attempt to raise error for dotted blueprint names introduced regressio
 
-On py3.13.2 + pytest 7.3.0 in this env, `probe_run_pytest_selection` itself fails: conftest triggers an `ast.Str` DeprecationWarning that surfaces as `PluggyTeardownRaisedWarning` during test teardown, aborting the run before any real assertion. This is the same environment/version-skew class as [[pallets-flask-4045#R6]] (pytest broadly broken here), but specific to how that probe tool's own selection mechanism reacts to the warning — not evidence about the candidate fix. Fall back to manual `python -c` reproduction per R6 rather than trusting this probe's pass/fail here.
+Attempt to raise error for dotted blueprint names introduced regressions in test_client related tests because the fix inadvertently altered the Cookie class signature in flask.testing.
 
 ## Lessons

@@ -16,8 +16,23 @@
 
 /p/lustre5/haridev/phronix-bench/runs/claude-0821-125916
 
-## opencode run with local cluster
+### relaxed budgets (partial)
 
+/p/lustre5/haridev/phronix-bench/runs/claude-0821-143129
+
+### last local run
+
+/p/lustre5/haridev/phronix-bench/runs/claude-0821-203733
+
+### last claude cloud run
+
+/p/lustre5/haridev/phronix-bench/runs/claude-0821-210717
+
+### first claude complex task success
+
+/p/lustre5/haridev/phronix-bench/runs/e2e-0821-221256
+
+## opencode run with local cluster
 
 ## Flags
 - reasoning budget (dont think more than X token)
