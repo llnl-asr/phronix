@@ -9,10 +9,16 @@ type: skill
 
 | Label | Section | Covers |
 | --- | --- | --- |
+| `I1` | Instructions | toml-config tomlkit failures also confirmed unrelated to ignore-paths/normpath fixes |
 | `R1` | Rules | test_generate_toml_config failures are pre-existing environment issues, not regressions from your change |
 
 
+
 ## Instructions
+
+### I1 — toml-config tomlkit failures also confirmed unrelated to ignore-paths/normpath fixes
+
+Confirms `[[pylint-test-suite-flakiness#R1]]`: `test_generate_toml_config` and `test_generate_toml_config_disable_symbolic_names` failing with `tomlkit.exceptions.TOMLKitError: Can't add a table to a dotted key` was seen again while regression-testing the pylint-7080 ignore-paths `--recursive=y` normpath fix (both the `pylinter.py` and `expand_modules.py` variants). Same pre-existing tomlkit-version/environment incompatibility, not caused by the ignore-paths change — don't mistake it for a regression.
 
 ## Rules
 

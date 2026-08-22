@@ -109,6 +109,10 @@ class RunConfig:
     #: Makes try 1 identical in shape to the baseline's single attempt, and
     #: measures what research recovers rather than what it adds up front.
     research_on_retry: bool = False
+    #: Research before the first attempt, ahead of trying what the store holds.
+    #: The default is the opposite: solve from a remembered skill if there is
+    #: one, plainly if there is not, and research only once that has failed.
+    research_first: bool = False
     #: Isolate this run's research in its own folder, invisible to reads unless
     #: reuse is on. Empty means write straight into the common folder.
     research_session: str = ""
@@ -1950,6 +1954,30 @@ class Runner:
             if bound is not None:
                 tracer.adopt(bound)
             tracer.step(phase, text)
+
+        # Every line of an attempt — its own commentary AND the evaluation that
+        # judges it — carries the skill it is working from, not just the line
+        # that announced it.
+        #
+        # The opening `attempt>solution-...>` scrolls away in seconds and the
+        # two hundred lines after it read `attempt>`, so the one question the
+        # trace is watched for — is this solving from a stored skill or from
+        # scratch — was answerable only by scrolling back. `[stage]` is the
+        # prefix research already uses and the tracer lifts it into the label
+        # column.
+        #
+        # The skill is read when the line is WRITTEN, not when this closure is
+        # made: the baseline narrator is wired up before the lookup has run, and
+        # a default argument would freeze it empty for the whole attempt.
+        #
+        # A text that already opens with a bracket is left alone — a raced plan
+        # labels its own lines, and two prefixes push the message out of column.
+        def _labelled(phase: str, text: str) -> None:
+            text = str(text)
+            skill = getattr(attempt, "recalled_skill", "")
+            if skill and not text.lstrip().startswith("["):
+                text = f"[{skill}] {text}"
+            _say(phase, text)
         # Carried on the arm, not through os.environ. With arms running
         # concurrently, a process-global variable would be overwritten by
         # whichever arm started its task last, and both arms' retrievals — the
@@ -2028,14 +2056,21 @@ class Runner:
                 # has actually failed. What it then measures is narrower and
                 # more honest — not "is phronix better", but "does research
                 # recover a task that a plain attempt just lost".
-                skip = (getattr(self.config, "research_on_retry", False)
-                        and attempt_index <= 1)
-                if skip and tracer and getattr(arm, "research_agent_name", ""):
-                    tracer.event("research",
-                                 "skipped on try 1 (research-on-retry mode): "
-                                 "this attempt is the same first move the "
-                                 "baseline makes")
-
+                # Try what we already know FIRST; research is what happens
+                # when that fails.
+                #
+                # Research used to run before every attempt including the first,
+                # so a task the store already held the answer to paid for a full
+                # plan-explore-build pass before anything looked at the answer.
+                # Measured on pylint-7080: the merged solution skill and all
+                # three candidates were seeded into the store, and the run
+                # opened with `plan` exactly as it had on the cold task.
+                #
+                # The order now is: whatever the store has for this task, then a
+                # plain attempt, and only then research. `--research-first`
+                # restores the old shape for a comparison that needs it.
+                skip = (attempt_index <= 1
+                        and not getattr(self.config, "research_first", False))
                 if tracer and not skip and getattr(arm, "research_agent_name", ""):
                     tracer.begin("research",
                                  f"{'initial' if attempt_index <= 1 else 'revision'} "
@@ -2115,14 +2150,54 @@ class Runner:
                 baseline = baseline_failures(
                     container, instance,
                     cache_dir=Path(self.config.data_root or ".") / "baselines",
-                    on_event=((lambda text: _say("evaluate", text))
+                    on_event=((lambda text: _labelled("evaluate", text))
                               if tracer else None))
 
+                # Recall is a STEP, and it is the first one.
+                #
+                # The flow is: what does the store already hold for this task,
+                # then attempt, then research only if that failed. The lookup
+                # ran inside the prompt build, so it never appeared anywhere —
+                # a run that was handed the answer and one that found nothing
+                # opened identically at "attempt", and the only way to tell
+                # them apart was to read the agent's prompt out of a transcript.
+                attempt.recalled_skill = ""
+                if getattr(arm, "uses_phronix", False):
+                    if tracer:
+                        tracer.begin("search-skill",
+                                     "does the store already cover this task?")
+                    try:
+                        attempt.recalled_skill = arm.best_skill_for(
+                            store_root, arm.research_topic(instance)) or ""
+                    except Exception:
+                        # A lookup that fails is a miss, not a broken attempt.
+                        attempt.recalled_skill = ""
+                    if tracer:
+                        found = attempt.recalled_skill
+                        tracer.event(
+                            "search-skill",
+                            (f"found `{found}` — the attempt solves with it"
+                             if found else
+                             "no skill covers this task; solving from scratch"),
+                            data={"skill": found})
+
                 if tracer:
-                    tracer.begin("attempt",
-                                 f"agent working on try {attempt_index}",
+                    # The skill is named in the STAGE, the way a raced plan is,
+                    # so what an attempt was working from can be read off the
+                    # trace instead of inferred from its prompt. Everything
+                    # before the colon is the stage, so these still group as
+                    # "attempt" wherever attempts are totalled.
+                    # `attempt>` alone, or `attempt>skill>` once there is one —
+                    # the same path shape the research stages already read as.
+                    stage = ("attempt" if not attempt.recalled_skill
+                             else f"attempt>{attempt.recalled_skill}")
+                    tracer.begin(stage,
+                                 (f"agent working on try {attempt_index}"
+                                  + (f" with `{attempt.recalled_skill}`"
+                                     if attempt.recalled_skill else
+                                     " from scratch")),
                                  self.config.timeout_s)
-                narrate_attempt = ((lambda text: _say("attempt", text))
+                narrate_attempt = ((lambda text: _labelled("attempt", text))
                                    if tracer else None)
                 plans = []
                 if int(getattr(self.config, "attempt_candidates", 1) or 1) > 1:
@@ -2203,7 +2278,7 @@ class Runner:
         # worked in would score whatever else it left behind — installed
         # packages, edited config, a stray conftest — rather than its patch.
         with session() as container:
-            narrate_eval = ((lambda text: _say("evaluate", text))
+            narrate_eval = ((lambda text: _labelled("evaluate", text))
                             if tracer else None)
             baseline = baseline_failures(
                 container, instance,

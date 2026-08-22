@@ -5,6 +5,7 @@
 #   status.sh <run>           full detail for that run (name or path)
 #   status.sh --all           every run, one line each, newest first
 #   status.sh --list [N]      just the names of the last N runs (default 5)
+#   status.sh --markdown      tables as markdown, for redirecting into a file
 #
 # The runner prints one line per COMPLETED task and an agent's transcript is
 # only written when it exits, so a run in progress looks identical to a hung one
@@ -21,7 +22,7 @@ SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # suddenly showed 13 and the line read as if the BASELINE had learned something,
 # which it cannot do. A constant that tracks a number in another repository is a
 # constant that will be wrong and will be believed.
-BASELINE=$(ls /usr/WS2/haridev/phronix/src/phronix/.agents/skills 2>/dev/null | wc -l)
+BASELINE=$(ls /usr/WS2/haridev/phronix/src/phronix/.phronix/skills 2>/dev/null | wc -l)
 BASELINE=${BASELINE:-0}
 
 # One way to write a duration, everywhere.
@@ -260,7 +261,7 @@ assets() {   # assets <run-dir> -> what was learned, and what used it
       # What was learned, by name. A count says the loop ran; the names say
       # what it produced, and a name is what makes a claim checkable — "learned
       # 3" has been true of runs that wrote three fragments of one subject.
-      BUNDLED=/usr/WS2/haridev/phronix/src/phronix/.agents/skills
+      BUNDLED=/usr/WS2/haridev/phronix/src/phronix/.phronix/skills
       # Every skill with how many tasks pulled it back out. A skill written and
       # never retrieved is the thing this benchmark exists to detect, so the
       # count is the point, not decoration: "learned 3" has been true of runs
@@ -310,25 +311,154 @@ present = sorted(p.name for p in store.iterdir() if p.is_dir()) if store.is_dir(
 # actually got used. A seeded skill nobody touched is noise here.
 learned = [n for n in present if n not in bundled]
 seeded_used = [n for n in present if n in bundled and retrieved[n]]
+
+# One line per SUBJECT, not one per idea.
+#
+# A raced task writes `solution-<subject>-<plan>` per candidate and merges them
+# into `solution-<subject>`, which links back to each with [[name]]. Listing all
+# of them puts four near-identical names in front of the reader and buries the
+# one that holds the answer. The merged skill is what somebody opens, so it is
+# what shows; its candidates are counted on the same line and reachable through
+# it. A candidate whose merge never happened has no parent here and still prints
+# on its own — that gap is worth seeing, not hiding.
+ideas = collections.Counter()   # merged skill -> candidates folded into it
+folded = set()                  # the candidates themselves, by name
+for name in list(learned):
+    # Only a real candidate, which is `solution-<subject>-<plan>`. Matching any
+    # name-extends-another pair folded whole research subjects into each other:
+    # `boundary-word` and `boundary-lookahead-word` are two investigations of
+    # one area, and `boundary` was reported as owning three ideas it never had.
+    parent = next((p for p in present
+                   if p != name and p.startswith("solution-")
+                   and name.startswith(p + "-")), None)
+    if parent:
+        ideas[parent] += 1
+        folded.add(name)
+        learned.remove(name)
+
+# What KIND of asset each one is.
+#
+# "5 learned" says a number and nothing about what the run is accumulating.
+# Three kinds are being produced and they answer different questions:
+#
+#   core        the framework's own skills — how phronix works. Shipped, not
+#               learned; they appear here only when a task actually read one.
+#   capability  what solves a task: a merged `solution`, one of the `idea`
+#               candidates linked under it, or another skill in that family.
+#   research    what a subject investigation established — the topic skills,
+#               named for the area rather than for a fix.
+#
+# A run producing only research skills has learned about problems and not how
+# to solve them, which reads as healthy under a single count.
+records = arm / "store/.phronix/research"
+topics = {p.stem for p in records.glob("*.json")} if records.is_dir() else set()
+
+# The research record is not enough on its own: a store seeded from the carry
+# layer holds 171 skills and one record, because the records stay with the run
+# that made them. What a research pass wrote says so in its own description
+# ("Research on <subject>. Covers ..."), and that survives the carry.
+def _is_research(name):
+    if name in topics or name.replace("-", "_") in topics:
+        return True
+    head = (store / name / "SKILL.md")
+    try:
+        text = head.read_text(errors="replace")[:600]
+    except OSError:
+        return False
+    for line in text.splitlines():
+        if line.startswith("description:"):
+            return line[len("description:"):].strip().lower().startswith("research on")
+    return False
+
+
+def classify(name):
+    """(category, kind) for one skill, from its name and the research record."""
+    if name in bundled or name.startswith("phronix-"):
+        return "core", "core"
+    if ideas[name]:
+        return "capability", "solution"
+    if name in folded:
+        return "capability", "idea"
+    if name.startswith("solution-"):
+        # A solution with no candidates under it: still the answer for its task.
+        return "capability", "solution"
+    if _is_research(name):
+        return "research", "research"
+    return "capability", "other"
+
+
+ORDER = ["capability", "research", "core"]
+groups = collections.defaultdict(list)
 for name in learned + seeded_used:
-    kind = "+ skill" if name not in bundled else "  seeded"
-    n = retrieved[name]
-    if not n:
-        note = "never retrieved"
+    category, kind = classify(name)
+    groups[category].append(("skill", name, kind))
+
+# MCP tools in the same table as the skills.
+#
+# They were printed in a separate loop underneath, so the two halves of what a
+# run produced — what it wrote down and what it made callable — could not be
+# read together, and a tool that is a task's answer sat under a heading that
+# said nothing about which task. Same categories, with the type named on every
+# row because the difference matters: a skill is read, a tool is CALLED.
+tools = arm / "store/.phronix/capabilities"
+bundled_tools = {p.name for p in (bundled_dir.parent / "capabilities").rglob("*.py")}
+for path in sorted(tools.rglob("*.py")) if tools.is_dir() else []:
+    base = path.stem
+    if path.name in bundled_tools:
+        groups["core"].append(("mcp", base, "core"))
+    elif base.startswith("probe_"):
+        # `probe_` is chosen by whichever agent wrote the tool and says nothing
+        # about scope — what says it is the directory: a tool filed under
+        # `tasks/<topic>/` knows a task's answer, one at the top does not.
+        groups["capability"].append(("mcp", base, "method"))
+    elif path.parent.name != "capabilities":
+        groups["capability"].append(("mcp", base, "solution"))
     else:
-        note = f"retrieved by {n} task(s)"
-        if reused[name]:
-            note += f", reused {reused[name]}"
-        if cross[name]:
-            note += f" ({cross[name]} cross-repo)"
-    print(f"    {kind} {name:<44} {note}")
+        groups["capability"].append(("mcp", base, "other"))
+
+# A table, because these rows are compared column-wise.
+#
+# The note used to be a sentence per row — "never retrieved", "retrieved by 2
+# task(s), reused 1" — so the one number a reader is scanning for was in a
+# different place on every line and absence was a WORD. Zero is a count, and it
+# belongs in the same column as the ones.
+#
+# Plain padded columns by default and markdown under --markdown: the terminal
+# already aligns, so pipes there are noise, and a file needs them to render.
+import os
+
+MD = bool(os.environ.get("STATUS_MARKDOWN"))
+COLUMNS = [("type", 5), ("kind", 9), ("name", 44),
+           ("used", 4), ("reused", 6), ("ideas", 5)]
+
+
+def row(values):
+    cells = [f"{v:<{w}}" if i < 3 else f"{v:>{w}}"
+             for i, ((_, w), v) in enumerate(zip(COLUMNS, values))]
+    return ("    | " + " | ".join(cells) + " |" if MD
+            else "      " + "  ".join(cells).rstrip())
+
+
+for category in ORDER:
+    rows = groups.get(category)
+    if not rows:
+        continue
+    print(f"    {category}:")
+    print(row([name for name, _ in COLUMNS]))
+    if MD:
+        print("    | " + " | ".join("-" * w for _, w in COLUMNS) + " |")
+    for asset, name, kind in rows:
+        if asset == "mcp":
+            # A tool is CALLED, not retrieved. The call counts come from the
+            # transcripts further down; a 0 here would say "unused" about a
+            # number this block never looked at.
+            used = reuse = idea = "-"
+        else:
+            used = str(retrieved[name])
+            reuse = str(reused[name] + cross[name])
+            idea = str(ideas[name]) if ideas[name] else "0"
+        print(row([asset, kind, name, used, reuse, idea]))
 PY
-      for tool in "$arm/store/.phronix/capabilities"/*.py; do
-        [ -f "$tool" ] || continue
-        base=$(basename "$tool" .py)
-        case "$base" in probe_*) kind="method" ;; *) kind="solution" ;; esac
-        echo "    + tool  $base ($kind)"
-      done
     fi
   done
   python3 - "$RUN" <<'PY' 2>/dev/null
@@ -339,7 +469,7 @@ root = pathlib.Path(sys.argv[1])
 # retrieval log only fills in when the MCP server is reached at all — and the
 # case worth catching is exactly the one where it never was.
 BUNDLED = pathlib.Path(
-    "/usr/WS2/haridev/phronix/src/phronix/.agents/skills")
+    "/usr/WS2/haridev/phronix/src/phronix/.phronix/skills")
 bundled = {p.name for p in BUNDLED.iterdir()} if BUNDLED.is_dir() else set()
 
 calls = collections.Counter()      # phronix tool -> times called
@@ -851,17 +981,29 @@ for r in rows:
             # try is converging; one that repeats itself is not, and pass/fail
             # alone cannot tell them apart. Outside the research block, because
             # it is true of every try whether or not that try researched.
+            #
+            # Every field is FIXED WIDTH, blank-padded when it has nothing to
+            # say. These lines exist to be compared down the column — try1
+            # against try2 — and a segment that simply vanishes when empty
+            # shifts every number to its right, so the two tries of one task
+            # printed their token and time figures in different places and the
+            # comparison had to be done by reading labels instead of by eye.
             trend = a.get("failure_trend") or ""
             if trend == "moved":
-                head += "  moved"
+                mark = "moved"
             elif trend == "same":
-                head += f"  SAME x{a.get('same_failure_count') or 2}"
+                mark = f"SAME x{a.get('same_failure_count') or 2}"
+            else:
+                mark = ""
+            head += f"  {mark:<8}"
             if research_here["s"] or research_here["tok"]:
+                cost = (f" ${research_here['cost']:.2f}"
+                        if research_here["cost"] else "")
                 head += (f" research {short(research_here['tok']):>6}"
-                         f" {research_here['s']:>5.0f}s"
-                         + (f" ${research_here['cost']:.2f}"
-                            if research_here["cost"] else ""))
-            head += (f"   task steps={int(a.get('steps') or 0):<3}"
+                         f" {research_here['s']:>5.0f}s{cost:<6}")
+            else:
+                head += " " * 28
+            head += (f"  steps={int(a.get('steps') or 0):<3}"
                      f" {short(a_tok):>6} {a_time:>5.0f}s"
                      + (f" ${float(a.get('cost_usd') or 0):.2f}"
                         if a.get("cost_usd") else ""))
@@ -875,6 +1017,16 @@ for r in rows:
             # — the skill holding the solution that came out of it. Measured on
             # pylint-7080: three plans, two solved it, and the run reported one
             # line saying the task passed.
+            # What the store had for this task, before the agent started.
+            #
+            # Printed above the trials because it is what happened first, and
+            # because "solved with a skill an earlier run wrote" and "solved
+            # from scratch" are different results that used to print the same.
+            if a.get("recalled_skill"):
+                print(f"          skill:  {a['recalled_skill']}"
+                      f"  (attempt solved with it)")
+            elif a.get("index"):
+                print("          skill:  none — no stored skill covered this task")
             for t in a.get("trials") or []:
                 mark = "SOLVED" if t.get("resolved") else "failed"
                 print(f"          {mark:<7} {t.get('plan', '?'):<44}"
@@ -1137,6 +1289,20 @@ PY
 
   assets "$RUN"
 }
+
+# Markdown, for a file rather than a terminal.
+#
+# The default stays padded plain text: pipes and header rules are noise in a
+# terminal, where the alignment already does that work. `--markdown` is for
+# `status.sh --markdown > report.md`, where the same rows need to render as
+# tables somewhere else.
+export STATUS_MARKDOWN=""
+for arg in "$@"; do
+  [ "$arg" = "--markdown" ] && STATUS_MARKDOWN=1
+done
+if [ -n "$STATUS_MARKDOWN" ]; then
+  set -- $(for arg in "$@"; do [ "$arg" = "--markdown" ] || printf '%s ' "$arg"; done)
+fi
 
 case "${1:-}" in
   --list)

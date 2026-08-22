@@ -68,6 +68,14 @@ class Attempt:
     #: which is what the next task on the subject retrieves and what a reader
     #: checking the work has to find by hand otherwise.
     solution_skill: str = ""
+    #: The skill this attempt was handed to solve with, before it started.
+    #:
+    #: Recall is the first move of the flow — look for what the store already
+    #: knows about this task, then attempt, and research only if that fails —
+    #: and it was invisible: the lookup happened inside the prompt build, so a
+    #: run that found the answer and one that found nothing produced identical
+    #: traces, both opening at "attempt".
+    recalled_skill: str = ""
     #: Tokens the learning pass spent after this attempt was judged.
     tokens_learn: int = 0
     #: Seconds the learning pass took. Separate from ``wall_s`` for the same

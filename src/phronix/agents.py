@@ -319,6 +319,47 @@ def link_harness(target: Path, harness: str = "opencode",
         return {"status": "failed", "error": str(exc), "linked": False}
 
 
+def link_store(target: Path, source_root: Optional[Path] = None) -> Dict[str, Any]:
+    """Point a working tree's ``.phronix`` at the one that ships in the package.
+
+    The framework's own store — skills, capabilities, memory, research — lives
+    at ``<package>/.phronix`` and travels with the wheel. A project that wants
+    it gets a SYMLINK, for the same reasons `link_harness` uses one: a copy goes
+    stale the moment anything is written, and two copies of a skill are two
+    answers to the same question with no way to tell which is current.
+
+    One store, one place to correct it, and what a session learns is visible to
+    every tree linked to it rather than dying in whichever checkout produced it.
+
+    A tree with its own ``.phronix`` directory is left alone and reported as
+    ``occupied``. That case is not a conflict to resolve here: a benchmark arm's
+    store is exactly such a directory, and replacing it with a link to the
+    shipped one would let every arm write into the same store — which is the
+    isolation the comparison depends on.
+    """
+    source = Path(source_root) if source_root else (
+        Path(__file__).resolve().parent / ".phronix")
+    if not source.is_dir():
+        return {"status": "nothing-to-link", "source": str(source), "linked": False}
+
+    destination = Path(target) / ".phronix"
+    try:
+        if destination.is_symlink():
+            if destination.resolve() == source.resolve():
+                return {"status": "already_linked", "target": str(destination),
+                        "source": str(source), "linked": True}
+            destination.unlink()
+        elif destination.exists():
+            return {"status": "occupied", "target": str(destination),
+                    "linked": False}
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.symlink_to(source, target_is_directory=True)
+        return {"status": "linked", "target": str(destination),
+                "source": str(source), "linked": True}
+    except OSError as exc:
+        return {"status": "failed", "error": str(exc), "linked": False}
+
+
 def ensure_agents_setup(
     target_root: Optional[Path] = None, force: bool = False
 ) -> Dict[str, Any]:

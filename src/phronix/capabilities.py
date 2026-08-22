@@ -344,8 +344,25 @@ def listing() -> List[Dict[str, Any]]:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
             doc = re.match(r'\s*"""(.*?)"""', text, re.DOTALL)
+            if not doc:
+                # The module docstring is where a capability WRITTEN BY THE
+                # TEMPLATE puts its summary, and it is not where a capability
+                # written by an agent puts it: those open with `import os` and
+                # document the tool function itself.
+                #
+                # Measured, and it cost a task: a reuse run called
+                # `capability_list`, got 63 tools with `"description": ""` —
+                # `apply_normpath_ignore_fix` among them, which is exactly the
+                # fix it needed — and had no way to tell one name from another.
+                # It solved from scratch and failed the target test.
+                doc = re.search(r'\n\s+def\s+\w+\([^)]*\)[^:]*:\s*"""(.*?)"""',
+                                text, re.DOTALL)
             if doc:
-                summary = doc.group(1).strip().split("\n")[0]
+                # First SENTENCE, not first line: these docstrings wrap, and one
+                # line of a wrapped sentence stops mid-clause.
+                first = " ".join(doc.group(1).strip().split())
+                head, stop, _ = first.partition(". ")
+                summary = (head + "." if stop else first)[:200]
         except OSError:
             pass
         out.append({

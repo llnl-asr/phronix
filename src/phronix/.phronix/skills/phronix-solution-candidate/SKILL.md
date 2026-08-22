@@ -14,6 +14,7 @@ type: skill
 | `I3` | Instructions | Every step carries its own check |
 | `R1` | Rules | Give your approach its fairest statement |
 | `R2` | Rules | Short, because every block is read forever |
+| `R3` | Rules | Yours is kept and linked, whatever the outcome |
 | `X1` | References | Why the write-ups are written in parallel |
 
 ## Instructions
@@ -51,6 +52,18 @@ If your approach turns out to be wrong, that is a result. Say so plainly rather 
 Every block is read on every future retrieval of this skill. A step nobody can act on costs context on every task that loads it.
 
 Lead with the action. One idea per block. Split rather than combine.
+
+### R3 — Yours is kept and linked, whatever the outcome
+
+Your skill is not scaffolding to be thrown away when the trials are scored. When
+every candidate has been tried, the subject's own skill is merged out of them
+and links back to each one — including the ones that lost.
+
+So write it to stand on its own. A reader who follows that link is asking "was
+this tried, and what happened?", and the answer has to be here rather than
+restated in the merged skill. That is what makes a losing candidate worth
+keeping: an idea recorded with the check that killed it costs the next task a
+sentence, and an unrecorded one costs it an attempt.
 
 ## References
 

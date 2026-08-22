@@ -493,27 +493,6 @@ def _differs_from_bundled(path: Path, store_root: Path) -> bool:
         return True
 
 
-#: Frontmatter marking a skill as one candidate's write-up, not a result.
-#:
-#: Written by the stage that produces them and read here, because the two are
-#: far apart: the skill is authored by an agent mid-run and the decision not to
-#: keep it is taken by the harness when the task ends. A name convention was the
-#: alternative and it is weaker — the merged skill and the candidates both begin
-#: `solution-`, and telling them apart would mean knowing the topic slug here.
-CANDIDATE_MARKER = "lifetime: candidate"
-
-
-def _is_candidate_skill(path: Path) -> bool:
-    """Is this one candidate's write-up, superseded by the merged solution?"""
-    if path.name != "SKILL.md":
-        return False
-    try:
-        head = path.read_text(errors="replace")[:400]
-    except OSError:
-        return False
-    return CANDIDATE_MARKER in head
-
-
 def promote_store(store_root: Path, carry_root: Path) -> Dict[str, Any]:
     """Write what a run learned back into the durable project layer.
 
@@ -564,17 +543,6 @@ def promote_store(store_root: Path, carry_root: Path) -> Dict[str, Any]:
             # ends; promoting the session folders as well would check in the
             # intermediate state of every run that ever started.
             if "research/sessions/" in path.as_posix():
-                continue
-            # One candidate's write-up is working state too.
-            #
-            # Each idea is written up as its own skill so the racers have
-            # something executable to follow, and then `reconcile_trials`
-            # merges them into ONE skill for the subject — the winners as the
-            # solution, the losers as its lessons. Promoting the candidates as
-            # well would leave four skills where the task has one answer, and
-            # the next task on this subject would retrieve three rejected
-            # readings alongside the accepted one.
-            if _is_candidate_skill(path):
                 continue
             target = carry_root / path.relative_to(store_root)
             try:

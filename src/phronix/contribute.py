@@ -241,7 +241,7 @@ def promote(
                     "pull request from a clone of phronix:\n"
                     "  phronix contribute --output /tmp/phronix-contribution\n"
                     "  git clone https://github.com/hariharan-devarajan/phronix\n"
-                    "  cp -r /tmp/phronix-contribution/* phronix/src/phronix/.agents/",
+                    "  cp -r /tmp/phronix-contribution/* phronix/src/phronix/.phronix/",
         }
 
     # Evidence travels with the claim. Promoting a skill and leaving its verifier
@@ -281,7 +281,7 @@ def promote(
         "destination": str(destination_root),
         "next": (
             f"Exported to {destination_root}. Copy it into a phronix clone under "
-            "src/phronix/.agents/ and open a pull request."
+            "src/phronix/.phronix/ and open a pull request."
             if exported else
             "Written into the bundled layer. Review with `git diff`, then commit and "
             "open a pull request — this is what ships to every phronix installer."

@@ -18,10 +18,8 @@ type: skill
 | `R2` | Rules | Edit the source, never the generated artifact |
 | `R3` | Rules | When a fix needs a server restart, stop and say so |
 | `R4` | Rules | A heal is a prediction — prove it |
-| `R5` | Rules | Graph rebuild crash is retry-once-then-fallback, not a blocker |
 | `X1` | References | Turning a repeated repair into a tool |
 | `X2` | References | Recording the repair |
-| `X3` | References | OSError from skill_search's graph fallback is the same rebuild-race pattern |
 
 ## Instructions
 
@@ -78,8 +76,8 @@ to file.
 
 | Source of truth | Generated artifact |
 |---|---|
-| `.agents/agents/*.yaml` | `.claude/agents/*.md`, `.opencode/agents/*.md`, `.github/agents/*.agent.md`, `.codex/agents/*.toml` |
-| `.agents/agents/common-sections.yaml` | the same rendered files |
+| `.phronix/agents/*.yaml` | `.claude/agents/*.md`, `.opencode/agents/*.md`, `.github/agents/*.agent.md`, `.codex/agents/*.toml` |
+| `.phronix/agents/common-sections.yaml` | the same rendered files |
 | `<layer>/skills/<name>/` | `.claude/skills/<name>` (a symlink) |
 | `workspace/permissions.yaml` | the `permissions` block in each harness config |
 
@@ -97,10 +95,6 @@ and wait. Do not fill the gap by hand in the meantime.
 "I fixed it" is exactly the claim that comes back a week later. See
 [[phronix-verification#R1]].
 
-### R5 — Graph rebuild crash is retry-once-then-fallback, not a blocker
-
-When `graph_ensure`/`graph_query` themselves throw (`OSError`, `FileNotFoundError`, or `[Errno 39] Directory not empty` in `graphify-out/cache`) rather than returning a stale-but-usable graph, retry `graph_ensure(force=True)` once — this has been observed to self-clear. If it fails again, fall back to `grep`/Explore for that lookup instead of blocking, and report it with `research_observe(worked=false)` so the recurring pattern stays visible. See [[phronix-self-healing#P4]] for the observed detail.
-
 ## References
 
 ### X1 — Turning a repeated repair into a tool
@@ -111,7 +105,3 @@ If you have made the same repair twice, it is deterministic:
 ### X2 — Recording the repair
 
 Symptom → root cause → exact fix: [[phronix-self-learning#I3]].
-
-### X3 — OSError from skill_search's graph fallback is the same rebuild-race pattern
-
-`skill_search` falls through to `graph_query` on an empty index result (see its own docstring); when that fallback hits the rebuild race it can surface as `OSError` rather than `FileNotFoundError`. Same failure family, same handling: see [[phronix-self-healing#P4]] (symptom list, root cause, retry-once-then-fallback) and [[phronix-self-healing#R5]] (the rule). Do not write a second pitfall for this — it is a variant surface of P4, not a new cause.

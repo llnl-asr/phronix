@@ -15,7 +15,7 @@ sweep through every template.
 
 Two files, with clearly separated jobs:
 
-``.agents/workspace/models.yaml``
+``.phronix/workspace/models.yaml``
     The checked-in map of level → model, per provider. Edited by a human.
 
 ``<write-layer>/active-models.json``

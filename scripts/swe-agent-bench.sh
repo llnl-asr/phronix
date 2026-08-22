@@ -449,7 +449,7 @@ fi
 # Re-render the harness config before the run.
 #
 # The agents a run uses are generated from the YAML templates under
-# .agents/agents/, and a run that starts on a stale render measures whatever
+# .phronix/agents/, and a run that starts on a stale render measures whatever
 # was there last time. Cheap and idempotent — it compares content and writes
 # only what differs — so it is worth doing every time rather than remembering
 # to. Each task checkout then symlinks the result, so a change here reaches

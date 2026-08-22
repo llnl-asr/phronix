@@ -61,7 +61,7 @@ MCP_SERVER_NAME = "phronix"
 
 GEN_MARKER_FMT = (
     "# generated-by: phronix ({harness}) — edit the YAML template under "
-    ".agents/agents/, not this file; then run `phronix sync agents`"
+    ".phronix/agents/, not this file; then run `phronix sync agents`"
 )
 
 #: Where each harness discovers agents, relative to the workspace root, and the

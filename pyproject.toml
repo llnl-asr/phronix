@@ -63,32 +63,40 @@ phronix-contribute          = "phronix.contribute:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# Everything the framework LEARNS lives under .agents/ and must ship in the
+# Everything the framework LEARNS lives under .phronix/ and must ship in the
 # wheel — a dotted directory is not auto-included, and each extension needs its
 # own glob. A missing glob here is not a build error; it is a package that
 # installs and then behaves as if it had never learned anything.
 [tool.setuptools.package-data]
 "phronix" = [
     # The content directories a layer holds.
-    ".agents/skills/**/*.md",
-    ".agents/skills/**/*.yaml",
-    ".agents/agents/*.yaml",
-    ".agents/memory/*.md",
-    ".agents/capabilities/*.py",
-    ".agents/capabilities/*.md",
-    ".agents/verifiers/*.py",
-    ".agents/verifiers/*.md",
-    ".agents/research/*.json",
+    ".phronix/skills/**/*.md",
+    # What runs have LEARNED, relocated under the package so it travels with
+    # the wheel rather than living only in a checkout. Its own subtree, so a
+    # learned skill is still distinguishable from a bundled one — which is what
+    # `--fresh` relies on to serve the framework's tools and nobody's answers.
+    ".phronix/learned/**/*.md",
+    ".phronix/learned/**/*.py",
+    ".phronix/learned/**/*.json",
+    ".phronix/learned/**/*.yaml",
+    ".phronix/skills/**/*.yaml",
+    ".phronix/agents/*.yaml",
+    ".phronix/memory/*.md",
+    ".phronix/capabilities/*.py",
+    ".phronix/capabilities/*.md",
+    ".phronix/verifiers/*.py",
+    ".phronix/verifiers/*.md",
+    ".phronix/research/*.json",
     # Layer-root files. A `**` glob still has to cross a directory, so anything
-    # sitting directly in .agents/ needs naming here.
-    ".agents/privacy_patterns.yaml",
+    # sitting directly in .phronix/ needs naming here.
+    ".phronix/privacy_patterns.yaml",
     # Per-layer configuration (the model menu and the permission policy).
-    ".agents/workspace/*.yaml",
-    ".agents/workspace/**/*.md",
-    ".agents/workspace/**/*.json",
-    ".agents/workspace/**/*.jsonc",
-    ".agents/workspace/**/*.yaml",
-    ".agents/workspace/**/*.toml",
+    ".phronix/workspace/*.yaml",
+    ".phronix/workspace/**/*.md",
+    ".phronix/workspace/**/*.json",
+    ".phronix/workspace/**/*.jsonc",
+    ".phronix/workspace/**/*.yaml",
+    ".phronix/workspace/**/*.toml",
     # The stack launcher is bash and carries no extension: it is invoked as a
     # command, not sourced. Named explicitly since no glob above matches it.
     "phronix_stack",

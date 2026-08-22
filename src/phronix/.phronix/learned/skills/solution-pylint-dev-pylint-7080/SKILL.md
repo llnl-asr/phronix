@@ -12,7 +12,9 @@ type: skill
 | `I1` | Instructions | Root cause: unnormalized `./`-prefixed os.walk root breaks anchored ignore-paths regex |
 | `I2` | Instructions | Fix (preferred): normalize `element` in expand_modules.py's _is_ignored_file |
 | `I3` | Instructions | Alternate fix (also confirmed): normalize root in pylinter.py's os.walk loop |
+| `I4` | Instructions | Second independent trial confirms I3's pylinter.py normpath fix |
 | `R1` | Rules | Normalize with os.path.normpath, not pathlib.Path — the pathlib variant scored 0/target tests |
+
 
 
 
@@ -35,6 +37,10 @@ Confirmed by an independent passing trial (`tests/test_self.py::test_ignore_path
 In `pylint/lint/pylinter.py`, `_discover_files`'s `os.walk` loop: immediately after unpacking `root`, rebind `root = os.path.normpath(root)` before it is used anywhere else (the `skip_subtrees` membership check, `_is_ignored_file` call, `skip_subtrees.append`, yield/join calls).
 
 Also confirmed by an independent passing trial. Apply only ONE of the two fixes (this or the expand_modules.py one) — both alone are sufficient; combining them is redundant with no measured benefit.
+
+### I4 — Second independent trial confirms I3's pylinter.py normpath fix
+
+A second, independent trial (pylint-7080 verify pass) reproduced the exact fix in `[[solution-pylint-dev-pylint-7080#I3]]` — `os.path.normpath(root)` right after `os.walk` unpacking in `_discover_files` — with no variation. Treat I3 as high-confidence; no need to re-derive it from scratch on future attempts at this bug.
 
 ## Rules
 

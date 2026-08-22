@@ -45,7 +45,7 @@ def test_common_sections_returned_per_layer_not_merged_here(isolated_layers):
 
     files = layers.common_sections_files()
     assert len(files) == 2
-    assert files[0].parent.parent.name == ".agents"      # bundled first
+    assert files[0].parent.parent.name == ".phronix"      # bundled first
     assert files[-1].parent.parent.name == ".phronix"    # project last (wins)
 
 
@@ -95,7 +95,7 @@ def test_editable_install_does_not_hijack_another_projects_learning(tmp_path, mo
 
 def test_developing_phronix_itself_writes_to_bundled(tmp_path, monkeypatch):
     """The contributor case: the working project IS the phronix checkout."""
-    checkout = layers.bundled_root().parents[2]  # <checkout>/src/phronix/.agents -> <checkout>
+    checkout = layers.bundled_root().parents[2]  # <checkout>/src/phronix/.phronix -> <checkout>
     monkeypatch.setenv("PHRONIX_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(checkout))
     monkeypatch.delenv("PHRONIX_WRITE_LAYER", raising=False)
@@ -128,3 +128,32 @@ def test_describe_reports_absent_layers(isolated_layers):
     """`phronix status` must show a layer that does not exist yet, not hide it."""
     names = [entry["layer"] for entry in layers.describe()]
     assert names == ["bundled", "user", "project"]
+
+
+def test_the_shipped_store_links_into_a_project():
+    """`<package>/.phronix` is the store; a project gets a link, not a copy.
+
+    A copy is stale the moment anything is written to either side, and two
+    copies of a skill are two answers to one question with no way to tell which
+    is current. A tree that already has its own `.phronix` is left alone and
+    reported `occupied` — a benchmark arm's store is exactly that, and relinking
+    it would put every arm in one store.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from phronix.agents import link_store
+    from phronix.layers import bundled_root
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp)
+        first = link_store(target)
+        assert first["linked"] and first["status"] == "linked"
+        assert (target / ".phronix").is_symlink()
+        assert (target / ".phronix").resolve() == bundled_root().resolve()
+        assert link_store(target)["status"] == "already_linked"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp)
+        (target / ".phronix").mkdir()
+        assert link_store(target)["status"] == "occupied"

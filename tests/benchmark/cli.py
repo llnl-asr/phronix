@@ -313,7 +313,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         max_tries=args.max_tries, timeout_s=args.timeout,
         isolation=args.isolation, fresh=not args.no_fresh, pull=not args.no_pull,
         carry_root=("" if args.no_carry else (args.carry_root or default_carry_root())),
-        research_on_retry=args.research_on_retry,
+        # Research is the fallback, not the opening move, unless asked.
+        research_on_retry=args.research_on_retry or not args.research_first,
+        research_first=args.research_first,
         research_reuse=not args.fresh,
         research_session=(args.session or Path(out).name),
         out=out, image_template=args.image_template, data_root=str(root),
@@ -617,6 +619,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Retry each task until it passes. --max-tries becomes a "
                           "hard ceiling, and a task also stops once consecutive "
                           "attempts repeat a patch without learning anything new.")
+    run.add_argument("--research-first", action="store_true",
+                     help="Research before the first attempt. The default is to "
+                          "try what the store already holds for this task, then a "
+                          "plain attempt, and to research only after that fails — "
+                          "so a task already solved once is not re-researched.")
     run.add_argument("--research-on-retry", action="store_true",
                      help="Withhold research from the first attempt, so it runs "
                           "only after that attempt has failed. Try 1 is then the "

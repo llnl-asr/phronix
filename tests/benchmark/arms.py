@@ -157,6 +157,31 @@ that approach before making any edit. Do not simply repeat it.
 #: pure cost: a plan written, verified, and then ignored by the agent that was
 #: supposed to execute it — which is a more expensive way to fail than not
 #: researching at all.
+PHRONIX_REUSE_SUFFIX = """
+
+## First: has this already been built?
+
+Earlier sessions turned procedures they had to repeat into MCP tools, and those
+tools are loaded and callable right now. Your first action:
+
+    capability_list()
+
+Read the descriptions — each one is the first sentence of what that tool
+documents itself as doing. A tool that names this repository's behaviour, this
+file or this fix is a previous session's answer to your task, already written
+and already checked: call it and then run the target tests, rather than
+rebuilding what it does by hand.
+
+They are deterministic code, not advice: a tool either applies its change or
+tells you it could not. If one applies cleanly and the tests pass, you are done,
+and that is the cheapest possible outcome rather than a shortcut.
+
+If nothing in the list fits, say so and solve the task yourself. Do not stretch
+a tool built for a neighbouring bug onto this one — it will apply somewhere
+plausible and wrong, and the tests will take longer to say so than solving it
+directly would have taken.
+"""
+
 PHRONIX_PLAN_SUFFIX = """
 
 A skill in the store may cover this task:
@@ -179,22 +204,30 @@ Deciding this is your job and cannot be delegated to the retrieval. Nothing
 that hands you this name knows your problem; the skill says what IT solved, and
 you are the one who can see both.
 
-**Fetch the part you need, not the whole file.** Your first action:
+**Read the skill itself. Your first action:**
 
-    graph_query(question="steps to solve {topic}", scope="knowledge")
+    skill_load("{skill}")
 
-then `graph_get_node(node=...)` on the `Steps to solve ...` block it names. That
-returns exactly that section. `skill_load("{skill}")` pulls every block — the
-evaluation notes, the fallbacks, the aspects investigated, everything tried and
-refuted — and you need one of them to start.
+Not a graph query, and not a search. The skill is named above because the
+harness resolved it for this task; anything that goes looking again can only
+find something else. Measured, and it cost a task: the attempt opened with
+`graph_query(question="steps to solve {topic}")`, got back three stage notes
+from an earlier run — one of them about a DIFFERENT bug in this repository —
+judged them useful enough, never loaded the skill it had been handed, and
+reinvented a fix the skill's own rules had already recorded as failing.
+
+Use `graph_query` afterwards, to reach what the skill links to or to explore
+wider. It is how you find things you have not been told about; it is not the
+way in to something you have.
 
 This is not fastidiousness. Whatever you load is re-read on every subsequent
 step of this attempt, because each api call carries the whole conversation
 again: a block loaded once and never used is paid for once per step, and these
 attempts run to dozens of steps. Locate, fetch the section, act.
 
-Fall back to `skill_load("{skill}")` only if the graph returns nothing useful —
-and say so, because that is a defect worth knowing about.
+If the skill turns out not to cover your problem, say so plainly and work out
+your own fix — that is a real outcome and worth knowing about. What is not
+worth doing is quietly substituting a search for the skill you were given.
 
 ## One approach at a time
 
@@ -888,7 +921,7 @@ def _bundled_skill_names() -> set:
     a directory in another repository is a constant that will be wrong and be
     believed.
     """
-    root = Path("/usr/WS2/haridev/phronix/src/phronix/.agents/skills")
+    root = Path("/usr/WS2/haridev/phronix/src/phronix/.phronix/skills")
     try:
         return {p.name for p in root.iterdir() if p.is_dir()}
     except OSError:
@@ -1510,6 +1543,10 @@ class Arm:
 
     def solution_skill_path(self, *_args, **_kwargs) -> str:
         """No solution skill on an arm that writes no skills."""
+        return ""
+
+    def best_skill_for(self, *_args, **_kwargs) -> str:
+        """Nothing to recall on an arm with no store to recall from."""
         return ""
 
     def reconcile_trials(self, *_args, **_kwargs) -> None:
@@ -2495,14 +2532,21 @@ class OpenCodeArm(Arm):
         # both the ``--file x`` and ``--file=x`` spellings.
         prompt = TASK_PROMPT
         if self.uses_phronix:
+            # What previous sessions BUILT, before what they wrote down.
+            #
+            # Reuse is not only skills: a run that solved this area authored
+            # deterministic tools for it, and under a carried store those tools
+            # are already registered on the server this agent is talking to.
+            # Nothing used to point at them, so a task whose fix existed as a
+            # callable tool re-derived it from prose.
+            prompt += PHRONIX_REUSE_SUFFIX
             topic = self.research_topic(instance)
             # Name the skill outright. Asking the agent to find it costs a search
             # and, when the search is ambiguous, a wrong answer — and the harness
             # already knows the answer, because research pinned it in the record.
             from phronix import research as research_module
 
-            skill = self._in_store(store_root, research_module.topic_skill,
-                                   topic) or ""
+            skill = self.best_skill_for(store_root, topic)
             # Verify it is THIS task's skill before naming it as such.
             #
             # `topic_skill` falls back to fuzzy resolution, and two issues in
@@ -3727,8 +3771,7 @@ phase owes and how to mark a partial measurement as partial.
             # rebuilds a picture the last attempt already paid for.
             resume = ""
             if attempt_index > 1:
-                pinned = self._in_store(store_root, research_mod.topic_skill,
-                                        topic) or ""
+                pinned = self.best_skill_for(store_root, topic)
                 if pinned:
                     resume = (self.RESUME_NOTE.replace("{skill}", pinned)
                               .replace("{topic}", topic))
@@ -4669,21 +4712,9 @@ Approach: **{name}**
 
 {summary}
 
-Write it with `skill_write` under exactly this name:
+Write it with `skill_write` under exactly this name, which is not yours to vary:
 
     {skill}
-
-Put `lifetime: candidate` in its frontmatter. Your skill is what YOUR attempt
-follows; when every candidate has been tried, one skill for the subject is
-merged out of them — the ones that passed as the solution, the ones that did not
-as its lessons — and that merged skill is what outlives the run. Marking yours
-says which of the two this is, so the subject ends with one answer rather than
-four readings of the problem.
-
-An agent that has never seen this task will be handed that name and nothing
-else, and must produce the fix from what it finds there. The name is how the
-attempt reaches your approach rather than someone else's, so it is not yours to
-choose or vary.
 """
 
     TRIAL_RECONCILE_PROMPT = """\
@@ -4696,7 +4727,7 @@ Topic key: `{topic}`
 {results}
 
 Each candidate's own skill is what its attempt actually followed — load them by
-name to see what was tried, not just how far it got:
+name, and link every one of them from what you write (`R2b`):
 
 {skills}
 """
@@ -4755,6 +4786,25 @@ It is the plan itself, not background reading.
         subject = Path(store_root) / "skills" / slug(
             research_mod.resolve_topic(topic)) / "SKILL.md"
         return str(subject) if subject.is_file() else ""
+
+    def best_skill_for(self, store_root: Path, topic: str) -> str:
+        """The skill a task should open with: the merged solution, or the topic's.
+
+        `solution-<topic>` is what `reconcile_trials` writes — the answer plus a
+        link to every candidate that was tried. The research record's own
+        `topic_skill` predates it and points at the subject skill, so a task
+        whose answer had already been merged was handed the older, vaguer one.
+        Prefer the merged solution when it is there; fall back otherwise.
+        """
+        from phronix import research as research_mod
+
+        def slug(text: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
+
+        merged = f"solution-{slug(research_mod.resolve_topic(topic))}"
+        if (Path(store_root) / "skills" / merged / "SKILL.md").is_file():
+            return merged
+        return self._in_store(store_root, research_mod.topic_skill, topic) or ""
 
     @staticmethod
     def candidate_skill_name(topic: str, plan: str) -> str:

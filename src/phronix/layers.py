@@ -2,7 +2,7 @@
 
 A self-learning framework distributed as a wheel has a problem the framework it
 grew out of never had to solve. When everything you learn is written back into
-``site-packages/phronix/.agents/``, that works beautifully for a contributor who
+``site-packages/phronix/.phronix/``, that works beautifully for a contributor who
 cloned the repo and ran ``pip install -e .`` — and silently destroys knowledge
 for everyone else, because ``site-packages`` is not a git worktree and is
 replaced wholesale on the next ``pip install -U``.
@@ -12,7 +12,7 @@ So the store is three layers, lowest precedence first:
 =========  ==========================  ==========  =========================================
 layer      root                        writable    who it travels to
 =========  ==========================  ==========  =========================================
-bundled    ``<pkg>/.agents``           only in a   everyone who installs phronix
+bundled    ``<pkg>/.phronix``           only in a   everyone who installs phronix
                                        source
                                        checkout
 user       ``~/.phronix``              yes         you, across all your projects
@@ -103,8 +103,8 @@ class Layer:
 # ---------------------------------------------------------------------------
 
 def bundled_root() -> Path:
-    """``<package>/.agents`` — the knowledge that ships inside the wheel."""
-    return Path(__file__).resolve().parent / ".agents"
+    """``<package>/.phronix`` — the knowledge that ships inside the wheel."""
+    return Path(__file__).resolve().parent / ".phronix"
 
 
 def user_root() -> Path:
@@ -224,7 +224,7 @@ def _is_phronix_checkout(project: Optional[Layer]) -> bool:
     """True when the working project is the phronix source tree itself.
 
     Compared by containment rather than equality: the bundled root is
-    ``<checkout>/src/phronix/.agents``, several levels below the project root.
+    ``<checkout>/src/phronix/.phronix``, several levels below the project root.
     """
     if project is None:
         return False

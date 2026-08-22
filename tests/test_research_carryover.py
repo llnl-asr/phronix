@@ -63,7 +63,7 @@ def skill_text(name):
     So an assertion about what a stage is told has to read both halves.
     """
     from pathlib import Path
-    root = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    root = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
             / "skills" / name / "SKILL.md")
     return root.read_text(encoding="utf-8")
 
@@ -2619,7 +2619,7 @@ def test_every_named_skill_exists_on_disk():
 
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
 
-    bundled = Path("src/phronix/.agents/skills")
+    bundled = Path("src/phronix/.phronix/skills")
     named = set()
     for attribute in dir(Arm):
         if not attribute.isupper():
@@ -2713,7 +2713,7 @@ def test_opencode_entry_point_agents_render_as_primary():
 
     import yaml
 
-    agents = Path("src/phronix/.agents/agents")
+    agents = Path("src/phronix/.phronix/agents")
     # The four the benchmark invokes by name.
     for name in ("phronix-healer", "phronix-researcher", "phronix-learner",
                  "phronix-always-on-learner"):
@@ -2991,7 +2991,7 @@ def test_every_stage_prompt_is_a_pointer_to_a_skill():
     from pathlib import Path
     from tests.benchmark.arms import PhronixArm as Arm
 
-    skills = Path(__file__).parent.parent / "src" / "phronix" / ".agents" / "skills"
+    skills = Path(__file__).parent.parent / "src" / "phronix" / ".phronix" / "skills"
     for prompt, skill in ((Arm.PLAN_PROMPT, "phronix-research-plan"),
                           (Arm.EXPLORE_PROMPT, "phronix-explore-idea"),
                           (Arm.BUILD_SOLUTION_PROMPT, "phronix-build-solution"),
@@ -3014,7 +3014,7 @@ def test_building_the_solution_prefers_tools_over_prose():
     """
     from pathlib import Path
 
-    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-build-solution" / "SKILL.md").read_text()
     assert "capability_new" in skill
     assert "pipeline" in skill.lower()
@@ -3367,7 +3367,7 @@ def test_a_skill_from_another_issue_is_not_named_as_this_task_s():
     assert callable(getattr(Arm, "_skill_is_for", None))
 
     source = (Path(__file__).parent / "benchmark" / "arms.py").read_text()
-    body = source[source.index("            skill = self._in_store(store_root, research_module.topic_skill"):]
+    body = source[source.index("            skill = self.best_skill_for(store_root, topic)"):]
     body = body[:body.index("files = self.attachments(")]
     assert "self._skill_is_for(store_root, skill, topic)" in body
     # Offered as knowledge rather than dropped: a skill for a neighbouring bug
@@ -3550,7 +3550,7 @@ def test_a_stalled_plan_is_asked_differently_rather_than_abandoned():
     assert Arm._one_sentence("x" * 300).endswith("…")
 
     # And the method for finding a genuinely different angle is in the skill.
-    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-research-plan" / "SKILL.md").read_text()
     assert "do not cover" in skill and "axis" in skill
 
@@ -3705,7 +3705,7 @@ def test_the_validator_is_told_not_to_narrate_patches():
     from tests.benchmark.arms import PhronixArm as Arm
 
     assert "patches" in Arm.VALIDATE_EXPLORE_PROMPT
-    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-validate-exploration" / "SKILL.md").read_text()
     assert "Do not write the fix" in skill
     assert "already complete enough" in skill
@@ -3765,7 +3765,7 @@ def test_a_skill_states_what_it_solved_and_the_agent_decides():
     assert "cannot be delegated to the retrieval" in suffix
 
     # And the writer is told to make that decision possible.
-    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-build-solution" / "SKILL.md").read_text()
     assert "symptom" in skill and "failing test" in skill and "cause" in skill
 
@@ -3788,7 +3788,7 @@ def test_the_failed_patch_reaches_the_plan_as_evidence():
     assert "Nothing was changed." in notes
 
     # And the plan is told to read it before planning.
-    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-research-plan" / "SKILL.md").read_text()
     # And summarising that artifact is the plan's FIRST step, before the
     # metric, the corpus or any idea — everything downstream works from the
@@ -3866,7 +3866,7 @@ def test_a_corrector_gets_a_shorter_guard_than_the_write_up():
     assert 'head == "build-solution"' in body
     assert "CORRECTOR_GUARD_S" in body
 
-    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-validate-ideas" / "SKILL.md").read_text()
     assert "record it and finish" in skill
 
@@ -3958,7 +3958,7 @@ def test_a_failed_attempt_does_not_falsify_the_approach():
     """
     from pathlib import Path
 
-    root = Path(__file__).parent.parent / "src" / "phronix" / ".agents" / "skills"
+    root = Path(__file__).parent.parent / "src" / "phronix" / ".phronix" / "skills"
 
     reconcile = (root / "phronix-learning-reconcile" / "SKILL.md").read_text()
     assert "does not falsify the approach it was attempting" in reconcile
@@ -4009,7 +4009,7 @@ def test_every_idea_is_attempted_against_the_real_tests():
     assert "--attempt-candidates) EXTRA+=" in forward
 
     # And several passing is a distinct case from one passing.
-    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-trial-reconcile" / "SKILL.md").read_text()
     assert "Several passed" in skill
     assert "confirmed by more than one candidate" in skill
@@ -4123,7 +4123,7 @@ def test_learning_is_a_skill_and_a_pass_writes_the_solution():
     assert len(pointer) < 1200, len(pointer)
     assert "PASSED" in pointer and "solution" in pointer
 
-    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".agents"
+    skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-learn-from-attempt" / "SKILL.md").read_text()
     # A pass writes the solution, and updates rather than forks.
     assert "It passed: write the solution" in skill
@@ -4217,36 +4217,261 @@ def test_a_task_capability_is_filed_under_its_task(tmp_path, monkeypatch):
     assert Path(bound["file"]).parent.parent.name == capabilities.TASK_CAPABILITY_DIR
 
 
-def test_only_the_merged_solution_outlives_the_run(tmp_path):
-    """Four skills go in, one comes out.
+def test_the_solution_skill_is_the_way_in_to_the_candidates(tmp_path):
+    """One skill per subject, linking every candidate — not replacing them.
 
-    Each idea is written up as its own skill so the racers have something
-    executable to follow, and `reconcile_trials` then merges them into one
-    skill for the subject: the candidates that passed become the solution, the
-    ones that did not become its lessons. Promoting the candidates as well
-    would leave the next task on this subject retrieving three rejected
-    readings alongside the accepted one.
+    Each idea is written up as its own skill so its racer has something
+    executable to follow, and every one of those is kept: "was X tried, and
+    what happened?" is the question a later task on this subject arrives with,
+    and a rejected idea recorded with the check that killed it costs the next
+    task a sentence instead of an attempt.
+
+    What the merge produces is the way IN to them: the answer, plus a `[[name]]`
+    link to each candidate. That is the one status reports, because it is the
+    one somebody opens.
     """
-    from tests.benchmark.isolation import CANDIDATE_MARKER, fresh_store, promote_store
+    from pathlib import Path as P
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
 
-    store = tmp_path / "run" / ".phronix"
-    fresh_store(store)
-    merged = store / "skills" / "solution-pylint-dev-pylint-7080"
-    merged.mkdir(parents=True)
-    (merged / "SKILL.md").write_text(
-        "---\nname: solution-pylint-dev-pylint-7080\ntype: skill\n---\n\n## Index\n")
-    for candidate in ("normalize-in-is-ignored-file", "skip-subtrees"):
-        directory = store / "skills" / f"solution-pylint-dev-pylint-7080-{candidate}"
-        directory.mkdir(parents=True)
-        (directory / "SKILL.md").write_text(
-            f"---\nname: {directory.name}\ntype: skill\n{CANDIDATE_MARKER}\n---\n")
+    # The reconcile input names the candidate skills and points at the rule.
+    assert "{skills}" in Arm.TRIAL_RECONCILE_PROMPT
+    assert "R2b" in Arm.TRIAL_RECONCILE_PROMPT
 
-    carry = tmp_path / "carry" / ".phronix"
-    promoted = promote_store(store, carry)["promoted"]
+    skill = (P(__file__).parent.parent / "src" / "phronix" / ".phronix" / "skills"
+             / "phronix-trial-reconcile" / "SKILL.md").read_text()
+    assert "### R2b" in skill
+    assert "[[name]]" in skill
+    assert "Do not copy the candidates in" in skill
 
-    assert any("solution-pylint-dev-pylint-7080/SKILL.md" in p for p in promoted)
-    assert not [p for p in promoted if "normalize-in-is-ignored-file" in p]
-    assert not [p for p in promoted if "skip-subtrees" in p]
-    # And they are still there for the run that built them.
-    assert (store / "skills" / "solution-pylint-dev-pylint-7080-skip-subtrees"
-            / "SKILL.md").is_file()
+    # And a candidate is told its write-up is kept and linked, not discarded.
+    candidate = (P(__file__).parent.parent / "src" / "phronix" / ".phronix"
+                 / "skills" / "phronix-solution-candidate" / "SKILL.md").read_text()
+    assert "### R3" in candidate
+
+
+def test_status_lists_the_solution_skill_not_its_ideas():
+    """Four near-identical names bury the one that holds the answer.
+
+    A raced task writes `solution-<subject>-<plan>` per candidate and merges
+    them into `solution-<subject>`. Status lists the merged skill and counts the
+    candidates on the same line; they stay reachable through its [[name]] links.
+    A candidate with no merged parent still prints on its own — an unreconciled
+    trial is a gap worth seeing.
+    """
+    from pathlib import Path as P
+
+    status = (P(__file__).parent.parent / "scripts" / "status.sh").read_text()
+    assert 'name.startswith(p + "-")' in status
+    assert '"ideas"' in status
+
+    # And the learner eventually merges sibling SUBJECTS into one topic, which
+    # per-subject reconciliation cannot see.
+    skill = (P(__file__).parent.parent / "src" / "phronix" / ".phronix" / "skills"
+             / "phronix-learning-reconcile" / "SKILL.md").read_text()
+    assert "### I1b" in skill
+    assert "superseded, merged into" in skill
+    assert "are **not** siblings to" in skill   # candidates stay under theirs
+
+    # A topic is discoverable like a capability: the answer first, then one case
+    # per instance — what worked with what, and what settled it — inline while
+    # short, split into a linked skill when long.
+    assert "### I1c" in skill
+    assert "what worked, with what" in skill
+    assert "move it to its own skill" in skill
+
+
+def test_status_reports_the_solution_skill_and_every_trial():
+    """A verdict says a task passed; this says what was tried and where it went.
+
+    Measured on pylint-7080: three plans raced, two solved it, and the run
+    reported one line saying the task passed. Which readings of the problem
+    were tried, which the tests agreed with, and the skill holding the answer
+    were all on disk and none of them were shown.
+    """
+    from pathlib import Path as P
+
+    status = (P(__file__).parent.parent / "scripts" / "status.sh").read_text()
+    assert 'a.get("trials")' in status
+    assert 'a.get("solution_skill")' in status
+
+    from tests.benchmark.metrics import Attempt
+
+    assert Attempt(index=1).solution_skill == ""
+    assert Attempt(index=1).trials == []
+
+
+def test_reuse_tries_what_was_built_before_researching_again():
+    """Reuse means calling the tools earlier sessions authored, not re-deriving.
+
+    Two halves, and neither works alone. The runner used to research before
+    every attempt including the first, so a task the store already answered
+    paid for a full plan-explore-build pass before anything looked at the
+    answer — measured on pylint-7080, whose merged solution skill and three
+    candidates were all seeded in and never consulted. And the attempt prompt
+    named a skill but never the capabilities, which under a carried store are
+    already registered on the server the agent is talking to.
+    """
+    from pathlib import Path as P
+
+    runner = (P(__file__).parent.parent / "tests" / "benchmark" / "runner.py").read_text()
+    # Research is the fallback, not the opening move.
+    assert 'not getattr(self.config, "research_first", False)' in runner
+    assert "research_first: bool = False" in runner
+
+    cli = (P(__file__).parent.parent / "tests" / "benchmark" / "cli.py").read_text()
+    assert "--research-first" in cli
+
+    arms = (P(__file__).parent.parent / "tests" / "benchmark" / "arms.py").read_text()
+    assert "PHRONIX_REUSE_SUFFIX" in arms
+    assert "capability_list()" in arms
+    # Offered, never forced onto a neighbouring bug.
+    assert "If nothing in the list fits" in arms
+
+
+def test_the_task_opens_with_the_merged_solution_skill():
+    """The answer, not the older subject skill that predates it.
+
+    `reconcile_trials` writes `solution-<topic>` — the fix plus a link to every
+    candidate tried. The research record's `topic_skill` still names the subject
+    skill written before the merge, so a task whose answer was already on disk
+    was handed the vaguer one and had to re-find the rest.
+    """
+    from pathlib import Path as P
+    from tests.benchmark.arms import PhronixOpenCodeArm as Arm
+
+    store = P(__file__).parent / "_solskill" / ".phronix"
+    (store / "skills" / "solution-pylint-dev-pylint-7080").mkdir(parents=True,
+                                                                exist_ok=True)
+    (store / "skills" / "solution-pylint-dev-pylint-7080" / "SKILL.md").write_text(
+        "---\nname: solution-pylint-dev-pylint-7080\n---\n")
+    try:
+        arm = Arm.__new__(Arm)
+        assert (arm.best_skill_for(store, "pylint-dev__pylint-7080")
+                == "solution-pylint-dev-pylint-7080")
+    finally:
+        import shutil
+        shutil.rmtree(store.parent, ignore_errors=True)
+
+
+def test_status_classifies_what_a_run_accumulated():
+    """"5 learned" is a number about three different things.
+
+    Core framework skills, what solves a task (a merged `solution`, the `idea`
+    candidates linked under it), and what a research pass established are
+    produced by different parts of the loop and answer different questions — a
+    run yielding only research skills has learned about problems and not how to
+    solve them, which reads as healthy under a single count. Tools share the
+    table because they are the other half of what a run produces, with the type
+    named on every row: a skill is read, a tool is called.
+    """
+    from pathlib import Path as P
+
+    status = (P(__file__).parent.parent / "scripts" / "status.sh").read_text()
+    assert 'ORDER = ["capability", "research", "core"]' in status
+    for kind in ("solution", "idea", "method", "research", "core", "other"):
+        assert f'"{kind}"' in status
+    # One table, both asset types, a count where a sentence used to be.
+    assert '("type", 5), ("kind", 9)' in status
+    assert 'note = "never retrieved"' not in status   # a count, not a word
+    # Terminal by default, markdown on request — same rows either way.
+    assert "STATUS_MARKDOWN" in status
+    # A candidate is `solution-<subject>-<plan>`; matching any name-extends-name
+    # pair folded whole research subjects into each other.
+    assert 'p.startswith("solution-")' in status
+
+
+def test_recall_is_a_visible_step_before_the_attempt():
+    """The first move of the flow was the one nothing recorded.
+
+    Look for what the store holds, attempt, research only on failure — but the
+    lookup ran inside the prompt build, so a run handed the answer and one that
+    found nothing produced identical traces, both opening at "attempt". The only
+    way to tell them apart was to read the prompt out of a transcript.
+    """
+    from pathlib import Path as P
+
+    runner = (P(__file__).parent.parent / "tests" / "benchmark" / "runner.py").read_text()
+    assert '"search-skill"' in runner
+    # Research is not announced before try 1 because it does not happen there.
+    assert "research-on-retry mode" not in runner
+    assert "attempt.recalled_skill = arm.best_skill_for(" in runner
+    # And it happens before the attempt begins.
+    assert runner.index("attempt.recalled_skill = arm.best_skill_for(") < runner.index(
+        "tracer.begin(stage,")
+
+    from tests.benchmark.metrics import Attempt
+
+    assert Attempt(index=1).recalled_skill == ""
+
+    status = (P(__file__).parent.parent / "scripts" / "status.sh").read_text()
+    assert 'a.get("recalled_skill")' in status
+    assert "no stored skill covered this task" in status
+    # The attempt carries the skill it is working from, like a raced plan.
+    assert 'f"attempt>{attempt.recalled_skill}"' in runner
+
+
+def test_every_attempt_line_says_which_skill_it_is_working_from():
+    """The opening line scrolls away; the two hundred after it must still say.
+
+    `attempt>solution-...>` was written once, and every step line under it read
+    `attempt>` — so the question the trace is watched for, is this solving from
+    a stored skill or from scratch, was answerable only by scrolling back to the
+    start of the attempt.
+    """
+    from pathlib import Path as P
+
+    runner = (P(__file__).parent.parent / "tests" / "benchmark" / "runner.py").read_text()
+    assert "def _labelled(phase: str, text: str) -> None:" in runner
+    assert 'text = f"[{skill}] {text}"' in runner
+    # A raced plan already labels its own lines; two prefixes push the message
+    # out of its column.
+    assert 'not text.lstrip().startswith("[")' in runner
+    # Read when the line is written, not frozen when the closure is made: the
+    # baseline narrator is wired up before the lookup has run.
+    assert 'skill = getattr(attempt, "recalled_skill", "")' in runner
+    # The evaluation that judges the attempt is labelled too.
+    assert runner.count('_labelled("evaluate", text)') == 2
+    assert '_labelled("attempt", text)' in runner
+
+    # The tracer lifts a leading [stage] into the label column, and a skill name
+    # is a legal stage there — dashes allowed, under the length cap. Read from
+    # the file: `step` is wrapped by @_guard, so getsource returns the wrapper.
+    step = (P(__file__).parent.parent / "tests" / "benchmark" / "trace.py").read_text()
+    assert "len(name) <= 40" in step
+    assert len("solution-pylint-dev-pylint-7080") <= 40
+
+
+def test_a_capability_lists_with_what_it_says_it_does():
+    """A name alone cannot be chosen between; 63 of them cannot be read at all.
+
+    `listing()` read the MODULE docstring, which is where the template puts a
+    summary and not where an agent-written capability puts it — those open with
+    `import os` and document the tool function. Measured, and it cost a task: a
+    reuse run called `capability_list`, got 63 tools with empty descriptions —
+    `apply_normpath_ignore_fix` among them, which was exactly the fix it needed
+    — solved from scratch instead, and failed the target test.
+    """
+    import textwrap
+    from phronix.capabilities import listing
+
+    described = [r for r in listing() if r["description"]]
+    assert described, "no capability lists a description at all"
+    # The learned tools are the ones that were blank, and they are the point.
+    by_name = {r["name"]: r["description"] for r in listing()}
+    if "apply_normpath_ignore_fix" in by_name:
+        assert "normpath" in by_name["apply_normpath_ignore_fix"]
+
+    # A function docstring, on a module that has none of its own.
+    import re
+
+    source = textwrap.dedent('''
+        import os
+
+
+        def register(mcp):
+            @mcp.tool()
+            def do_thing(where: str) -> str:
+                """Do the thing. And then say more about it."""
+        ''')
+    match = re.search(r'\n\s+def\s+\w+\([^)]*\)[^:]*:\s*"""(.*?)"""', source, re.S)
+    assert match and match.group(1).startswith("Do the thing")

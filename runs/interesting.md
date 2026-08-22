@@ -32,6 +32,19 @@
 
 /p/lustre5/haridev/phronix-bench/runs/e2e-0821-221256
 
+#### first reuse case
+
+/p/lustre5/haridev/phronix-bench/runs/reuse-0821-235940
+
+
+## 30 task run
+
+### Fresh Claude with local cluster
+
+/p/lustre5/haridev/phronix-bench/runs/fresh30-0822-000948
+
+
+
 ## opencode run with local cluster
 
 ## Flags

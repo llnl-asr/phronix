@@ -10,6 +10,8 @@ type: skill
 | Label | Section | Covers |
 | --- | --- | --- |
 | `I1` | Instructions | Find the neighbourhood before judging it |
+| `I1b` | Instructions | Merge sibling subjects into one topic |
+| `I1c` | Instructions | Shape a topic skill: the answer, then the cases |
 | `I2` | Instructions | Merge duplicates into one block, by label |
 | `I3` | Instructions | Reference instead of restating |
 | `I4` | Instructions | Retire what has been falsified |
@@ -26,6 +28,62 @@ type: skill
 Work one subject at a time. `graph_query` for the subject, then `graph_get_node` on the ids it returns, and read the whole set before changing any of it.
 
 The graph is what makes reconciliation possible: it links a lesson to the skills, observations and tools that touch it, so "everything already written about parsing subprocess output" is a lookup rather than a recollection. Two blocks that say the same thing in different words are invisible to a keyword search and obvious in the graph.
+
+### I1b — Merge sibling subjects into one topic
+
+`I1` works one subject at a time, so duplication *between* subjects is invisible
+to it — and that is where duplication actually accumulates. One Flask issue
+produced `column-domain`, `column-domain-rule`, `column-domain-files`,
+`cases-column-domain` and `based-column-domain`; one sympy issue produced six.
+Each was internally consistent, so nothing per-subject ever flagged them.
+
+So before working a subject, `graph_query` its *neighbours* and read their
+descriptions. Where several name the same repository, file and defect, they are
+one topic:
+
+- keep the name a later task would search for — the topic (`sympy-itermonomials`,
+  `flask-cli-routes-domain`), not the fragment of a question that happened to be
+  asked first;
+- fold the siblings' blocks in under `I2`, by label;
+- leave each old name in place as a pointer skill — a description saying
+  "superseded, merged into" and a link to the topic skill, and nothing else.
+  Retrieval by the old
+  name still lands somewhere true, and existing references keep resolving.
+
+A raced task's `solution-<subject>-<plan>` candidates are **not** siblings to
+merge. They are already linked from `solution-<subject>` by design, and each
+records an idea with the check that settled it. Merge across subjects; leave the
+candidates under theirs.
+
+### I1c — Shape a topic skill: the answer, then the cases
+
+A topic skill is found the way a tool is found: someone describes a problem and
+wants the one thing that handles it. So its `description` names the topic in the
+words a later task will use — the repository, the file, the defect — and its
+body opens with the answer, not with the history of how it was reached.
+
+Under that, one **case** per instance the topic has actually seen. A case is
+three things, and it is worthless without the third:
+
+| what | example |
+| --- | --- |
+| the situation | `min_degrees` given as an int, mixed monomials missing |
+| what worked, with what | `sum(powers.values())` in both loops of `itermonomials` |
+| what settled it | the target test that went from fail to pass |
+
+Record what did **not** work in the same table, one line, with the check that
+killed it. That is the half a reader cannot reconstruct and the half that saves
+the next task an attempt.
+
+Keep a case inline while it is a few lines. When one grows past that — a long
+trace, a full diff, a sequence of commands — move it to its own skill and leave
+a one-line row linking it with `[[name]]`. The split is about what the entry
+point can stay readable at, not about importance: the topic skill is read on
+every retrieval for this area, and a case is read only when someone is on that
+case. `R2` in `phronix-solution-candidate` is the same economics one level down.
+
+Do not let the topic become a log. Cases that turned out to be the same case are
+one case with two instances named; that merge is `I2`, applied to cases.
 
 ### I2 — Merge duplicates into one block, by label
 

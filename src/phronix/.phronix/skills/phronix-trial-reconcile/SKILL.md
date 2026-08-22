@@ -14,6 +14,7 @@ type: skill
 | `I3` | Instructions | Nothing worked: find the shared assumption |
 | `I4` | Instructions | Score the result on outcome, cost, and transfer |
 | `R1` | Rules | A losing approach is not wrong in every part |
+| `R2b` | Rules | The subject's skill is the way in to the candidates |
 | `R2` | Rules | Do not refine the least-bad candidate |
 | `X1` | References | Why all-failed is the more informative case |
 
@@ -84,6 +85,21 @@ State all three plainly for whatever you write, in this order:
 A skill that solves one instance and generalises to none is worth less than a slightly slower one that transfers. The next task inherits the skill, not the instance.
 
 ## Rules
+
+### R2b — The subject's skill is the way in to the candidates
+
+Every candidate wrote its own skill and keeps it. The subject's skill links to
+each one with `[[name]]`, one line saying what that idea was and what the tests
+did with it.
+
+Link them all, winners and losers. A reader who wants the answer stops at the
+solution; one asking "was X tried?" follows the link and finds the whole
+attempt, including the failed ones — which is the question a later task on this
+subject actually arrives with.
+
+Do not copy the candidates in. Four write-ups pasted together is not a solution,
+it is the same reading problem the merge exists to solve. Carry the fix and the
+map; leave the detail where it was written.
 
 ### R1 — A losing approach is not wrong in every part
 
