@@ -38,15 +38,18 @@ ALLOC=${2:-}
 shift 2 2>/dev/null || true
 [ -n "$INDEX" ] || { echo "usage: run-group.sh <index> <alloc-jobid> [options]"; exit 1; }
 
-SPEND=100
-PARALLEL=6
-NODES=2
+SPEND=0
+PARALLEL=30
+NODES=""
+CLUSTER=$PROJECT/tuolumne-llm/cluster.json
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --spend)    SPEND="$2"; shift 2;;
     --parallel) PARALLEL="$2"; shift 2;;
     --nodes)    NODES="$2"; shift 2;;
+    --cluster)  CLUSTER="$2"; shift 2;;
+    --hosted)   CLUSTER=""; shift;;
     *)          EXTRA+=("$1"); shift;;
   esac
 done
@@ -57,59 +60,95 @@ COUNT=$(grep -vc '^[[:space:]]*#' "$FILE" 2>/dev/null || grep -c . "$FILE")
 
 echo "group   : $INDEX  ($COUNT task(s), $FILE)"
 echo "alloc   : ${ALLOC:-<none — containers run here>}"
-echo "budget  : \$$SPEND ceiling, $PARALLEL task(s) in parallel, $NODES node(s)"
+# `${X:+a}${X:-b}` prints the value as well as the branch when X is set —
+# `${X:-b}` falls back to X, not to b.
+if [ -n "$CLUSTER" ]; then
+  echo "model   : local cluster ($CLUSTER)"
+else
+  echo "model   : hosted (Anthropic)"
+fi
+echo "shape   : $PARALLEL task(s) at once, every researched plan attempted"
+[ "${SPEND:-0}" != "0" ] && echo "budget  : \$$SPEND ceiling"
 echo "store   : fresh, not carried — this group learns nothing from the others"
 echo
 
-# Resolve a numeric --nodes to real hostnames BEFORE entering the allocation.
+# Which nodes run the benchmark's CONTAINERS: the allocation minus the fleet.
 #
-# Two things learned the hard way. `--nodes` wants HOSTNAMES: passing the count
-# straight through made the launcher read "2" as a host, resolve it to 0.0.0.2
-# and die with "container host on 2 is not usable". And shipping a shell
-# function into `flux proxy` with `declare -f` breaks the moment the function
-# contains quotes — "syntax error near unexpected token `('". So the hostlist is
-# read with a plain `flux proxy <alloc> flux getattr hostlist`, which works, and
-# the launcher is then invoked with ordinary arguments and no nested shell.
-HOSTS=""
-if [ -n "$NODES" ] && [ "$NODES" -eq "$NODES" ] 2>/dev/null; then
+# With a local cluster the same allocation holds both, and they must not share a
+# node — a node serving four llama-servers has no room for evaluation containers,
+# and a container competing with a server slows the model for every task.
+#
+# The fleet's own membership comes from the per-GPU records each replica writes
+# as it starts, which is the only place that reflects what actually came up:
+# asked for 8 nodes this deploy landed 23 servers on 6, and anything reading the
+# intended list would have put containers on two nodes that never served and
+# skipped two that did.
+#
+# Unreachable hosts are dropped too. Two nodes in this allocation refuse ssh
+# outright, and a container host that cannot be reached fails every task placed
+# on it with "container host on X is not usable".
+if [ -z "$NODES" ]; then
+  RAW=""
   if [ -n "$ALLOC" ]; then
     RAW=$(flux proxy "$ALLOC" flux getattr hostlist 2>/dev/null | tail -1)
   else
     RAW=$(flux getattr hostlist 2>/dev/null | tail -1)
   fi
-  HOSTS=$(NODES="$NODES" "$PBENCH/venv/bin/python" - "$RAW" <<'EOF' 2>/dev/null
-import os, re, sys
+  NODES=$(CLUSTER="$CLUSTER" "$PBENCH/venv/bin/python" - "$RAW" <<'EOF' 2>/dev/null
+import glob, json, os, re, subprocess, sys
 
 text = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
 match = re.match(r"^([A-Za-z][A-Za-z0-9-]*)\[(.*)\]$", text)
-names = []
+hosts = []
 if match:
     stem, inner = match.group(1), match.group(2)
     for part in inner.split(","):
-        if "-" in part:                     # a range, e.g. 1709-1711
+        if "-" in part:
             low, high = part.split("-", 1)
-            names += [f"{stem}{n}" for n in range(int(low), int(high) + 1)]
+            hosts += [f"{stem}{n}" for n in range(int(low), int(high) + 1)]
         elif part:
-            names.append(stem + part)
+            hosts.append(stem + part)
 elif text:
-    names = text.split()
-print(",".join(names[:int(os.environ.get("NODES", "1"))]))
+    hosts = text.split()
+
+serving = set()
+config = os.environ.get("CLUSTER", "")
+if config and os.path.exists(config):
+    try:
+        with open(config) as handle:
+            run_dir = json.load(handle).get("run_dir", "")
+        for record in glob.glob(os.path.join(run_dir, "nodes", "*.json")):
+            with open(record) as handle:
+                serving.add(json.load(handle).get("host", ""))
+    except Exception:
+        pass
+
+free = [h for h in hosts if h not in serving]
+
+
+def reachable(host):
+    try:
+        return subprocess.run(
+            ["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+             host, "true"], capture_output=True, timeout=15).returncode == 0
+    except Exception:
+        return False
+
+
+print(",".join(h for h in free if reachable(h)))
 EOF
 )
-  if [ -n "$HOSTS" ]; then
-    echo "hosts   : $HOSTS"
-  else
-    echo "warning : could not read the allocation's hostlist; letting the"
-    echo "          launcher pick a node"
-  fi
-else
-  HOSTS=$NODES
 fi
-echo
+[ -n "$NODES" ] && echo "hosts   : $NODES"
 
-CMD=("$PROJECT/scripts/run-benchmark.sh" --tasks "$FILE" --max-spend "$SPEND"
+CMD=("$PROJECT/scripts/run-benchmark.sh" --tasks "$FILE"
      --parallel-tasks "$PARALLEL" --no-carry)
-[ -n "$HOSTS" ] && CMD+=(--nodes "$HOSTS")
+# A spend ceiling is for hosted models. On the local cluster the dollar figure
+# is notional — the GPUs are yours and nothing is billed — so a cap there would
+# stop a run over a number that means nothing.
+[ -n "$CLUSTER" ] && CMD+=(--cluster "$CLUSTER")
+[ "${SPEND:-0}" != "0" ] && CMD+=(--max-spend "$SPEND")
+[ -n "$NODES" ] && CMD+=(--nodes "$NODES")
 CMD+=("${EXTRA[@]}")
 
 if [ -n "$ALLOC" ]; then

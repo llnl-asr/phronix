@@ -253,8 +253,13 @@ if [ -n "${PARALLEL_TASKS:-}" ] && [ "${PARALLEL_TASKS:-1}" -gt 1 ]; then
   # reader to redo this arithmetic by hand.
   if [ "${SLOTS:-0}" -gt 0 ] && [ "$DEMAND" -gt "$SLOTS" ]; then
     NEED_GPU=$(( DEMAND / ${SLOTS_PER_REPLICA:-1} ))
-    echo "warning : oversubscribed ${DEMAND}:${SLOTS} — agents will queue, and"
-    echo "          queue time is charged against each stage's wall-clock budget."
+    echo "warning : oversubscribed ${DEMAND}:${SLOTS} — agents will queue."
+    # Queue time no longer eats a stage's allowance: the budget charges each
+    # tick in proportion to how much of the fleet was actually serving. What
+    # oversubscription still costs is wall-clock, which is a scheduling choice
+    # rather than a corrupted measurement.
+    echo "          Stage budgets are not charged for queue time, so this costs"
+    echo "          wall-clock rather than cut-short stages."
     echo "          this shape needs ~${NEED_GPU} slot(s); either deploy that many,"
     echo "          or drop to --parallel-tasks $(( SLOTS / (ARM_COUNT * MIN_FANOUT) ))."
   fi
