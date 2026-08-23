@@ -275,12 +275,47 @@ class Container:
     image: str
     workdir: str = "/testbed"
 
+    #: Longest command sent as an argv element. Above this it goes through a
+    #: file instead.
+    #
+    # `bash -lc <command>` puts the whole script in one argument, and over ssh
+    # that argument shares the exec limit with the ssh command line itself.
+    # Measured on `psf__requests-863`, whose PASS_TO_PASS list names hundreds of
+    # tests: `OSError: [Errno 7] Argument list too long: 'ssh'`, and the task
+    # failed with no patch for a reason that had nothing to do with the agent.
+    #
+    # 96 KB is well under a typical 2 MB ARG_MAX while leaving room for the ssh
+    # invocation, the environment and podman's own arguments — the limit applies
+    # to their sum, not to this string alone.
+    MAX_INLINE_COMMAND = 96 * 1024
+
     def exec(self, command: str, timeout: int = 1800,
              env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
         args = ["exec", "-w", self.workdir]
         for key, value in (env or {}).items():
             args += ["-e", f"{key}={value}"]
-        args += [self.name, "bash", "-lc", command]
+
+        if len(command) > self.MAX_INLINE_COMMAND:
+            # Copy the script in and run it by name. `copy_in` streams the file
+            # rather than passing its contents, so nothing large reaches argv.
+            import tempfile
+
+            script = f"/tmp/.phronix-exec-{abs(hash(command)) & 0xffffffff:08x}.sh"
+            handle = tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False,
+                                                 encoding="utf-8")
+            try:
+                handle.write(command)
+                handle.close()
+                self.copy_in(Path(handle.name), script)
+            finally:
+                try:
+                    os.unlink(handle.name)
+                except OSError:
+                    pass
+            args += [self.name, "bash", "-lc",
+                     f"bash '{script}'; rc=$?; rm -f '{script}'; exit $rc"]
+        else:
+            args += [self.name, "bash", "-lc", command]
         return self.runtime.run(args, timeout=timeout)
 
     def copy_in(self, source: Path, dest: str) -> None:

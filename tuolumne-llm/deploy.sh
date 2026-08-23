@@ -101,6 +101,31 @@ for ((g = 0; g < GPUS_PER_NODE; g++)); do
 done
 
 # ---- 1. stage weights onto each node's SSD -------------------------------------
+_stage_with_dcp() {  # $1 = model key, $2 = source, $3 = leaf name
+    local key=$1 from=$2 leaf=$3
+    # ONE dcp per node, not one across the allocation.
+    #
+    # dcp assumes a SHARED destination and splits the work by rank. Pointed at a
+    # node-local path it does exactly that — measured, a single collective copy
+    # left each node holding a different fraction (7.9 GB, 15.9 GB, 23.8 GB ...)
+    # because each rank wrote only its own chunk wherever it landed. The result
+    # looks like a copy and loads like a corrupt file. So the ranks all go on
+    # ONE host, and the hosts run concurrently.
+    local pids=() h
+    for h in "${HOSTS[@]}"; do
+        (
+            flux run -N1 -n "$PPN" --requires="host:$h" -t 60m \
+                bash -c "module load $MPIFILEUTILS_MODULE >/dev/null 2>&1
+                         mkdir -p '$MODEL_CACHE'
+                         exec dcp '$from' '$MODEL_CACHE/$leaf'" \
+                > "$RUNDIR/dcp-$h-$key.log" 2>&1
+            echo "    $h: rc=$?"
+        ) &
+        pids+=($!)
+    done
+    for pid in "${pids[@]}"; do wait "$pid"; done
+}
+
 stage_one() {  # $1 = model key
     local key=$1 src=${SOURCE[$1]} from leaf size
     # A sharded model is staged as its directory: llama.cpp opens the first
@@ -125,27 +150,42 @@ stage_one() {  # $1 = model key
     fi
 
     echo "  ${ALIAS[$key]}: staging $(numfmt --to=iec "${size:-0}" 2>/dev/null) to $MODEL_CACHE"
-    # ONE dcp per node, not one across the allocation.
+    # `dbcast` for a single file: read the source ONCE, then propagate.
     #
-    # dcp assumes a SHARED destination and splits the work by rank. Pointed at a
-    # node-local path it does exactly that — measured, a single collective copy
-    # left each node holding a different fraction (7.9 GB, 15.9 GB, 23.8 GB ...)
-    # because each rank wrote only its own chunk wherever it landed. The result
-    # looks like a copy and loads like a corrupt file. So the ranks all go on
-    # ONE host, and the hosts run concurrently.
+    # The alternative below runs one `dcp` per node, which means every node
+    # independently reads the whole model out of Lustre — N nodes, N full reads
+    # of the same 60 GB, all hitting the same filesystem at once. `dbcast` exists
+    # for exactly this shape: it reads the source once and spreads it node to
+    # node, so the cost stops scaling with the node count.
+    #
+    #   https://mpifileutils.readthedocs.io/en/v0.11.1/dbcast.1.html
+    #
+    # It broadcasts ONE FILE, so a sharded model staged as a directory still
+    # takes the per-node `dcp` path.
+    #
+    # One rank per node, not $PPN: dbcast's tree is over RANKS, and several
+    # ranks on one node would make it send the same bytes to that node more
+    # than once.
     local pids=() h
-    for h in "${HOSTS[@]}"; do
-        (
-            flux run -N1 -n "$PPN" --requires="host:$h" -t 60m \
-                bash -c "module load $MPIFILEUTILS_MODULE >/dev/null 2>&1
-                         mkdir -p '$MODEL_CACHE'
-                         exec dcp '$from' '$MODEL_CACHE/$leaf'" \
-                > "$RUNDIR/dcp-$h-$key.log" 2>&1
-            echo "    $h: rc=$?"
-        ) &
-        pids+=($!)
-    done
-    for pid in "${pids[@]}"; do wait "$pid"; done
+    if [ -f "$from" ]; then
+        echo "    dbcast: one read of the source, propagated across $NNODES node(s)"
+        flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 60m \
+            bash -c "module load $MPIFILEUTILS_MODULE >/dev/null 2>&1
+                     mkdir -p '$MODEL_CACHE'
+                     exec dbcast '$from' '$MODEL_CACHE/$leaf'" \
+            > "$RUNDIR/dbcast-$key.log" 2>&1
+        local rc=$?
+        echo "    dbcast: rc=$rc"
+        if [ $rc -ne 0 ]; then
+            # Fall back rather than fail the deploy: a staging method that does
+            # not work here should cost time, not the run.
+            echo "    dbcast failed (see $RUNDIR/dbcast-$key.log) — falling back to dcp"
+            _stage_with_dcp "$key" "$from" "$leaf"
+        fi
+    else
+        # A directory. dbcast takes a file, so this keeps the per-node copy.
+        _stage_with_dcp "$key" "$from" "$leaf"
+    fi
 
     flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 10m \
         bash -c "got=\$(du -s --block-size=1 '$MODEL_CACHE/$leaf' 2>/dev/null | cut -f1)
@@ -183,6 +223,72 @@ for h in "${HOSTS[@]}"; do
     done
 done
 echo "  submitted; weights load from local SSD"
+
+# Rebuild the gateway config from the replicas that ACTUALLY registered.
+#
+# The config below is written from the host x GPU loop this deploy INTENDS to
+# launch, before any of it exists — which is the right thing at that moment,
+# because the gateway has to start before the fleet is warm. It is the wrong
+# thing to leave in place afterwards.
+#
+# Measured: asked for 8 nodes x 4 GPUs it advertised 32 backends and aliases
+# `@0..@31`; 23 servers ever came up. The consequences ran for a whole
+# benchmark — the shared name load-balanced onto backends that were never there
+# (`500 InternalServerError`), every pinned alias past the real count returned
+# `400: Invalid model name`, and the advertised capacity was a third larger than
+# the fleet, so the sizing arithmetic over-subscribed it by that much again.
+#
+# `$RUNDIR/nodes/*.json` is what each replica writes as it comes up — the same
+# source `cluster.json`'s `servers` field already trusts. Rebuilding from it
+# once the readiness wait is over makes the config describe the fleet, and
+# renumbers the aliases contiguously so a client counting `@0..@N-1` cannot land
+# in a hole.
+rebuild_config_from_records() {
+    local PBENCH_PY=/p/lustre5/haridev/phronix-bench/venv/bin/python
+    [ -x "$PBENCH_PY" ] || PBENCH_PY=$(command -v python3)
+    [ -n "$PBENCH_PY" ] || { echo "  no python to rebuild the config with"; return 1; }
+    local records=("$RUNDIR"/nodes/*.json)
+    [ -e "${records[0]}" ] || { echo "  no node records; leaving the config as written"; return 1; }
+
+    local live
+    live=$("$PBENCH_PY" - "$RUNDIR" "$MODEL_ALIAS" <<'EOF'
+import glob, json, os, sys
+
+run_dir, alias = sys.argv[1], sys.argv[2]
+seen = []
+for path in sorted(glob.glob(os.path.join(run_dir, "nodes", "*.json"))):
+    try:
+        with open(path) as handle:
+            row = json.load(handle)
+    except Exception:
+        continue
+    host, port = row.get("host"), row.get("port")
+    if host and port and (host, port) not in seen:
+        seen.append((host, port))
+
+lines = ["model_list:"]
+for index, (host, port) in enumerate(seen):
+    for name in (alias, f"{alias}@{index}"):
+        lines += [f"  - model_name: {name}",
+                  "    litellm_params:",
+                  f"      model: openai/{alias}",
+                  f"      api_base: http://{host}:{port}/v1",
+                  "      api_key: dummy",
+                  "      rpm: 100000"]
+print("\n".join(lines))
+print(len(seen), file=sys.stderr)
+EOF
+) || return 1
+    [ -n "$live" ] || return 1
+
+    cp "$CFG" "$CFG.as-intended"
+    {
+        echo "$live"
+        sed -n '/^router_settings:/,$p' "$CFG.as-intended"
+    } > "$CFG"
+    echo "  gateway config rebuilt from $(grep -c 'api_base' "$CFG") backend entr(ies)"
+    return 0
+}
 
 # ---- 3. LiteLLM config and gateway ------------------------------------------
 CFG=$RUNDIR/litellm.yaml
@@ -299,6 +405,31 @@ while (( SECONDS < deadline )); do
     [ "${ready:-0}" = "$total" ] && break
     sleep 30
 done
+
+# Correct the gateway now that the fleet's real shape is known.
+#
+# Only when it came up SHORT: a full fleet already matches what was written, and
+# restarting a healthy gateway for an identical config would drop in-flight
+# requests for nothing.
+if [ "${ready:-0}" != "$total" ] && [ "${ready:-0}" -gt 0 ]; then
+    echo
+    echo "=== ${ready}/${total} replica(s) came up — correcting the gateway"
+    if rebuild_config_from_records; then
+        # Restart the gateway so it loads the corrected list. The replicas are
+        # untouched and keep their weights; this is the gateway process only.
+        flux cancel "$gwid" 2>/dev/null && echo "  cancelled gateway $gwid"
+        sleep 3
+        gwid=$(flux submit -N1 -n1 -c 8 --requires="host:$GW_HOST" \
+                --job-name="litellm-$GW_HOST" --output="$RUNDIR/litellm.log" \
+                "$LLM_SCRIPTS/gateway-node.sh" "$CFG" "$GATEWAY_PORT")
+        echo "  gateway restarted as $gwid"
+        deadline=$((SECONDS + 180))
+        until curl -sf -m 4 "http://$GW_HOST:$GATEWAY_PORT/health/liveliness" > /dev/null; do
+            (( SECONDS < deadline )) || { echo "  gateway did not come back; see $RUNDIR/litellm.log"; break; }
+            sleep 3
+        done
+    fi
+fi
 
 write_cluster_json "${ready:-0}/$total"
 

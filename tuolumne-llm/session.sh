@@ -258,6 +258,41 @@ def cmd_stop(name):
     text = report(d)
     with open(os.path.join(d, "report.txt"), "w") as f:
         f.write(text + "\n")
+
+    # Copy the finished session into the FLEET's own log folder.
+    #
+    # `logs/sessions/` is keyed by session name and says nothing about which
+    # deploy served it, so a session outlives the fleet it measured with no way
+    # back to that fleet's logs. Copying it under the run directory puts the
+    # measurement beside the thing measured: the gateway log, the per-GPU logs
+    # and the session that ran against them, in one place.
+    #
+    # A copy rather than a move, because `logs/sessions/current` and
+    # `session.sh list` still work from the original, and because a stop that
+    # half-relocated its own evidence would be worse than one that did not try.
+    try:
+        run_dir = ""
+        for candidate in (os.path.join(HERE, "cluster.json"),
+                          os.path.join(LLM_ROOT, "logs", "cluster.json")):
+            if os.path.exists(candidate):
+                with open(candidate) as f:
+                    run_dir = json.load(f).get("run_dir", "") or ""
+                if run_dir:
+                    break
+        if run_dir and os.path.isdir(run_dir):
+            import shutil
+
+            into = os.path.join(run_dir, "sessions", os.path.basename(d))
+            os.makedirs(os.path.dirname(into), exist_ok=True)
+            if os.path.exists(into):
+                shutil.rmtree(into, ignore_errors=True)
+            shutil.copytree(d, into, symlinks=False)
+            print(f"session copied to {into}")
+    except Exception as exc:                    # noqa: BLE001 - reported only
+        # Never fail a stop over bookkeeping: the session itself is already
+        # written and complete where it was created.
+        print(f"(could not copy the session into the run directory: {exc})")
+
     print(text)
     return 0
 

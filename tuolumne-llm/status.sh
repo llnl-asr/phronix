@@ -95,6 +95,16 @@ _stdout_print = print
 #: row rather than wherever the content happened to end.
 _ROW = 0
 
+#: Rows this frame may use, and whether it has already said it ran out.
+#
+# Without a cap the frame simply prints past the bottom of the window, the
+# terminal scrolls, and the line that scrolls away is line 1 — the model, the
+# gateway and the replica count, which is the one line you cannot reconstruct
+# from anything below it. Dropping from the BOTTOM keeps the identity of the
+# fleet and loses the tail of a table, which is the right way round.
+_HEIGHT = 0
+_TRUNCATED = False
+
 
 def print(*args, **kwargs):                      # noqa: A001 - deliberate
     """`print`, with each line erasing whatever it overwrites.
@@ -106,9 +116,18 @@ def print(*args, **kwargs):                      # noqa: A001 - deliberate
     keeps that invariant true for the twenty-odd call sites that render a frame,
     including the ones added later.
     """
-    global _ROW
+    global _ROW, _TRUNCATED
     end = kwargs.pop("end", "\n")
     if end == "\n":
+        # One row is reserved for the footer, one for the "more" marker.
+        if _HEIGHT and _ROW >= _HEIGHT - 2:
+            if not _TRUNCATED:
+                _TRUNCATED = True
+                _ROW += 1
+                _stdout_print(dim("  ... more than fits; close a group with its "
+                                  "key, or use a taller window"),
+                              end="\033[K\n" if COLOUR else "\n")
+            return
         _ROW += 1
         if COLOUR:
             end = "\033[K\n"
@@ -319,6 +338,43 @@ _SESSION_CACHE = {"at": 0.0, "lines": []}
 _SESSION_TTL = 10.0
 
 
+def finished_sessions(cfg, limit=3):
+    """The sessions this fleet has already served, newest first.
+
+    `session_lines` shows the OPEN session and nothing else, so the moment a
+    benchmark closed its window the fleet's whole measured history vanished from
+    this screen — the numbers were on disk and invisible. `session.sh stop` now
+    copies each finished session into the run directory beside the gateway and
+    per-GPU logs, which is what makes them findable from here.
+    """
+    run_dir = (cfg or {}).get("run_dir") or ""
+    folder = os.path.join(run_dir, "sessions")
+    if not run_dir or not os.path.isdir(folder):
+        return []
+    out = []
+    try:
+        names = sorted(os.listdir(folder), reverse=True)
+    except OSError:
+        return []
+    for name in names:
+        path = os.path.join(folder, name, "report.txt")
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path) as handle:
+                head = handle.readline().strip()
+        except OSError:
+            continue
+        # The report's first line already names the session and its window;
+        # anything more belongs in the file, which this points at.
+        out.append(dim(f"  past  {head[:150]}"))
+        if len(out) >= limit:
+            break
+    if out:
+        out.insert(0, dim(f"  {len(out)} finished session(s) in {folder}"))
+    return out
+
+
 def session_lines():
     link = os.path.join(LLM_ROOT, "logs", "sessions", "current")
     if not os.path.exists(link):
@@ -377,8 +433,12 @@ def footer():
 
 
 def render(cfg, rows, prev, dt):
-    global _ROW
+    global _ROW, _HEIGHT, _TRUNCATED
     _ROW = 0
+    _TRUNCATED = False
+    # Only bound the frame on a terminal. Piped output has no height and
+    # truncating it would silently shorten a report someone is parsing.
+    _HEIGHT = shutil.get_terminal_size((80, 24)).lines if COLOUR else 0
     gw = cfg["gateway"]
     live = prev is not None and dt > 0
     per = []
@@ -418,6 +478,9 @@ def render(cfg, rows, prev, dt):
           f"{'live, last %.1fs' % dt if live else 'cumulative since start'}")
     if showing("session"):
         for line in session_lines():
+            print(line)
+        # What this fleet has already measured, not only what it is measuring.
+        for line in finished_sessions(cfg):
             print(line)
     # One shape for every stat line, the way `top` writes its summary block:
     # a dim label in a fixed column, then the value, then a gauge where there is

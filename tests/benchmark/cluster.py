@@ -21,6 +21,7 @@ Two ways to reach the same GPUs:
 from __future__ import annotations
 
 import hashlib
+import threading
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -48,6 +49,13 @@ class ClusterConfig:
     """One cluster, as its config file describes it."""
 
     def __init__(self, data: Dict[str, Any], source: Optional[Path] = None) -> None:
+        #: Backend assigned per key, and the position to deal from next.
+        #
+        # Kept on the instance rather than globally so two configs — a run and a
+        # probe, say — cannot deal from each other's counter.
+        self._assigned: Dict[str, str] = {}
+        self._assign_next = 0
+        self._assign_lock = threading.Lock()
         self.data = data or {}
         self.source = source
 
@@ -144,17 +152,41 @@ class ClusterConfig:
         which load-balances, and once under `name@N`, which does not. Asking for
         a pinned alias is how a client stays on one server.
         """
+        # The GATEWAY first, the file only as a fallback.
+        #
+        # This read the file first, which contradicts the reasoning below and
+        # cost a live run. `deploy.sh` numbers the aliases `@0..@N` from the
+        # host x GPU loop it INTENDS to launch, and writes them before knowing
+        # what came up: asked for 8 nodes x 4 GPUs it wrote @0..@31 while 23
+        # servers ever registered, so nine aliases named nothing from the start.
+        #
+        # Every agent that asked for one got
+        # `400: anthropic_messages: Invalid model name passed in`, once per
+        # fanned-out agent, for the whole run. Removing entries afterwards makes
+        # it worse rather than better: the survivors keep their original numbers,
+        # so the list gains holes and a client counting `@0..@22` still lands in
+        # one. A count is not a list, and only the gateway knows which numbers
+        # exist.
+        served = self._aliases_from_gateway()
+        if served:
+            return served
         listed = self.data.get("pinned_models")
         if isinstance(listed, list) and listed:
             return [str(m) for m in listed if m]
+        return []
 
-        # Ask the gateway rather than trusting the file.
-        #
-        # The aliases exist on the gateway whether or not the deploy managed to
-        # record them — measured once with all 32 served and the key missing
-        # from cluster.json, which would have silently turned affinity off and
-        # cost half the fleet's GPU time to re-prefill. What is deployed is the
-        # authority; the file is a convenience.
+    def _aliases_from_gateway(self) -> List[str]:
+        """The pinned aliases the gateway is serving right now, or [].
+
+        The aliases exist on the gateway whether or not the deploy managed to
+        record them — measured once with all 32 served and the key missing from
+        cluster.json, which would have silently turned affinity off and cost
+        half the fleet's GPU time to re-prefill. What is deployed is the
+        authority; the file is a convenience.
+
+        Returns [] on any failure, so an unreachable gateway falls back to the
+        file rather than turning affinity off.
+        """
         import json as _json
         import urllib.request
 
@@ -185,15 +217,33 @@ class ClusterConfig:
         more GPU time than decode. A repeat to the same backend reported 82 of
         87 prompt tokens cached; scattered, 0.
 
-        Hashed rather than round-robin so the choice is stable: a retry of the
-        same task returns to the backend that still holds its history, and two
-        arms of one task share a backend and therefore its warm prefix.
+        Round-robin, then REMEMBERED — which keeps the stability a hash gave
+        without its collisions.
+
+        Hashing was stable but blind to what it had already handed out: keys
+        collide, so with 30 tasks over 24 backends some servers took three while
+        others took none. Under the `solo` profile a backend has ONE slot, so a
+        third task on a server is a third task queued while a neighbour idles —
+        which is most of what the deferred count measures.
+
+        Dealing in order and remembering the choice gives the same guarantees
+        for free: a retry of the same task returns to the backend still holding
+        its history, and two arms of one task share a backend and its warm
+        prefix, because both ask with the same key. What changes is that the
+        (n+1)th distinct key goes to the emptiest server rather than to whichever
+        one its digest happened to name.
         """
         pinned = self.pinned_models()
         if not pinned:
             return self.model
-        digest = hashlib.sha256(str(key).encode("utf-8")).hexdigest()
-        return pinned[int(digest[:8], 16) % len(pinned)]
+        key = str(key)
+        with self._assign_lock:
+            chosen = self._assigned.get(key)
+            if chosen is None or chosen not in pinned:
+                chosen = pinned[self._assign_next % len(pinned)]
+                self._assign_next += 1
+                self._assigned[key] = chosen
+            return chosen
 
     def endpoints(self, direct: bool = False) -> List[str]:
         """The URLs to use: the gateway, or every backend when *direct*."""

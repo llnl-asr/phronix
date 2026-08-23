@@ -27,6 +27,7 @@ from __future__ import annotations
 import curses
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -44,6 +45,9 @@ REFRESH_S = float(os.environ.get("PHRONIX_TOP_REFRESH", "2"))
 #: Silence in a task's trace past this is worth a mark. Long, because the trace
 #: only ticks when an event lands and a single model turn is minutes of nothing.
 QUIET_S = int(os.environ.get("PHRONIX_QUIET_SECONDS", "900"))
+
+#: `... (12 steps, 1,738,990 tok)` in a trace line.
+TOKENS_IN_TRACE = re.compile(r"\(\d+ steps?, ([\d,]+) tok\)")
 
 
 # --------------------------------------------------------------------------
@@ -158,6 +162,34 @@ def split_event(line: str):
     return stage, message
 
 
+#: The phases a live task moves through, in order, and how a stage names them.
+#
+# The stage column is the task's own account of where it is — `research>plan`,
+# `attempt>`, `evaluate>` — so the phase is a prefix match rather than anything
+# this file has to track. Order matters: the list is rendered in it, so a reader
+# sees the pipeline's shape rather than an alphabetical accident.
+PHASES = (
+    ("research", ("research",)),
+    ("attempt", ("attempt", "search-skill", "recall")),
+    ("evaluate", ("evaluate", "promoted", "trial", "approach-")),
+    # Everything before the first real stage: exporting the checkout, waiting
+    # for a slot, or nothing reported yet. A task sitting here for a long time
+    # is queued, which at 6x oversubscription is most of them.
+    ("not started", ()),
+)
+
+
+def phase_of(task) -> str:
+    """Which phase a running task is in, by the stage it last reported."""
+    stage = (getattr(task, "stage", "") or "").lower()
+    if not stage:
+        return "not started"
+    for name, prefixes in PHASES:
+        if any(stage.startswith(prefix) for prefix in prefixes):
+            return name
+    return "not started"
+
+
 class Task:
     """One task in one arm — a row in the process list."""
 
@@ -180,8 +212,28 @@ class Task:
         trace = path / "trace.log"
         self.trace = trace
         self.stage, self.message, self.started, self.idle = "", "", 0.0, 0.0
+        #: Tokens reported by attempts that have already ENDED, for a task that
+        #: is still going. Read from the trace tail this loop is reading anyway.
+        self.live_tokens = 0
         if trace.is_file():
-            events = [l for l in tail_lines(trace) if "] " in l]
+            lines = tail_lines(trace)
+            # `attempt      try 2: fail (7 steps, 336,433 tok)` — the only live
+            # token figure there is.
+            #
+            # `Task.tokens` reads `result.json`, which is written when the TASK
+            # finishes, so an arm with nothing finished showed `0 tok` however
+            # long it had been running. Measured: the phronix arm sat at 0 for
+            # eight minutes while its research burned 1.7M tokens on one task,
+            # next to a bare arm reading 408k — which invites exactly the wrong
+            # conclusion about which arm is expensive.
+            #
+            # Bounded by the same tail, so an old attempt scrolled out of it is
+            # not counted: this is a floor, not a total.
+            for line in lines:
+                found = TOKENS_IN_TRACE.search(line)
+                if found:
+                    self.live_tokens += int(found.group(1).replace(",", ""))
+            events = [l for l in lines if "] " in l]
             if events:
                 self.stage, self.message = split_event(events[-1])
             head = first_line(trace)
@@ -234,8 +286,12 @@ class Task:
 
     @property
     def tokens(self) -> int:
-        return sum(int(a.get("tokens_input") or 0) + int(a.get("tokens_output") or 0)
-                   for a in self.attempts)
+        recorded = sum(int(a.get("tokens_input") or 0)
+                       + int(a.get("tokens_output") or 0)
+                       for a in self.attempts)
+        # A finished task's own record is authoritative; a running one has none,
+        # so fall back to what its trace has reported so far.
+        return recorded or self.live_tokens
 
     @property
     def cost(self) -> float:
@@ -834,6 +890,46 @@ class Top:
                             f"({len(members)})"))
                 if not shown:
                     continue
+                # Running is split by PHASE; settled groups are a flat list.
+                #
+                # "20 running" says nothing about whether the arm is thinking or
+                # testing. Twelve in research and one in evaluate is a different
+                # picture from the reverse, and at high parallelism a pile in
+                # "not started" is the queue made visible — which is the number
+                # that explains a slow run.
+                if state == "run":
+                    by_phase = {name: [] for name, _ in PHASES}
+                    for task in members:
+                        by_phase[phase_of(task)].append(task)
+                    for name, _ in PHASES:
+                        here = by_phase[name]
+                        if not here:
+                            continue
+                        # Each phase is a group of its own, on the same toggle
+                        # as everything else — the key carries a "/" so
+                        # `toggle` files it with the tasks rather than the arms.
+                        #
+                        # Open by default, except the queue. "not started" is
+                        # every task waiting for a slot, and at high
+                        # parallelism it is the longest list on the screen while
+                        # being the one with least to say per row: the COUNT is
+                        # the finding, and the names are there when wanted.
+                        key = f"{arm.key}/run/{name.replace(' ', '-')}"
+                        shown = self.group_open(key, name != "not started")
+                        out.append(("task", key, "dim",
+                                    f"    {'v' if shown else '>'} {name} "
+                                    f"({len(here)})"))
+                        if not shown:
+                            continue
+                        for task in here:
+                            out.append(("task", task.key, task.state,
+                                        self.task_row(task, width)))
+                            if task.key in self.open_tasks:
+                                for colour, text in task.detail():
+                                    out.append(("detail", None, colour,
+                                                "        " + text))
+                    continue
+
                 for task in members:
                     out.append(("task", task.key, task.state,
                                 self.task_row(task, width)))
@@ -1299,12 +1395,18 @@ class Top:
                                     for arm in self.run.arms
                                     for group in ("run", "pass", "fail",
                                                   "queued")}
+                self.open_tasks |= {f"{arm.key}/run/{name.replace(' ', '-')}"
+                                    for arm in self.run.arms
+                                    for name, _ in PHASES}
                 self.repaint = True
             elif key == ord("c"):
                 self.open_tasks.clear()
                 # Collapsing must not let `running` default itself back open on
                 # the next draw: "collapse all" means all.
                 self._defaulted |= {f"{arm.key}/run" for arm in self.run.arms}
+                self._defaulted |= {f"{arm.key}/run/{name.replace(' ', '-')}"
+                                    for arm in self.run.arms
+                                    for name, _ in PHASES}
                 self.repaint = True
             elif key == curses.KEY_RESIZE:
                 self.repaint = True

@@ -12,6 +12,16 @@ type: skill
 | `X1` | References | Where research on this subject stands |
 
 
+
+
+
+
+
+
+
+
+
+
 ## Instructions
 
 ## Rules

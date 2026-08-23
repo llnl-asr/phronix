@@ -56,7 +56,22 @@ class RunConfig:
     api_key: str = ""
     #: How many ranked plans to attempt in parallel. 1 keeps the old behaviour
     #: of attempting only the top-ranked one.
-    attempt_candidates: int = 1
+    #: How many researched plans to build, attempt and evaluate separately.
+    #
+    # 0 (the default) is EVERY plan research produced — one solution skill each,
+    # one attempt each, one evaluation each. N races the top N. 1 writes a single
+    # merged solution and makes one attempt.
+    #
+    # All, by default, because the alternative silently wastes the pass. Research
+    # explores several ideas, writes each up, and ranks them on a figure of merit
+    # measured against a corpus it built for itself — a proxy. Testing only the
+    # top-ranked one means the other ideas were paid for and never tried, and the
+    # proxy is never checked against the task's own tests.
+    #
+    # `reconcile_trials` then folds the table of what passed and what did not
+    # into the store: what several candidates agree on becomes the solution, and
+    # each failure becomes a named lesson rather than work nobody sees again.
+    attempt_candidates: int = 0
     #: Comma-separated aliases that each resolve to one backend.
     pinned_models: str = ""
     #: Comma-separated models the endpoint serves. More than one makes the
@@ -1316,8 +1331,11 @@ class Runner:
         arm.reveal_target_tests = self.config.reveal_target_tests
         # Research asks for this: it decides whether the solution is built
         # before the attempt or after the trials that measure it.
+        # `or 0`, and 0 means ALL. Coercing to 1 here would hand the arm a cap
+        # of one while the runner raced everything, so research would write a
+        # single merged solution and the race would have nothing to race.
         arm.attempt_candidates = int(
-            getattr(self.config, "attempt_candidates", 1) or 1)
+            getattr(self.config, "attempt_candidates", 0) or 0)
         arm_dir = self.out / arm_name
         arm_dir.mkdir(parents=True, exist_ok=True)
         results_path = arm_dir / "results.jsonl"
@@ -1859,7 +1877,8 @@ class Runner:
                 json.dumps(research_log, indent=2))
 
         after = store_inventory(store_root)
-        created = self._diff_created(before, after)
+        created = self._diff_created(
+            before, after, str(instance.get("instance_id", "")))
         result.skills_created = created
         for name in created:
             ledger.record_creation(name, order, repo)
@@ -2280,10 +2299,12 @@ class Runner:
                 narrate_attempt = ((lambda text: _labelled("attempt", text))
                                    if tracer else None)
                 plans = []
-                if int(getattr(self.config, "attempt_candidates", 1) or 1) > 1:
+                # 0 means every plan research produced; 1 is the single
+                # merged attempt; N is the top N.
+                wanted = int(getattr(self.config, "attempt_candidates", 1) or 0)
+                if wanted != 1:
                     plans = arm.candidate_plans(
-                        store_root, arm.research_topic(instance),
-                        int(self.config.attempt_candidates))
+                        store_root, arm.research_topic(instance), wanted)
 
                 if len(plans) > 1:
                     # Try every ranked plan against the REAL tests, at once.
@@ -2507,6 +2528,52 @@ class Runner:
 
     @staticmethod
     def _diff_created(before: Dict[str, List[str]],
-                      after: Dict[str, List[str]]) -> List[str]:
-        """Skills present after the task that were not present before."""
-        return sorted(set(after.get("skills", [])) - set(before.get("skills", [])))
+                      after: Dict[str, List[str]],
+                      instance_id: str = "") -> List[str]:
+        """Skills this task created — not everything that appeared while it ran.
+
+        A before/after diff of a SHARED store credits a task with whatever its
+        neighbours wrote. Measured at 30 tasks in parallel: `sympy__sympy-21379`
+        reported creating `astropy-astropy-14182`, `pallets-flask-4045`,
+        `pytest-dev-pytest-5227` and six more, alongside its own real
+        `sympy-21379-fix-piecewise-generator-polynomialerror`. Every passing task
+        listed the same nine names, because all thirty diffs saw all thirty sets
+        of writes.
+
+        A skill whose name carries a DIFFERENT instance id is definitionally not
+        this task's, so those are dropped. That is a filter, not a fix: a skill
+        named for its subject rather than its instance — `backend-figure-
+        matplotlib`, `dpi-unpickle-bug` — cannot be attributed this way and is
+        still credited to whoever diffed next. Attributing properly needs the
+        writer recorded at write time; this removes the provably wrong entries
+        and leaves the ambiguous ones.
+
+        Sequential runs are unaffected: with one task writing at a time the diff
+        was already correct, and nothing here can remove a name it should keep.
+        """
+        appeared = sorted(set(after.get("skills", []))
+                          - set(before.get("skills", [])))
+        if not instance_id:
+            return appeared
+
+        def slug(text: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
+
+        # The issue number is the identity, and a plain substring test is what
+        # gets it right. A cleverer pattern here matched `1379` inside `21379`
+        # and threw away the task's own skill — the one entry that was certainly
+        # correct.
+        number = slug(instance_id).rsplit("-", 1)[-1]
+        if not number.isdigit():
+            return appeared
+
+        def foreign(name: str) -> bool:
+            if number in name:
+                return False            # carries this task's number: ours
+            # Carries SOME issue-shaped number that is not ours: a neighbour's.
+            # A skill named for its subject and not an instance has none, and
+            # stays — it cannot be attributed either way, and dropping it would
+            # hide real work.
+            return bool(re.search(r"\d{3,6}", name))
+
+        return [name for name in appeared if not foreign(name)]

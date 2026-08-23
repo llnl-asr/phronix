@@ -164,7 +164,9 @@ echo "out     : $OUT"
 # default; this script does not, so running it directly keeps the single-attempt
 # path. The value is still read here because the packing arithmetic below has to
 # count racers as agents competing for the same slots.
-CANDIDATES=${CANDIDATES:-1}
+# 0 = every researched plan. Research explores several ideas and writes each up;
+# testing only the top-ranked one pays for the rest and never tries them.
+CANDIDATES=${CANDIDATES:-0}
 
 # Packing: how many agents may be in flight, sized against the fleet.
 #
@@ -239,7 +241,10 @@ if [ -n "${PARALLEL_TASKS:-}" ] && [ "${PARALLEL_TASKS:-1}" -gt 1 ]; then
   # by a factor of the candidate count — which is exactly when the queue gets
   # deep enough to eat a stage's wall-clock budget.
   DEMAND=$(( PARALLEL_TASKS * ARM_COUNT * PER_TASK ))
-  RACERS=$(( PARALLEL_TASKS * CANDIDATES ))
+  # With CANDIDATES=0 (all) the count is not known until research has run, so
+  # size the estimate on the idea floor — the plan stage is asked for three.
+  RACERS=$(( PARALLEL_TASKS * ${CANDIDATES:-0} ))
+  [ "${CANDIDATES:-0}" -eq 0 ] && RACERS=$(( PARALLEL_TASKS * 3 ))
   echo "packing : $PARALLEL_TASKS task(s) x $ARM_COUNT arm(s) x $PER_TASK agent(s)" \
        "= $DEMAND researching, + $RACERS racer(s) vs ${SLOTS:-?} slot(s)"
   # Say it plainly when the run cannot fit, rather than letting it show up later

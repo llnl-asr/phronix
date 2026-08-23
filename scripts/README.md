@@ -103,6 +103,82 @@ fleet    : 128 slots, this run will use ~5%  (--fill-fleet would raise this; 121
 and containers cost cores plus about two kernel session keys against a per-user
 quota of 200. That limit binds long before the GPUs do.
 
+## The full list, in budgeted groups
+
+300 tasks is roughly **$700–870 and 30+ hours** on the hosted models, which is
+more than most allocations hold and more than anyone wants to discover from an
+invoice. `run-group.sh` runs one slice at a time, sized so a slice fits a short
+allocation.
+
+```bash
+scripts/run-group.sh 1 f3TkgpQVfpEb              # group 1, inside that allocation
+scripts/run-group.sh 4 f3TkgpQVfpEb --spend 60   # a smaller ceiling
+scripts/run-group.sh 2 ""                        # no allocation: containers run here
+```
+
+Defaults: **34 tasks, $100, 6 in parallel, 2 nodes** — about five hours. That
+sizing comes from one measured task on Sonnet: **$2.34 and 47 minutes** for three
+tries. Six in parallel is what turns 34 × 47 minutes into five hours; the $100
+is what 34 tasks cost at that rate.
+
+The nine group files are contiguous slices of `lite-300.txt`:
+
+```
+/p/lustre5/haridev/phronix-bench/groups/group-01.txt … group-09.txt
+```
+
+Each group is **independent** — `--fresh --no-carry` gives it its own store, so
+groups can run in any order, on any allocation, and a group that dies takes
+nothing with it. Within a group the learning arm still benefits from its own
+earlier tasks, and that is what these runs measure; cross-group reuse is not
+measured, because there is none.
+
+`--nodes` takes a COUNT here and is resolved to real hostnames from the
+allocation. The underlying `run-benchmark.sh --nodes` wants hostnames: give it a
+number and it reads "2" as a host, resolves it to `0.0.0.2`, and the run dies
+with *"container host on 2 is not usable"*.
+
+The allocation is for the evaluation **containers**. These runs use the Anthropic
+API, so no GPU fleet is involved and nodes buy container capacity only.
+
+### The spend ceiling
+
+```bash
+scripts/run-benchmark.sh --max-spend 25          # on any run, not just groups
+```
+
+Checked at the door of **every task**, so an overrun is bounded by one task
+(~$2.34) rather than by the whole queue — a ceiling checked after the work is a
+report, not a control. Skipped tasks are recorded with `stopped_early`, so the
+results say what was cut instead of silently reporting a short run:
+
+```
+[ 47] pallets__flask-5063   SKIPPED — spend ceiling reached: $25.11 of $25.00
+```
+
+It counts `cost_total_usd` — solve **and** research **and** learning. Research is
+the larger half: $0.70 of that $2.34 task was the solve agent, the rest was
+research, so a ceiling reading `cost_usd` overshoots about threefold.
+
+### Grouping the results
+
+```bash
+scripts/group-batches.sh <run-dir> <run-dir> ...   # or a state dir
+```
+
+Reports several runs as one: per-arm pass/fail, the real cost, and a per-batch
+line showing how the rate moved from the first slice to the last.
+
+### Hourly pacing
+
+```bash
+scripts/hourly-batches.sh --tasks lite-300.txt --spend 25 --every 3600
+```
+
+$25 an hour, continuing where the last batch stopped, grouping at the end. The
+pacing is measured from each batch's **start**, so a batch that overruns does not
+push every later one later.
+
 ## Lower-level
 
 ```bash
@@ -127,6 +203,9 @@ scripts/run-benchmark.sh --tasks pilot-1.txt
 | `running.sh` | Is anything spending money right now, and what has it cost |
 | `kill.sh` | Stop every benchmark process, on this node and others. `--dry-run` previews |
 | `launch-when-ready.sh` | Wait for the model endpoint to accept requests, then launch |
+| `run-group.sh` | One group of the 300-task list: 34 tasks, $100, ~5 hours. Takes a group index and an allocation |
+| `group-batches.sh` | Report several runs as one — totals, cost, and the per-batch trend |
+| `hourly-batches.sh` | Work through a long list at a fixed spend per hour |
 
 ## Check the environment before spending anything
 

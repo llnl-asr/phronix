@@ -323,7 +323,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         flux_job=args.flux_job, node=args.node,
         parallel_arms=args.parallel_arms,
         parallel_tasks=args.parallel_tasks,
-        attempt_candidates=int(getattr(args, "attempt_candidates", 1) or 1),
+        # `or 0` not `or 1`: 0 means every candidate, and coercing it to 1
+        # would quietly restore the single-attempt behaviour it asks to leave.
+        attempt_candidates=int(getattr(args, "attempt_candidates", 0) or 0),
         models=getattr(args, "models", "") or "",
         pinned_models=getattr(args, "pinned_models", "") or "",
         nodes=getattr(args, "nodes", "") or "",
@@ -588,10 +590,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", default=DEFAULT_MODEL)
     run.add_argument("--provider", default=DEFAULT_PROVIDER)
     run.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    run.add_argument("--attempt-candidates", type=int, default=1,
-                     help="Attempt this many ranked research plans in parallel "
-                          "and keep whichever gets furthest on the target "
-                          "tests. 1 attempts only the top-ranked plan.")
+    run.add_argument("--attempt-candidates", type=int, default=0,
+                     metavar="N",
+                     help="Build, attempt and evaluate this many researched "
+                          "plans separately, in parallel, keeping whichever "
+                          "gets furthest on the target tests. 1 writes one "
+                          "merged solution and makes one attempt. "
+                          "0 (the default) does it for EVERY plan research "
+                          "produced. "
+                          "Whatever the number, the trials are then reconciled "
+                          "into the store: what worked is merged, and what "
+                          "failed is recorded as a lesson rather than lost.")
     run.add_argument("--models", default="",
                      help="Comma-separated models the endpoint serves. With "
                           "more than one, candidate-generating stages spread "

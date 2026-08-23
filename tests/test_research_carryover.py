@@ -4601,3 +4601,263 @@ def test_the_spend_ceiling_counts_the_whole_bill():
 
     # And it reaches results.jsonl, so a grouped report reads the bill.
     assert round(task.to_dict()["cost_total_usd"], 2) == 2.34
+
+
+def test_an_oversized_command_does_not_blow_the_exec_limit(tmp_path):
+    """A long command must travel as a file, not as an argv element.
+
+    `bash -lc <command>` puts the whole script in one argument, and over ssh that
+    argument shares the exec limit with the ssh command line. Measured on
+    `psf__requests-863`, whose PASS_TO_PASS names hundreds of tests:
+    `OSError: [Errno 7] Argument list too long: 'ssh'` — the task failed with no
+    patch, for a reason that had nothing to do with the agent.
+    """
+    from pathlib import Path as P
+
+    from tests.benchmark.isolation import Container
+
+    class FakeRuntime:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, args, timeout=300, check=False):
+            self.calls.append(list(args))
+            class Done:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return Done()
+
+    session = Container.__new__(Container)
+    session.runtime = FakeRuntime()
+    session.name = "c1"
+    session.workdir = "/testbed"
+    session.copied = []
+    session.copy_in = lambda src, dest: session.copied.append((P(src).name, dest))
+
+    # Short commands still go inline — the common path must not change.
+    session.exec("pytest -q tests/test_x.py")
+    assert session.runtime.calls[-1][-1] == "pytest -q tests/test_x.py"
+    assert session.copied == []
+
+    # A command past the limit is copied in and run by name; the huge text
+    # never appears in argv.
+    huge = "pytest -q " + " ".join(f"tests/test_{n}.py::test_case" for n in range(9000))
+    assert len(huge) > Container.MAX_INLINE_COMMAND
+    session.exec(huge)
+    argv = session.runtime.calls[-1]
+    assert len(session.copied) == 1
+    assert max(len(part) for part in argv) < Container.MAX_INLINE_COMMAND
+    assert huge not in " ".join(argv)
+    # And it still reports the script's own exit code, not the cleanup's.
+    assert "rc=$?" in argv[-1] and "exit $rc" in argv[-1]
+
+
+def test_a_task_is_not_credited_with_its_neighbours_skills():
+    """A shared store makes a before/after diff credit everyone's writes to one.
+
+    Measured at 30 tasks in parallel: `sympy__sympy-21379` reported creating
+    `astropy-astropy-14182`, `pallets-flask-4045`, `pytest-dev-pytest-5227` and
+    six more, alongside its own real skill. Every passing task listed the same
+    nine names, because all thirty diffs saw all thirty sets of writes — which
+    makes `skills_created` useless as a measure of what a task produced.
+    """
+    from tests.benchmark.runner import Runner
+
+    before = {"skills": ["phronix-context-economy"]}
+    after = {"skills": [
+        "phronix-context-economy",
+        # This task's own work.
+        "sympy-21379-fix-piecewise-generator-polynomialerror",
+        # Its neighbours', taken verbatim from the measured run.
+        "astropy-astropy-14182", "pallets-flask-4045", "pytest-dev-pytest-5227",
+        "scikit-learn-scikit-learn-11040",
+        # Named for a subject rather than an instance: not attributable by name.
+        "dpi-unpickle-bug",
+    ]}
+
+    got = Runner._diff_created(before, after, "sympy__sympy-21379")
+    assert "sympy-21379-fix-piecewise-generator-polynomialerror" in got
+    for foreign in ("astropy-astropy-14182", "pallets-flask-4045",
+                    "pytest-dev-pytest-5227", "scikit-learn-scikit-learn-11040"):
+        assert foreign not in got
+    # Honest about the limit: a subject-named skill cannot be attributed by name
+    # and is still included rather than silently dropped.
+    assert "dpi-unpickle-bug" in got
+    # Nothing already present is ever reported as created.
+    assert "phronix-context-economy" not in got
+
+    # With no instance id — and in a sequential run, where the diff was already
+    # correct — the behaviour is unchanged.
+    assert Runner._diff_created(before, after) == sorted(
+        set(after["skills"]) - set(before["skills"]))
+
+
+def test_every_researched_plan_can_be_built_attempted_and_evaluated(
+        tmp_path, monkeypatch):
+    """`--attempt-candidates 0` means all of them, not none.
+
+    A cap is right when each candidate costs an agent and a container, but it
+    makes "try what research actually proposed" impossible to ask for: with five
+    ideas and a cap of three, two are written up during the pass and never
+    tested, and nothing records that they were skipped.
+    """
+    import inspect
+
+    from tests.benchmark import arms
+    from tests.benchmark.runner import Runner
+
+    arm = arms.PhronixOpenCodeArm.__new__(arms.PhronixOpenCodeArm)
+    record = {"approaches": [
+        {"name": f"idea-{n}", "summary": f"do thing {n}",
+         "hypothesis": f"h{n}"} for n in range(5)], "aspects": []}
+    monkeypatch.setattr(arm, "_in_store", lambda root, fn, *a, **k: record)
+
+    # A cap still caps.
+    assert len(arm.candidate_plans(tmp_path, "x__y-1", limit=3)) == 3
+    # 0 means every one of them.
+    assert len(arm.candidate_plans(tmp_path, "x__y-1", limit=0)) == 5
+
+    # ALL is the default, everywhere. A default of 1 pays for research to
+    # explore several ideas and then tests only the top-ranked one, so the rest
+    # are written up and never tried and the ranking is never checked against
+    # the task's own tests.
+    from tests.benchmark.runner import RunConfig
+    assert RunConfig(out="/tmp/x", tasks=[]).attempt_candidates == 0
+    assert arms.PhronixOpenCodeArm.attempt_candidates == 0
+
+    # And nothing clamps it back: `max(1, ...)` would make research write one
+    # merged skill while the runner raced, leaving the race one candidate.
+    import inspect
+    research_src = inspect.getsource(arms.PhronixOpenCodeArm.research)
+    assert "max(1, int(self.attempt_candidates))" not in research_src
+
+    # And the runner races on anything except exactly 1 — 0 must not fall
+    # through to the single-attempt path, which is what "0 = none" would do.
+    source = inspect.getsource(Runner.run_attempt)
+    assert "wanted != 1" in source
+
+    # Each candidate gets its own skill name, so three writers and a reader can
+    # agree without negotiating.
+    names = {p["skill"] for p in arm.candidate_plans(tmp_path, "x__y-1", limit=0)}
+    assert len(names) == 5
+
+
+def test_a_stages_budget_is_not_spent_while_it_waits_in_the_queue(monkeypatch,
+                                                                  tmp_path):
+    """The budget bounds work, not waiting.
+
+    Wall-clock budgets punish a task for the size of the run it happens to be
+    in. Measured at 6x oversubscription: research passes killed at `rc=-9` after
+    1241s, stages reporting "out of time at 180s" having done almost nothing —
+    because the fleet was serving somebody else for most of the allowance.
+    """
+    import json as _json
+
+    from tests.benchmark import arms
+
+    root = tmp_path / "llm"
+    samples = root / "logs" / "sessions" / "current"
+    samples.mkdir(parents=True)
+    monkeypatch.setenv("LLM_ROOT", str(root))
+
+    def write(rows):
+        (samples / "samples.jsonl").write_text(
+            _json.dumps({"t": 1.0, "r": rows}) + "\n")
+        arms._DEFERRED_CACHE["at"] = 0.0        # defeat the cache for the test
+
+    # `[host, up, running, deferred]` — nobody waiting.
+    write([["h:1", 1, 1.0, 0.0], ["h:2", 1, 1.0, 0.0]])
+    assert arms.deferred_fraction() == 0.0
+
+    # Half the fleet has a request queued.
+    write([["h:1", 1, 1.0, 1.0], ["h:2", 1, 1.0, 0.0]])
+    assert arms.deferred_fraction() == 0.5
+
+    # Everything queued: the clock should stop entirely.
+    write([["h:1", 1, 1.0, 2.0], ["h:2", 1, 1.0, 1.0]])
+    assert arms.deferred_fraction() == 1.0
+
+    # No sampler at all — a hosted run has no queue of ours, and the budget must
+    # behave exactly as it did before.
+    (samples / "samples.jsonl").unlink()
+    arms._DEFERRED_CACHE["at"] = 0.0
+    assert arms.deferred_fraction() == 0.0
+
+    # A truncated final line (the sampler writes continuously) must not raise.
+    (samples / "samples.jsonl").write_text('{"t": 1.0, "r": [["h:1", 1, 1.0, 1.0]]}\n{"t": 2.0, "r": [[')
+    arms._DEFERRED_CACHE["at"] = 0.0
+    assert arms.deferred_fraction() == 1.0
+
+    # And the watchdog charges by service, with a hard ceiling so a permanently
+    # queued stage still ends.
+    import inspect
+    source = inspect.getsource(arms.stream_opencode)
+    assert "charged += tick * (1.0 - waiting)" in source
+    assert "hard_timeout_s" in source
+
+
+def test_backend_aliases_come_from_the_gateway_not_the_deploy_file():
+    """A count is not a list, and only the gateway knows which numbers exist.
+
+    `deploy.sh` numbers aliases `@0..@N` from the host x GPU loop it INTENDS to
+    launch, and writes them before knowing what came up: asked for 8 nodes x 4
+    GPUs it wrote @0..@31 while 23 servers ever registered. Every agent asking
+    for a missing one got `400: anthropic_messages: Invalid model name passed
+    in`, once per fanned-out agent, for a whole run.
+    """
+    from tests.benchmark.cluster import ClusterConfig
+
+    stale = ["gpt-oss-120b@%d" % n for n in range(32)]
+    live = ["gpt-oss-120b@0", "gpt-oss-120b@1", "gpt-oss-120b@31"]
+
+    cfg = ClusterConfig({"pinned_models": stale})
+    # The gateway wins over the file, holes and all — the survivors keep their
+    # original numbers, so a client counting 0..N still lands in a gap.
+    cfg._aliases_from_gateway = lambda: list(live)
+    assert cfg.pinned_models() == live
+
+    # Unreachable gateway falls back to the file rather than turning affinity
+    # off, which would cost the prompt cache and half the fleet's GPU time.
+    cfg._aliases_from_gateway = lambda: []
+    assert cfg.pinned_models() == stale
+
+    # Neither available: empty, not an exception.
+    bare = ClusterConfig({})
+    bare._aliases_from_gateway = lambda: []
+    assert bare.pinned_models() == []
+
+
+def test_backends_are_dealt_in_turn_rather_than_hashed():
+    """Hashing is stable but collides; dealing in turn is stable AND even.
+
+    Under the `solo` profile a backend has ONE slot, so a second task hashed
+    onto an occupied server queues while a neighbour idles — which is most of
+    what the deferred count measures. With 30 keys over 24 backends a hash
+    leaves some holding three and others none.
+    """
+    from tests.benchmark.cluster import ClusterConfig
+
+    cfg = ClusterConfig({"pinned_models": [f"m@{n}" for n in range(24)]})
+    cfg._aliases_from_gateway = lambda: [f"m@{n}" for n in range(24)]
+
+    picks = [cfg.model_for(f"task-{n}") for n in range(24)]
+    # Every backend used exactly once before any is used twice.
+    assert sorted(picks) == sorted(f"m@{n}" for n in range(24))
+
+    # Stable: the same key returns the same backend, so a retry lands on the
+    # server that still holds its history and two arms share a warm prefix.
+    assert cfg.model_for("task-7") == picks[7]
+    assert cfg.model_for("task-0") == picks[0]
+
+    # Only past the backend count does anything double up, and then evenly.
+    more = [cfg.model_for(f"task-{n}") for n in range(24, 36)]
+    assert len(set(more)) == 12
+    counts = {m: (picks + more).count(m) for m in set(picks + more)}
+    assert max(counts.values()) - min(counts.values()) <= 1
+
+    # No pinned aliases at all: fall back to the shared name, which
+    # load-balances, rather than raising.
+    bare = ClusterConfig({"model": "gpt-oss-120b"})
+    bare._aliases_from_gateway = lambda: []
+    assert bare.model_for("task-1") == "gpt-oss-120b"

@@ -928,6 +928,59 @@ def _bundled_skill_names() -> set:
         return set()
 
 
+#: How long a queue reading is trusted before it is taken again.
+_DEFERRED_CACHE: Dict[str, Any] = {"at": 0.0, "value": 0.0}
+_DEFERRED_TTL = 5.0
+
+
+def deferred_fraction() -> float:
+    """Share of the fleet's replicas with a request WAITING, 0.0-1.0.
+
+    Read from the session sampler's newest line — the fleet already writes one
+    every few seconds, so this costs a short file read rather than a scrape of
+    every replica. Each row is `[host:port, up, running, deferred]`.
+
+    Returns 0.0 when there is no sampler: a hosted run has no queue of ours to
+    measure, and the budget must behave exactly as it did before.
+    """
+    now = time.time()
+    if now - _DEFERRED_CACHE["at"] < _DEFERRED_TTL:
+        return float(_DEFERRED_CACHE["value"])
+    _DEFERRED_CACHE["at"] = now
+    _DEFERRED_CACHE["value"] = 0.0
+    root = os.environ.get("LLM_ROOT", "/p/lustre5/haridev/llm-tuolumne")
+    path = Path(root) / "logs" / "sessions" / "current" / "samples.jsonl"
+    try:
+        lines = tail_text(path, 4096).splitlines()
+        while lines:
+            try:
+                rows = json.loads(lines[-1]).get("r") or []
+            except ValueError:
+                lines.pop()
+                continue
+            break
+        else:
+            return 0.0
+        if not rows:
+            return 0.0
+        waiting = sum(1 for row in rows if len(row) > 3 and float(row[3]) > 0)
+        _DEFERRED_CACHE["value"] = waiting / len(rows)
+    except Exception:
+        _DEFERRED_CACHE["value"] = 0.0
+    return float(_DEFERRED_CACHE["value"])
+
+
+def tail_text(path: Path, limit: int) -> str:
+    """The last *limit* bytes of a file, or "" — the file may be mid-write."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - limit))
+            return handle.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
 def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
                     timeout_s: int, on_call=None,
                     root: Optional[Path] = None,
@@ -1018,8 +1071,30 @@ def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
         int(timeout_s * float(_tuned("research.hard_timeout_multiple", 1.0))))
 
     def kill_later() -> None:
-        if finished.wait(timeout_s):
-            return
+        # The budget bounds WORK, not waiting.
+        #
+        # It was wall-clock, so a stage queued behind a busy fleet spent its
+        # whole allowance without being served: measured at 6x oversubscription,
+        # research passes were killed at `rc=-9` after 1241s and stages reported
+        # "out of time at 180s" having done almost nothing. That penalises a
+        # task for the size of the run it happens to be in, which is not a
+        # property of the task.
+        #
+        # So each tick is charged in proportion to how much of the fleet was
+        # actually serving. With every replica queueing, the clock stops; with
+        # none, it runs exactly as before. `hard_timeout_s` still bounds the
+        # real elapsed time, so a permanently-deferred stage ends rather than
+        # becoming immortal.
+        tick = 5.0
+        charged = 0.0
+        began = time.time()
+        while charged < timeout_s:
+            if finished.wait(min(tick, timeout_s - charged)):
+                return
+            waiting = deferred_fraction()
+            charged += tick * (1.0 - waiting)
+            if time.time() - began >= hard_timeout_s:
+                break                       # queued the entire time; stop anyway
         over_budget.set()
         if on_call is not None:
             try:
@@ -1286,7 +1361,8 @@ class Arm:
     #: Set by the runner from `--attempt-candidates`. Research needs it because
     #: what the pass should produce depends on it: with a race coming, the
     #: solution is built AFTER the trials, from what the target tests said.
-    attempt_candidates: int = 1
+    #: 0 = every researched plan (the default), N = the top N, 1 = one merged.
+    attempt_candidates: int = 0
 
     #: Whether this arm gets the full retry budget.
     #:
@@ -4352,8 +4428,11 @@ phase owes and how to mark a partial measurement as partial.
         #
         # With a single candidate there is no race and nothing to compare, so
         # the merged write-up stays the pass's durable output.
+        # NOT `max(1, ...)`: 0 means every plan, and clamping it to 1 would make
+        # this stage write a single merged skill while the runner went on to
+        # race — leaving the race with one candidate and nothing to compare.
         plans = self.candidate_plans(
-            store_root, topic, max(1, int(self.attempt_candidates)))
+            store_root, topic, int(self.attempt_candidates))
         if len(plans) > 1:
             if on_call:
                 on_call(f"[build-solution] {len(plans)} candidate(s), one "
@@ -4659,6 +4738,14 @@ phase owes and how to mark a partial measurement as partial.
 
         record = self._in_store(store_root, research_mod.load,
                                 research_mod.resolve_topic(topic)) or {}
+        # `limit <= 0` means EVERY candidate, not none.
+        #
+        # A cap is the right default when each candidate costs an agent and a
+        # container, but it makes "try what research proposed" impossible to ask
+        # for: with five ideas and a cap of three, two are written up during the
+        # pass and never tested, and nothing records that they were skipped.
+        if limit is None or limit <= 0:
+            limit = 1 << 30
         out: List[Dict[str, str]] = []
         for entry in (record.get("pipelines") or []) + (record.get("approaches") or []):
             name = str(entry.get("name") or entry.get("approach") or "").strip()
