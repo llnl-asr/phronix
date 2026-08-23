@@ -7,17 +7,12 @@ the other.
 
 ## Pitfalls
 
-### P1 — Stale learning persistence
+### P1 — skill_write_lesson does not update an existing lesson in place
 
-Repeated learning attempts fail to capture new observations, leading to stale or incorrect knowledge. When `research_observe` reports repeated failures, the learner does not adjust its capture rules, causing the same mistaken lesson to persist across cycles.
+Calling `skill_write_lesson` again against the same skill with an unchanged title does NOT update the existing lesson (e.g. L1) in place — it appends a new lesson (e.g. L2) with the identical title, producing an immediate duplicate that then has to be re-merged next cycle. The "label stable if title unchanged" guarantee (I2/R1 in this skill) applies to `skill_define` (which takes the full `lessons` array and an explicit label), not to `skill_write_lesson`, which is append-only. To widen or correct an existing lesson found during reconcile, read the current LESSONS.md, then use `skill_define` with the full lessons array and the same explicit label to update it in place. Reserve `skill_write_lesson` for genuinely new lessons/pitfalls (as done here) or when the skill/LESSONS.md doesn't exist yet.
+
+### P2 — graph_query/Read surface every layer; skill_write_lesson and memory_write only write the project layer
+
+A reconcile cycle that finds a fact via `graph_query`/`graph_get_node` may be looking at a block whose `source_file` sits outside this project's `store/.phronix/skills/` tree (e.g. a shared `/usr/.../phronix/.phronix/learned/skills/` copy). Writing tools used from this project resolve to the project layer by default, so a rule believed to be "already captured" from a graph hit can still be invisible to `skill_load` on later cycles — this is what stranded R4/R5 in `phronix-learning-reconcile`'s own SKILL.md for many cycles until this cycle re-wrote them into the project layer (see R6 there). Check `source_file` on any block a cycle is about to trust as reachable; if it points outside the project layer, re-write it into the project layer.
 
 ## Lessons
-
-### L1 — L2 – Update capture rules on repeated failures
-
-**2026-08-21** — When `research_observe(topic="learning", worked=false)` reports repeated failures, the learner must adjust its capture rules in `phronix-learning-capture` to record new observations. Without this, stale knowledge persists and leads to repeated false lessons. Add or modify capture rules accordingly.
-
-
-### L3 — Handle stale knowledge graph rebuild failures
-
-**2026-08-21** — The knowledge graph sometimes fails to rebuild, causing FileNotFoundError errors across multiple tasks (e.g., Flask related). When this occurs, run `graph_ensure(force=True)` to force a rebuild before relying on graph queries. Ensure the graph files exist and paths are correct.

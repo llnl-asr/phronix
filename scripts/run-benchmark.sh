@@ -66,6 +66,10 @@ while [ $# -gt 0 ]; do
     --tries)   TRIES="$2";   shift 2;;
     --timeout) TIMEOUT="$2"; shift 2;;
     --carry-root) EXTRA+=(--carry-root "$2"); shift 2;;
+    # A store of its own, inheriting nothing. The CLI has supported this all
+    # along; the launcher parses with an allow-list, so a flag it does not name
+    # is refused however well the CLI understands it.
+    --no-carry) EXTRA+=(--no-carry); shift;;
     --fresh)   FRESHNESS="--fresh"; shift;;
     --reuse)   FRESHNESS="";        shift;;
     --research-on-retry) EXTRA+=(--research-on-retry); shift;;
@@ -76,7 +80,8 @@ while [ $# -gt 0 ]; do
     # The parser is an allow-list, so a flag the CLI understands is still
     # refused here unless it is named — which is how "unknown option:
     # --attempt-candidates" happened twice with the CLI supporting it all along.
-    --attempt-candidates) EXTRA+=(--attempt-candidates "$2"); shift 2;;
+    --attempt-candidates) EXTRA+=(--attempt-candidates "$2"); CANDIDATES="$2"; shift 2;;
+    --max-spend) EXTRA+=(--max-spend "$2"); MAX_SPEND="$2"; shift 2;;
     -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2;;
   esac
@@ -143,25 +148,132 @@ cd "$PROJECT" || exit 1
 set -a; . "$PROJECT/.env" >/dev/null 2>&1; set +a
 
 echo "harness : $HARNESS ($ARMS)"
+[ -n "${MAX_SPEND:-}" ] && echo "budget  : \$$MAX_SPEND ceiling (no new task starts past it)"
 echo "model   : $MODEL"
-echo "tasks   : $TASKS ($(grep -c . "$TASKS") task(s))"
+# Comments excluded, the same way `read_task_file` excludes them. `grep -c .`
+# counted the header of a group file as four tasks — a number that is read
+# before committing a budget should not disagree with what will run.
+echo "tasks   : $TASKS ($(grep -vc '^[[:space:]]*#' "$TASKS") task(s))"
 echo "node    : $NODE"
 echo "mode    : ${FRESHNESS:---reuse} ${EXTRA[*]:-}"
 echo "out     : $OUT"
 
-# Packing, when tasks run concurrently.
+# Candidate racing stays OFF unless asked for.
+#
+# `--attempt-candidates N` enables it and `swe-agent-bench.sh` sets its own
+# default; this script does not, so running it directly keeps the single-attempt
+# path. The value is still read here because the packing arithmetic below has to
+# count racers as agents competing for the same slots.
+CANDIDATES=${CANDIDATES:-1}
+
+# Packing: how many agents may be in flight, sized against the fleet.
 #
 # Each task's research fans out — aspects, tuners, evaluators — so the agents in
-# flight are tasks x fan-out, and that product is what starves an endpoint
-# rather than the task count. Measured at 192 concurrent agents: every worker
-# started, dozens hit a usage limit, most of the rest found no MCP server, and
-# none did any work. So the per-task fan-out is divided by the number of tasks
-# sharing the node.
+# flight are (tasks x arms x fan-out), and that product is what starves an
+# endpoint rather than the task count. Measured at 192 concurrent agents: every
+# worker started, dozens hit a usage limit, most of the rest found no MCP
+# server, and none did any work.
+#
+# The unit of capacity is a SLOT, not a GPU and not a replica. A slot holds one
+# conversation with a private prompt cache; under the `solo` profile there is
+# one per GPU deliberately, because the cache is per slot and two agents sharing
+# one evict each other into full prefill — 11.1s against 0.3s for a cached
+# prefix. So the fleet can hold exactly `slots` agent conversations at once
+# without any of them losing its cache, and that is the number to size to.
+#
+# Aim for roughly one in-flight agent per slot. Above that, agents queue: the
+# queue costs nothing in cache terms (a waiting request evicts nothing) but
+# every second spent deferred is charged against the WALL-CLOCK budget of the
+# stage waiting on it, which is how a research pass gets killed at rc=-9 after
+# 1241s having produced nothing. Below it, GPUs idle.
+#
+# The old formula was `24 / PARALLEL_TASKS`, a constant fixed against a
+# starvation incident rather than against a fleet, and it ignored ARMS entirely:
+# a 2-arm run at 6 tasks asked for 6x4 phronix agents plus 6 bare ones — 30
+# conversations against 8 slots, a queue 16 deep, and 74% utilisation while a
+# quarter of the fleet sat idle waiting on agent think time.
+SLOTS=$(PYTHONWARNINGS=ignore "$BENCH/venv/bin/python" - "$CLUSTER" <<'EOF' 2>/dev/null || echo 0
+import json, os, sys, glob
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    print(0); raise SystemExit
+per = int(cfg.get("slots_per_replica") or 1)
+replicas = len(cfg.get("servers") or [])
+if not replicas:
+    # `cluster.json` is written when a deploy FINISHES and lists `servers` as
+    # empty until then; the live membership is the per-GPU records each replica
+    # drops as it comes up. Same source `status.sh` reads, so this sizes against
+    # the fleet that is actually serving rather than the last one recorded.
+    replicas = len(glob.glob(os.path.join(cfg.get("run_dir", ""), "nodes", "*.json")))
+print(int(cfg.get("slots") or replicas * per))
+EOF
+)
+ARM_COUNT=$(awk -F, '{print NF}' <<< "$ARMS")
+[ -z "$ARM_COUNT" ] && ARM_COUNT=1
+#: Fewest agents a researching task may fan out to before the run stops being a
+#: fair test of the pipeline. Override to trade research breadth for fleet size.
+MIN_FANOUT=${PHRONIX_MIN_FANOUT:-2}
+SLOTS_PER_REPLICA=$(PYTHONWARNINGS=ignore "$BENCH/venv/bin/python" -c "
+import json,sys
+try: print(int(json.load(open(sys.argv[1])).get('slots_per_replica') or 1))
+except Exception: print(1)
+" "$CLUSTER" 2>/dev/null || echo 1)
+
 if [ -n "${PARALLEL_TASKS:-}" ] && [ "${PARALLEL_TASKS:-1}" -gt 1 ]; then
-  PER_TASK=$(( 24 / PARALLEL_TASKS ))
-  [ "$PER_TASK" -lt 2 ] && PER_TASK=2
+  if [ "${SLOTS:-0}" -gt 0 ]; then
+    # One agent per slot, shared out across every task in every arm.
+    PER_TASK=$(( SLOTS / (PARALLEL_TASKS * ARM_COUNT) ))
+    # Never below MIN_FANOUT. Research IS the fan-out — the plan plus scouts
+    # looking for ideas at once — so a fleet too small to host it should be
+    # reported as too small, not quietly turned into a run that measures a
+    # crippled pipeline and reports it as the pipeline.
+    [ "$PER_TASK" -lt "$MIN_FANOUT" ] && PER_TASK=$MIN_FANOUT
+  else
+    PER_TASK=$(( 24 / PARALLEL_TASKS ))          # no fleet record; old default
+    [ "$PER_TASK" -lt 2 ] && PER_TASK=2
+  fi
   export PHRONIX_BENCH_ASPECTS=$PER_TASK
-  echo "packing : $PARALLEL_TASKS task(s) x $PER_TASK agent(s) each"
+  # Racers count too. They are agents like any other, they run concurrently
+  # with each other, and leaving them out of the arithmetic understated demand
+  # by a factor of the candidate count — which is exactly when the queue gets
+  # deep enough to eat a stage's wall-clock budget.
+  DEMAND=$(( PARALLEL_TASKS * ARM_COUNT * PER_TASK ))
+  RACERS=$(( PARALLEL_TASKS * CANDIDATES ))
+  echo "packing : $PARALLEL_TASKS task(s) x $ARM_COUNT arm(s) x $PER_TASK agent(s)" \
+       "= $DEMAND researching, + $RACERS racer(s) vs ${SLOTS:-?} slot(s)"
+  # Say it plainly when the run cannot fit, rather than letting it show up later
+  # as research stages timing out for no visible reason. The message names the
+  # fleet that WOULD fit, because "oversubscribed" without a number leaves the
+  # reader to redo this arithmetic by hand.
+  if [ "${SLOTS:-0}" -gt 0 ] && [ "$DEMAND" -gt "$SLOTS" ]; then
+    NEED_GPU=$(( DEMAND / ${SLOTS_PER_REPLICA:-1} ))
+    echo "warning : oversubscribed ${DEMAND}:${SLOTS} — agents will queue, and"
+    echo "          queue time is charged against each stage's wall-clock budget."
+    echo "          this shape needs ~${NEED_GPU} slot(s); either deploy that many,"
+    echo "          or drop to --parallel-tasks $(( SLOTS / (ARM_COUNT * MIN_FANOUT) ))."
+  fi
+fi
+
+# A fleet session, for the exact window this run occupies.
+#
+# Every llama-server counter is cumulative since that server booted, and the
+# fleet is up before a run starts and stays up after it ends — so the lifetime
+# figures include work that is not this run's, and there is otherwise no way to
+# say what the GPUs did FOR IT. `session.sh start` marks the window and samples
+# what has no counter to difference (requests in flight, prompt-cache reuse);
+# the watcher below closes it when the run's process goes, whether it finished
+# or was killed, and leaves the report in the run directory beside the results.
+#
+# Only for cluster runs: a hosted-endpoint run has no fleet to measure.
+SESSION=""
+if [ -n "$CLUSTER" ] && [ -x "$PROJECT/tuolumne-llm/session.sh" ]; then
+  SESSION="bench-$(basename "$OUT")"
+  if "$PROJECT/tuolumne-llm/session.sh" start "$SESSION" >/dev/null 2>&1; then
+    echo "session : $SESSION (fleet stats for this run)"
+  else
+    SESSION=""
+  fi
 fi
 
 nohup "$VENV/bin/python" -u -m tests.benchmark.cli run \
@@ -182,6 +294,21 @@ nohup "$VENV/bin/python" -u -m tests.benchmark.cli run \
 
 RUNPID=$!
 echo "pid     : $RUNPID"
+
+# Close the session when the run's process goes.
+#
+# This script returns as soon as the runner is launched — it does not wait for
+# the run — so the close has to be somebody's job. `setsid` because that
+# somebody must outlive this shell, and `kill -0` because the run may equally
+# end by finishing or by `kill.sh`: both leave a session that would otherwise
+# stay open and absorb the NEXT run's traffic into this one's window.
+if [ -n "$SESSION" ]; then
+  setsid bash -c '
+    while kill -0 '"$RUNPID"' 2>/dev/null; do sleep 20; done
+    "'"$PROJECT"'/tuolumne-llm/session.sh" stop "'"$SESSION"'" \
+      > "'"$OUT"'/fleet-session.txt" 2>&1
+  ' >/dev/null 2>&1 < /dev/null &
+fi
 
 # Record where this run lives, so it can be found later from anywhere.
 #
@@ -205,6 +332,7 @@ cat > "$LOGS/$(basename "$OUT").json" <<JSON
 JSON
 
 echo
+[ -n "$SESSION" ] && echo "fleet:  $PROJECT/tuolumne-llm/session.sh report  (stats for this run's window)"
 echo "watch:  $SCRIPTS/status.sh"
 echo "spend:  $SCRIPTS/running.sh"
 echo "stop:   $SCRIPTS/kill.sh"

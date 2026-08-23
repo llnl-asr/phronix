@@ -4801,10 +4801,42 @@ It is the plan itself, not background reading.
         def slug(text: str) -> str:
             return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
 
-        merged = f"solution-{slug(research_mod.resolve_topic(topic))}"
-        if (Path(store_root) / "skills" / merged / "SKILL.md").is_file():
+        here = slug(research_mod.resolve_topic(topic))
+        skills = Path(store_root) / "skills"
+
+        def on_disk(name: str) -> bool:
+            return bool(name) and (skills / name / "SKILL.md").is_file()
+
+        # 1. The merged solution: the answer plus a link to every candidate.
+        merged = f"solution-{here}"
+        if on_disk(merged):
             return merged
-        return self._in_store(store_root, research_mod.topic_skill, topic) or ""
+
+        # 2. What the record points at — only useful once a record exists.
+        named = self._in_store(store_root, research_mod.topic_skill, topic) or ""
+        if named:
+            return named
+
+        # 3. THE CANDIDATES, then the topic's own skill, found by NAME.
+        #
+        # Steps 1 and 2 both depend on a research record, and a record does not
+        # survive a run unless its session was folded into the common folder.
+        # So a reusing run could hold the skill for its exact task and still
+        # report "no skill covers this task" — measured: `pallets__flask-4045`
+        # was SOLVED, `skills/pallets-flask-4045/` was carried into the project
+        # layer, and the next run opened from scratch and then recalled
+        # `flask-routes-subdomain-display`, which belongs to a different bug.
+        #
+        # The naming convention is the system's own claim of ownership and it
+        # needs no record: `candidate_skill_name` derives `solution-<topic>-
+        # <plan>` precisely so several writers and a reader can agree. Reading
+        # it back is deterministic, not a fuzzy name match.
+        candidates = sorted(
+            (d.name for d in skills.glob(f"solution-{here}-*") if d.is_dir()
+             and (d / "SKILL.md").is_file()))
+        if candidates:
+            return candidates[0]
+        return here if on_disk(here) else ""
 
     @staticmethod
     def candidate_skill_name(topic: str, plan: str) -> str:

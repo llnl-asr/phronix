@@ -219,6 +219,20 @@ class Task:
         return (self.result or {}).get("attempts") or []
 
     @property
+    def skills(self) -> str:
+        """What this task left in the store, by name, for the finished line.
+
+        A finished task's line said only `resolved`, which is the outcome and
+        not the point: the benchmark asks whether the work makes the NEXT task
+        cheaper, and that is answered by what was written and what was picked
+        up. `+` is new, `~` is reused from an earlier task.
+        """
+        result = self.result or {}
+        parts = [f"+{name}" for name in (result.get("skills_created") or [])]
+        parts += [f"~{name}" for name in (result.get("skills_reused") or [])]
+        return " ".join(parts)
+
+    @property
     def tokens(self) -> int:
         return sum(int(a.get("tokens_input") or 0) + int(a.get("tokens_output") or 0)
                    for a in self.attempts)
@@ -294,10 +308,12 @@ class Task:
 class Arm:
     """One arm of the comparison — the group tasks are listed under."""
 
-    def __init__(self, path: Path, now: float):
+    def __init__(self, path: Path, now: float, planned=()):
         self.path = path
         self.name = path.name
         self.key = path.name
+        #: Every instance the run intends this arm to attempt, started or not.
+        self.planned = list(planned)
         # A task directory with neither a trace nor a result has not started
         # and may never: a run leaves empty shells behind (`.../tasks/...`, a
         # truncated duplicate of a real id). Counting them inflates the
@@ -306,6 +322,17 @@ class Arm:
                       (Task(self, p, now) for p in sorted((path / "tasks").glob("*"))
                        if p.is_dir())
                       if t.trace.is_file() or t.result is not None]
+
+    @property
+    def queued(self):
+        """Planned instances this arm has not started yet, in run order.
+
+        A task directory is named `<index>-<instance_id>`, so the instance is
+        what survives the split; matching on it rather than on the directory
+        name is what makes this survive a change to the numbering.
+        """
+        started = {t.path.name.split("-", 1)[-1] for t in self.tasks}
+        return [name for name in self.planned if name not in started]
 
     @property
     def passed(self):
@@ -343,14 +370,23 @@ class Run:
     def reload(self):
         now = time.time()
         self.now = now
-        self.arms = [a for a in
-                     (Arm(p, now) for p in sorted(self.path.iterdir())
-                      if p.is_dir() and (p / "tasks").is_dir())
-                     if a.tasks]
+        # The manifest FIRST, because it is the only place the run's plan lives.
+        #
+        # Arms discover their tasks from directories on disk, and a directory
+        # appears only when a task starts — so a six-task run showed two rows
+        # and read as a two-task run. What is queued is as much a part of the
+        # picture as what is running: without it there is no way to tell a run
+        # that is nearly done from one that has barely begun.
         try:
             self.manifest = json.loads((self.path / "manifest.json").read_text())
         except (OSError, ValueError):
             self.manifest = {}
+        planned = [str(t) for t in (self.manifest.get("tasks") or [])]
+
+        self.arms = [a for a in
+                     (Arm(p, now, planned) for p in sorted(self.path.iterdir())
+                      if p.is_dir() and (p / "tasks").is_dir())
+                     if a.tasks]
 
         # Liveness from the two files the runner touches on every stage, not
         # from a walk: a walk of a live run is 100k files and 20s on lustre.
@@ -681,6 +717,16 @@ class Top:
         self.run = Run(run_path)
         self.open_arms = {arm.key for arm in self.run.arms}   # groups open
         self.open_tasks = set()
+        #: Group keys already offered their default open/closed state.
+        #
+        # `open_tasks` records what the READER has opened, so a group that
+        # should start open cannot simply be seeded once at startup: arms and
+        # their groups appear as the run goes on, and a group created later
+        # would come up closed. Recording which keys have been defaulted lets a
+        # new group open itself the first time it is drawn and stay under the
+        # reader's control from then on — closing it must not spring back open
+        # on the next refresh.
+        self._defaulted = set()
         self.cursor = 0
         self.top = 0
         self.sort = 0
@@ -719,7 +765,13 @@ class Top:
         cost = sum(t.cost for t in tasks)
         tokens = sum(t.tokens for t in tasks)
 
-        head = (f"{run.path.name}  {run.state}   "
+        # The FULL path, not just the name.
+        #
+        # The run is auto-picked, so the first question any reader has is
+        # "which one am I looking at" — and the answer has to be something they
+        # can paste into a `tail -f` or a `status.sh`, not a name they then
+        # have to go and resolve.
+        head = (f"{run.path}  {run.state}   "
                 f"{run.manifest.get('model', '?')} "
                 f"({run.manifest.get('provider', '?')})   "
                 f"{'fresh' if run.manifest.get('fresh') else 'reuse'}   "
@@ -751,15 +803,64 @@ class Top:
                         f"{arm.passed:>3} pass {arm.failed:>3} fail "
                         f"{arm.running:>3} run   {rate:>4}   "
                         f"{short(arm.tokens):>7} tok  {money(arm.cost) or '-':>8}   "
-                        f"avg {human(arm.finished_time):>7}/task"))
+                        f"avg {human(arm.finished_time):>7}/task"
+                        + (f"   {len(arm.queued)} queued" if arm.queued else "")))
             if not open_:
                 continue
+            # Four groups, one per stage of a task's life.
+            #
+            # Every row on this screen used to be a task, so a run packing six
+            # tasks an arm showed twelve task rows plus whatever had finished,
+            # and the live ones were pushed off the bottom by the settled ones.
+            # Grouping puts the arm's shape on one line each — how many are
+            # moving, how many landed, how many are left — and only `running`
+            # is expanded, because it is the only group whose contents change.
+            buckets = {"run": [], "pass": [], "fail": []}
             for task in self.ordered(arm.tasks):
-                out.append(("task", task.key, task.state,
-                            self.task_row(task, width)))
-                if task.key in self.open_tasks:
-                    for colour, text in task.detail():
-                        out.append(("detail", None, colour, "        " + text))
+                # Anything not settled is live, whatever stage it reports.
+                buckets[task.state if task.state in ("pass", "fail")
+                        else "run"].append(task)
+
+            for state, label, default_open in (("run", "running", True),
+                                               ("pass", "passed", False),
+                                               ("fail", "failed", False)):
+                members = buckets[state]
+                if not members:
+                    continue
+                group = f"{arm.key}/{state}"
+                shown = self.group_open(group, default_open)
+                out.append(("task", group, state,
+                            f"  {'v' if shown else '>'} {label} "
+                            f"({len(members)})"))
+                if not shown:
+                    continue
+                for task in members:
+                    out.append(("task", task.key, task.state,
+                                self.task_row(task, width)))
+                    if task.key in self.open_tasks:
+                        for colour, text in task.detail():
+                            out.append(("detail", None, colour,
+                                        "        " + text))
+            # What has not started yet, folded into ONE collapsible row.
+            #
+            # The screen's vertical space belongs to what is moving: a run
+            # packing six tasks an arm would spend most of the list on rows that
+            # say only "queued", pushing the running ones off the bottom. So the
+            # queued set gets a single group row, closed by default, and opens
+            # on the same key as everything else when the reader wants the names.
+            #
+            # The key carries a "/" so `toggle` files it with the tasks rather
+            # than the arms, which is what makes it start closed and stay
+            # independent of whether its arm is expanded.
+            if arm.queued:
+                group = f"{arm.key}/queued"
+                shown = group in self.open_tasks
+                out.append(("task", group, "dim",
+                            f"  {'v' if shown else '>'} queued "
+                            f"({len(arm.queued)})"))
+                if shown:
+                    for name in arm.queued:
+                        out.append(("detail", None, "dim", "        " + name))
         return out
 
     def panel_rows(self, width):
@@ -945,6 +1046,13 @@ class Top:
         if task.done:
             middle = ("resolved" if task.state == "pass"
                       else str((task.result or {}).get("error") or "not resolved"))
+            # The skills go after the outcome, and only in the room left over:
+            # the outcome must never be pushed off the line to make space for
+            # them, and a task that wrote nothing shows exactly what it did
+            # before.
+            skills = task.skills
+            if skills and len(middle) + 2 < room:
+                middle = f"{middle}  {skills}"
             middle = f"{middle[:room]:<{room}}"
         else:
             stage = task.stage[:28]
@@ -1032,14 +1140,25 @@ class Top:
         if self.repaint:
             screen.clear()
             self.repaint = False
-        else:
-            screen.erase()
+        # No `erase()` on an ordinary frame — that is what made it blink.
+        #
+        # `erase()` blanks every cell, and the redraw then fills them back in;
+        # on a remote terminal the empty state is visible, so a screen that
+        # changes one number flashes whole. `put` already pads each row to the
+        # full width, so writing over the old frame leaves nothing behind, and
+        # the only rows needing explicit blanking are the ones the new frame is
+        # too short to reach. A layout change still gets the hard `clear()`
+        # above.
         for i, (kind, key, colour, text) in enumerate(head):
             self.put(i, text, colour, width)
+        drawn = 0
         for offset, (kind, key, colour, text) in enumerate(
                 body[self.top:self.top + body_height]):
             chosen = (self.top + offset) == cursor_in_body
             self.put(body_top + offset, text, colour, width, chosen)
+            drawn = offset + 1
+        for row in range(body_top + drawn, height - 1):
+            self.put(row, "", "dim", width)
 
         # The panel toggles are named with their state, so the footer says what
         # is ON as well as what the key does.
@@ -1075,6 +1194,21 @@ class Top:
         self.cursor = selectable[here]
         self.selected_key = rows[self.cursor][1]
 
+    def group_open(self, key, default_open=False):
+        """Whether a group is expanded, opening it once if it starts open.
+
+        The default is applied the FIRST time the group is drawn, not at
+        startup: arms and their groups appear as a run goes on, and a group
+        created later would otherwise come up closed against its own default.
+        After that the reader owns it — `_defaulted` is what stops a group the
+        reader just closed from springing open again on the next refresh.
+        """
+        if key not in self._defaulted:
+            self._defaulted.add(key)
+            if default_open:
+                self.open_tasks.add(key)
+        return key in self.open_tasks
+
     def toggle(self, want=None):
         key = self.selected_key
         if key is None:
@@ -1084,6 +1218,11 @@ class Top:
             target.discard(key)
         else:
             target.add(key)
+        # Expanding or collapsing changes how many rows the body has, and a
+        # diffing refresh leaves the tail of the previous layout on screen —
+        # the same reason the pinned block forces one. Without this, opening a
+        # group redrew the group's own line and left every line below it stale.
+        self.repaint = True
 
     def open_log(self):
         """Hand the selected task's trace to a pager, then come back.
@@ -1153,8 +1292,20 @@ class Top:
             elif key == ord("a"):
                 self.open_arms = {arm.key for arm in self.run.arms}
                 self.open_tasks = {t.key for t in self.run.tasks}
+                # "open all" means all, including each arm's collapsed groups —
+                # otherwise they are the one thing on the screen that no key
+                # would reach.
+                self.open_tasks |= {f"{arm.key}/{group}"
+                                    for arm in self.run.arms
+                                    for group in ("run", "pass", "fail",
+                                                  "queued")}
+                self.repaint = True
             elif key == ord("c"):
                 self.open_tasks.clear()
+                # Collapsing must not let `running` default itself back open on
+                # the next draw: "collapse all" means all.
+                self._defaulted |= {f"{arm.key}/run" for arm in self.run.arms}
+                self.repaint = True
             elif key == curses.KEY_RESIZE:
                 self.repaint = True
             elif key in (ord("1"), ord("2"), ord("3"), ord("4")):
@@ -1216,6 +1367,9 @@ def once(run_path: Path, panels=(), width: int = 0):
     top.run = Run(run_path)
     top.open_arms = {arm.key for arm in top.run.arms}
     top.open_tasks = set()
+    # `Top.__new__` skips `__init__`, so every field the row builder reads has
+    # to be set here too — a group's default open state included.
+    top._defaulted = set()
     top.sort, top.filter, top.selected_key = 0, 0, None
     top.panels = set(panels)
     top.workers = Panels(run_path)
@@ -1233,6 +1387,38 @@ def once(run_path: Path, panels=(), width: int = 0):
         print(text.rstrip())
 
 
+def newest_run(candidates: int = 12):
+    """The run that WROTE most recently, not the newest directory.
+
+    A run directory's own mtime stops moving early — the arm directories are
+    created once and everything after that is written inside them — so ranking
+    by directory age can open a run that has been finished for hours while a
+    live one sits below it in the list. What is actually wanted is "the run
+    whose trace is newest", so that is what this measures.
+
+    Bounded to the most recent handful of directories: the runs directory
+    accumulates, and stat-ing every trace in every run of the last month to
+    answer "which one is live" is a walk nobody asked for.
+    """
+    dirs = sorted((p for p in RUNS.glob("*/") if p.is_dir()),
+                  key=lambda p: p.stat().st_mtime, reverse=True)[:candidates]
+    if not dirs:
+        return None
+
+    def touched(run: Path) -> float:
+        stamps = [run.stat().st_mtime]
+        for pattern in ("*/trace.log", "*/results.jsonl", "manifest.json",
+                        "*/tasks/*/trace.log"):
+            for path in run.glob(pattern):
+                try:
+                    stamps.append(path.stat().st_mtime)
+                except OSError:
+                    pass
+        return max(stamps)
+
+    return max(dirs, key=touched)
+
+
 def main(argv):
     args = [a for a in argv[1:] if not a.startswith("-")]
     flags = {a for a in argv[1:] if a.startswith("-")}
@@ -1240,12 +1426,10 @@ def main(argv):
         want = Path(args[0])
         run = want if want.is_dir() else RUNS / args[0]
     else:
-        runs = sorted((p for p in RUNS.glob("*/") if p.is_dir()),
-                      key=lambda p: p.stat().st_mtime, reverse=True)
-        if not runs:
+        run = newest_run()
+        if run is None:
             print(f"no runs under {RUNS}", file=sys.stderr)
             return 1
-        run = runs[0]
     if not run.is_dir():
         print(f"no such run: {run}", file=sys.stderr)
         return 1

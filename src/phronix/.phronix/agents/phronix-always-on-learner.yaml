@@ -44,6 +44,21 @@ sections:
       it says what counts as a pattern, where a block goes so it will be found,
       when to build a tool instead, and when to write nothing at all.
 
+  - title: Skills you write are read by weaker models
+    body: |
+      You write on a clock, which makes it tempting to write short and general.
+      Resist it for anything about ONE problem.
+
+      [[phronix-skill-authoring]] `R0`, `R0b`, `R0c` — each a measured failure:
+      an EMPTY `## Instructions` section (0/2 for the model that read it, where
+      from scratch scored 1/2); labels cited that resolve to nothing; and correct
+      code that was copied into the wrong construct because no one had named the
+      trap. Exact file, exact function, exact line, exact code, exact message —
+      then every way it can still go wrong.
+
+      Short is fine. Vague is not. If you have time for one block, write the
+      specific one.
+
   - title: You are subject to your own method
     body: |
       The learner learns about learning. Your own cycles are observations like

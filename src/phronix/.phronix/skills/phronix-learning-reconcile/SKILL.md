@@ -16,6 +16,8 @@ type: skill
 | `I3` | Instructions | Reference instead of restating |
 | `I4` | Instructions | Retire what has been falsified |
 | `I5` | Instructions | Improve the learner's own skills |
+| `R0` | Rules | A skill that solves a problem must say how to solve it |
+| `R0c` | Rules | Merging must not make a solution skill more general |
 | `R1` | Rules | Merging is lossy; keep the sharper wording |
 | `R2` | Rules | Never rewrite what a stage is reading |
 | `R3` | Rules | A skill that is only reorganised was not reconciled |
@@ -127,6 +129,44 @@ Read those. When a way of learning repeatedly fails or repeatedly works, write i
 Under the same constraint as everything else: only what repeated, and only where it will be found. A learner that rewrites its own method every cycle is not improving, it is drifting — the bar is a pattern across cycles, not a single awkward one.
 
 ## Rules
+
+### R0 — A skill that solves a problem must say how to solve it
+
+[[phronix-skill-authoring]] `R0` is the rule and carries the evidence, and `R0b` is its companion: every label you cite must resolve — a bare `X15` means a section of THIS skill, and a research record's approach identifier is not one. In short:
+whatever else you record, the `## Instructions` must contain the steps that fix
+the problem — file, function, line, and what to change it to. Not a description
+of the bug, not an argument about which finding is current.
+
+Measured: a skill written for `pallets__flask-4045` held the complete correct
+answer inside 7,433 characters of Rules and References with an EMPTY
+Instructions section, and cited an `I1` that did not exist. The model handed it
+scored 0/2; the same task from scratch scored 1/2 on its first try. Reuse was
+worse than nothing.
+
+Read it back before you finish: could someone fix this from the Instructions
+alone?
+
+### R0c — Merging must not make a solution skill more general
+
+[[phronix-skill-authoring]] `R0c`. Reconciliation is where specificity is most
+easily lost: two blocks saying nearly the same thing invite a summary, and a
+summary of "raise ValueError in Blueprint.__init__ before self.name = name" and
+"raise ValueError in add_url_rule for endpoint" is "validate names" — which
+fixes nothing.
+
+Merge by keeping BOTH specifics under one block, never by abstracting over them.
+If the merged wording no longer names a file, a function and a line, you have
+destroyed the skill while tidying it.
+
+Carry the failures forward too. You hold what nobody downstream has: which
+candidate scored what. "Converting only `Blueprint.__init__` and not the two
+`add_url_rule` sites scores 1/2, not partial credit toward 2/2" is worth more
+than any number of retired claims — and it is exactly what gets dropped when a
+pass optimises for tidiness.
+
+Measured: a skill carrying the literal correct code was read by a smaller model,
+which reproduced its message string verbatim and still wrote `assert` where the
+test wanted `raise ValueError` — 0/2.
 
 ### R1 — Merging is lossy; keep the sharper wording
 

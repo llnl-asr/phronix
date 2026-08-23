@@ -24,8 +24,10 @@ produce your input, and a solution cut off half-written wastes all of it.
 | `I3` | Instructions | Only what needs judgement stays as a skill |
 | `I4` | Instructions | Build from all three findings, including the failures |
 | `I5` | Instructions | Say which problem it solved, in the skill's own words |
+| `I5b` | Instructions | List the corner cases before you finish |
 | `I6` | Instructions | Attach it so it will be found |
 | `X1` | References | Do not explore here |
+| `R0` | Rules | A skill that solves a problem must say how to solve it |
 | `R1` | Rules | Why this stage has no clock |
 
 ## Instructions
@@ -101,6 +103,31 @@ reader can tell whether it is their problem — no matching heuristic in the
 middle deciding for them, and no confident answer when the truth is "related,
 but not the same".
 
+### I5b — List the corner cases before you finish
+
+Go back through the pipeline you just wrote and, for every step, answer: what
+will a smaller model plausibly write instead of this, and why would that fail?
+Write each answer into the skill next to the step it protects.
+
+You have the evidence to do this and nobody downstream does — you watched the
+trials. Every candidate that failed is a wrong reading somebody actually had, so
+say what it was and what it cost:
+
+* the construct that looks equivalent and is not (`assert` where the test wants
+  `raise ValueError`; `==` where the code needs `is`)
+* the subset that looks sufficient and is not — name each site the fix needs,
+  and say what applying only some of them scores
+* the neighbouring style that will be copied — "the `assert`s already in this
+  function are exactly what must change"
+* the test that a CORRECT fix breaks, so the reader does not treat their own
+  right answer as a mistake and undo it
+
+Be specific to this task. Anything you write that would still be true of a
+different bug in a different project is not worth the line. [[phronix-skill-authoring]]
+`R0c` has the measured case: a skill carrying the exact correct code was read by
+a weaker model, which reproduced the message string verbatim and still wrote
+`assert` instead of `raise ValueError`, scoring 0/2.
+
 ### I6 — Attach it so it will be found
 
 The skill is only worth writing if a later task retrieves it. Give it the
@@ -112,6 +139,21 @@ with `research_record_pipeline` / `research_adopt_pipeline` so the pipeline is
 data and not only prose.
 
 ## Rules
+
+### R0 — A skill that solves a problem must say how to solve it
+
+[[phronix-skill-authoring]] `R0` is the rule and carries the evidence, and `R0b` is its companion: every label you cite must resolve — a bare `X15` means a section of THIS skill, and a research record's approach identifier is not one. It bears
+repeating here because this stage is where solution skills are born: the
+`## Instructions` must contain the steps that fix the problem — file, function,
+line, and what to change it to.
+
+Measured: the skill written for `pallets__flask-4045` held the complete correct
+answer inside 7,433 characters of Rules and References with an EMPTY
+Instructions section, and cited an `I1` that did not exist. The model handed it
+scored 0/2; the same task from scratch scored 1/2 on its first try.
+
+Read it back before you finish: could someone fix this from the Instructions
+alone?
 
 ### R1 — Why this stage has no clock
 

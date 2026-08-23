@@ -11,9 +11,12 @@ type: skill
 | --- | --- | --- |
 | `I1` | Instructions | Read the table as evidence about the ranking |
 | `I2` | Instructions | Something worked: merge, keeping the winner's spine |
+| `I2b` | Instructions | Exactly one worked: merge, keeping the winner's spine |
 | `I3` | Instructions | Nothing worked: find the shared assumption |
+| `I3b` | Instructions | Carry every failure forward as a named corner case |
 | `I4` | Instructions | Score the result on outcome, cost, and transfer |
 | `R1` | Rules | A losing approach is not wrong in every part |
+| `R0` | Rules | A skill that solves a problem must say how to solve it |
 | `R2b` | Rules | The subject's skill is the way in to the candidates |
 | `R2` | Rules | Do not refine the least-bad candidate |
 | `X1` | References | Why all-failed is the more informative case |
@@ -72,6 +75,20 @@ Several independent approaches failing is evidence about the **subject**: they s
 3. Say which of the failures the claim explains. One that explains one failure out of four is probably not it.
 4. Then produce candidates against the corrected understanding and record them with `research_add_approach`.
 
+### I3b — Carry every failure forward as a named corner case
+
+You are holding the one thing no later reader will have: a table of what was
+tried and what each attempt scored. A losing candidate is a wrong reading that
+someone actually had, and the merged skill is where it becomes a warning.
+
+For each candidate that failed, write into the skill: what it did, why it looked
+right, and what it scored. Name the specific construct, site or subset — not
+"be careful with exceptions" but "converting only `Blueprint.__init__` and not
+the two `add_url_rule` sites scores 1/2, not partial credit toward 2/2".
+
+Discarding this is how the next model repeats an attempt you already paid for.
+[[phronix-skill-authoring]] `R0c` carries the measured case.
+
 ### I4 — Score the result on outcome, cost, and transfer
 
 State all three plainly for whatever you write, in this order:
@@ -85,6 +102,22 @@ State all three plainly for whatever you write, in this order:
 A skill that solves one instance and generalises to none is worth less than a slightly slower one that transfers. The next task inherits the skill, not the instance.
 
 ## Rules
+
+### R0 — A skill that solves a problem must say how to solve it
+
+[[phronix-skill-authoring]] `R0` is the rule and carries the evidence, and `R0b` is its companion: every label you cite must resolve — a bare `X15` means a section of THIS skill, and a research record's approach identifier is not one. In short:
+whatever else you record, the `## Instructions` must contain the steps that fix
+the problem — file, function, line, and what to change it to. Not a description
+of the bug, not an argument about which finding is current.
+
+Measured: a skill written for `pallets__flask-4045` held the complete correct
+answer inside 7,433 characters of Rules and References with an EMPTY
+Instructions section, and cited an `I1` that did not exist. The model handed it
+scored 0/2; the same task from scratch scored 1/2 on its first try. Reuse was
+worse than nothing.
+
+Read it back before you finish: could someone fix this from the Instructions
+alone?
 
 ### R2b — The subject's skill is the way in to the candidates
 

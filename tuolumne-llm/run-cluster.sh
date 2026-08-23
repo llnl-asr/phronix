@@ -62,7 +62,31 @@ CFG=$RUNDIR/litellm.yaml
   cat <<'YAML'
 router_settings:
   routing_strategy: least-busy
-  num_retries: 2
+  num_retries: 3
+  # Retry a 500, and never cool a replica down for producing one.
+  #
+  # gpt-oss occasionally emits a channel name llama.cpp's harmony parser does
+  # not accept — `<|channel|>comment to=functions.Read` where the grammar
+  # wants `commentary` — and llama.cpp fails the whole request with
+  #   500 "The model produced output that does not match the expected
+  #        peg-native format"
+  # It is a sampling fluke, not a sick replica: the same prompt sent again
+  # almost always parses. Measured on one benchmark run: 3,700 such 500s, of
+  # which 1,906 were on the /v1/messages path Claude Code uses — every one
+  # killing an agent mid-task and reported as "agent produced no patch".
+  #
+  # `allowed_fails` matters as much as the retry. LiteLLM cools a deployment
+  # down after a few failures, so a fault that hits every replica at random
+  # walks the whole fleet into cooldown and funnels the load onto whichever
+  # replica is left — which is what "1 busy, 126 idle, 30 queued" looked like
+  # while 126 GPUs sat doing nothing.
+  retry_policy:
+    InternalServerErrorRetries: 3
+    TimeoutErrorRetries: 2
+    RateLimitErrorRetries: 2
+    BadRequestErrorRetries: 0
+  allowed_fails: 1000
+  cooldown_time: 30
 litellm_settings:
   drop_params: true
   request_timeout: 1800
@@ -113,6 +137,19 @@ HEAD=$GW_HOST
       "$RUNDIR" "$MODEL_KEY" "$MODEL_ALIAS" "$PROFILE"
   printf '  "gateway": {"host": "%s", "port": %s, "job": "%s", "key": "sk-tuolumne"},\n' \
       "$GW_HOST" "$GATEWAY_PORT" "$gwid"
+  # Slots per replica, so a client can size its own concurrency.
+  #
+  # A slot is one conversation with a private prompt cache, and under `solo`
+  # there is exactly one per GPU on purpose — the cache is per slot, so two
+  # agents sharing a slot evict each other and pay full prefill (11.1s) where a
+  # cached prefix costs 0.3s. That makes slots, not GPUs and not replicas, the
+  # unit of real capacity: the number of agent conversations this fleet can hold
+  # at once without any of them losing its cache. A benchmark that wants to know
+  # how many agents to run had to guess it from the profile name; now it reads
+  # it.
+  printf '  "slots_per_replica": %s,\n  "slots": %s,\n' \
+      "${LLAMA_SLOTS:-1}" \
+      "$(( $(ls "$RUNDIR"/nodes/*.json 2>/dev/null | wc -l) * ${LLAMA_SLOTS:-1} ))"
   printf '  "servers": [\n'
   cat "$RUNDIR"/nodes/*.json | paste -sd, - | sed 's/,/,\n    /g; s/^/    /'
   printf '\n  ]\n}\n'

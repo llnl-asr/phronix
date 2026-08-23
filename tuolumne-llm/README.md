@@ -93,6 +93,7 @@ Environment knobs for `run-cluster.sh`:
 | `gpu-server.sh` | one `llama-server` on the GPU Flux bound to the job |
 | `gateway-node.sh` | LiteLLM proxy, run as a Flux job on a compute node |
 | `status.sh` | top-like live view: throughput, load, and balance (`a` = all replicas, `q` = quit) |
+| `session.sh` | what the fleet did over a named window — tokens, prompt-cache reuse, utilisation, balance |
 | `bench.sh` | concurrency load generator, aggregate tok/s |
 | `stop.sh` | cancels the jobs, then reaps orphans on every node |
 | `reap-node.sh` | per-node reaper, by pidfile and by exact executable |
@@ -106,6 +107,59 @@ default, so the project always has a handle on the live fleet:
   "gateway": {"host": "tuolumne1171", "port": 4000, "job": "...", "key": "sk-tuolumne"},
   "servers": [ {"host": "...", "gpu": 0, "port": 8050, "pid": 3270626, "pidfile": "..."} ] }
 ```
+
+## Measuring a window: sessions
+
+Every llama-server counter is cumulative since that server booted, so the live
+view can only say *what is happening now* and *what has happened since the fleet
+came up*. Neither is what a benchmark asks, which is **what did the fleet do
+while my run was going** — and the fleet is up before the run starts and stays up
+after it ends.
+
+```bash
+tuolumne-llm/session.sh start bench-0822      # mark now; start sampling
+tuolumne-llm/session.sh report                # the window so far, without closing it
+tuolumne-llm/session.sh stop                  # close it and print the report
+tuolumne-llm/session.sh list                  # sessions on disk, newest first
+```
+
+Sessions live in `$LLM_ROOT/logs/sessions/<name>/`; the open one is
+`sessions/current`, which is why `start` and `stop` take no arguments in a script
+that brackets itself. While a session is open, `status.sh` prints it above the
+live figures, so one display answers all three questions.
+
+```
+session bench-claude-0822-083912  [OPEN]  gpt-oss-120b  profile solo
+  window       1m35s  (08:43:13 -> 08:44:48)  8/8 replica(s) up
+  tokens       prompt   185.0k   generated    27.9k   total   213.0k
+  fleet rate   prompt     1947 tok/s   generated      294 tok/s   (over the whole window)
+  when busy    prefill     1924 tok/s   decode      122 tok/s   (prefill 12.7% of fleet-seconds, decode 30.2%)
+  prompt cache  96.9% of prompt tokens reused   (2.4M of 2.5M over 46 sampled request(s))
+  concurrency  mean   4.1 in flight   peak   5   deferred peak   8   fleet busy 100% of 16 sample(s)
+  utilisation   51.6% of 8 replica-slot(s) occupied on average
+  balance      0.595 Jain over 8 replicas (lopsided)
+```
+
+Two kinds of number, and the report keeps them apart because they are not
+equally trustworthy:
+
+* **Counters are differenced** — tokens, prefill and decode seconds, decode
+  iterations. End minus start, exact. A replica that restarted mid-session resets
+  its counters, so its delta would go negative; those are counted as restarts,
+  charged their post-restart total, and named in the header rather than silently
+  clamped.
+* **Gauges and the prompt cache are sampled** every 5s (`SESSION_INTERVAL`).
+  llama.cpp publishes no cache counter at all — the figure comes from `/slots`,
+  where each busy slot reports `n_prompt_tokens_cache` for the request it is
+  serving — so the hit rate is over *requests observed*, and a request that
+  starts and finishes between two samples is invisible. A good estimate on a
+  large sample, not an audit.
+
+**Fleet rate versus when-busy** is the pair worth reading together: the first
+divides by the whole window, the second by the seconds the GPUs actually spent
+prefilling or decoding. Reporting only one makes an idle fleet look slow, or a
+slow one look idle. `utilisation` is against replica *slots*, so on the `solo`
+profile (one slot per GPU) 8 in flight across 8 replicas is full, not merely busy.
 
 ## Watching the cluster
 

@@ -214,6 +214,19 @@ class TaskResult:
         return sum(a.cost_usd for a in self.attempts)
 
     @property
+    def cost_total_usd(self) -> float:
+        """Everything this task charged the account: solve, research, learning.
+
+        `cost_usd` is the solve agent alone — deliberately, so "phronix costs
+        more" and "phronix's RESEARCH costs more" stay separable. But anything
+        asking what a task BILLED wants this one: measured on a single task,
+        solve was $0.70 of a $2.34 total, because research ran 4.5M tokens
+        against solve's 1.3M. Reading `cost_usd` as the bill understates it
+        roughly threefold.
+        """
+        return sum(getattr(a, "cost_total_usd", a.cost_usd) for a in self.attempts)
+
+    @property
     def wall_s(self) -> float:
         return sum(a.wall_s for a in self.attempts)
 
@@ -229,6 +242,10 @@ class TaskResult:
             "tokens_learn": self.tokens_learn,
             "tokens_research": self.tokens_research,
             "cost_usd": round(self.cost_usd, 6),
+            # Carried into results.jsonl so anything reading a finished run —
+            # the grouping report, a spend audit — sees the bill rather than
+            # the solve agent's share of it.
+            "cost_total_usd": round(self.cost_total_usd, 6),
             "wall_s": round(self.wall_s, 1),
         }
 

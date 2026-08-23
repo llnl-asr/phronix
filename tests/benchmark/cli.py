@@ -313,6 +313,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         max_tries=args.max_tries, timeout_s=args.timeout,
         isolation=args.isolation, fresh=not args.no_fresh, pull=not args.no_pull,
         carry_root=("" if args.no_carry else (args.carry_root or default_carry_root())),
+        max_spend_usd=float(getattr(args, "max_spend", 0.0) or 0.0),
         # Research is the fallback, not the opening move, unless asked.
         research_on_retry=args.research_on_retry or not args.research_first,
         research_first=args.research_first,
@@ -579,6 +580,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--arms", default=",".join(ARM_ORDER))
     run.add_argument("--limit", type=int, default=0, help="Truncate the task list.")
     run.add_argument("--max-tries", type=int, default=3)
+    run.add_argument("--max-spend", type=float, default=0.0, metavar="USD",
+                     help="Stop starting new tasks once this much has been "
+                          "charged. Checked at the door of every task, so the "
+                          "overrun is bounded by one task. 0 disables the cap.")
     run.add_argument("--timeout", type=int, default=1800, help="Per-attempt seconds.")
     run.add_argument("--model", default=DEFAULT_MODEL)
     run.add_argument("--provider", default=DEFAULT_PROVIDER)

@@ -1,16 +1,10 @@
 ---
 name: flask-blueprint-name-validation
-description: Disallow dots in blueprint names using explicit check, not assert.
+description: Superseded — see flask-blueprint-name-dot-validation-research for the complete (all-three-checks) fix.
 metadata:
-  type: project
+  type: reference
 ---
 
-**Why:** Using `assert` for input validation can be disabled with the `-O` flag and raises `AssertionError`, which may not match expected error types. This caused test failures for blueprint name validation.
-**How to apply:** Replace `assert '.' not in name, 'Blueprint name should not contain dots'` with:
-```python
-if '.' in name:
-    raise ValueError('Blueprint name must not contain dots')
-```
-This ensures validation always runs and raises a consistent exception.
+This memory only covered the blueprint-name check in isolation and did not mention the endpoint/view_func checks in `add_url_rule` also needing conversion from `assert` to `ValueError`. Superseded by [[flask-blueprint-name-dot-validation-research]], which records the complete, upstream-confirmed fix (all three checks, PR #4045). Kept for backlink continuity; treat the other memory as canonical.
 
-[[flask-blueprint-name-validation]]
+[[flask-blueprint-name-dot-validation-research]]

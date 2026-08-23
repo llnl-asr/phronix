@@ -83,8 +83,14 @@ RUNDIR=$LLM_ROOT/logs/run-$(date +%Y%m%d-%H%M%S)
 mkdir -p "$RUNDIR/nodes"
 ln -sfn "$RUNDIR" "$LLM_ROOT/logs/latest"
 
-read -r -a HOSTS <<< "$(flux hostlist -e "$(flux getattr hostlist)")"
+read -r -a ALL_HOSTS <<< "$(flux hostlist -e "$(flux getattr hostlist)")"
+# NNODES serves on a PREFIX of the allocation, leaving the rest free for other
+# work (the benchmark's containers, say). Unset means the whole allocation.
+HOSTS=("${ALL_HOSTS[@]:0:${NNODES:-${#ALL_HOSTS[@]}}}")
 NNODES=${#HOSTS[@]}
+# Every `flux run -N$NNODES` below must land on THESE nodes, not on any N the
+# scheduler likes: staging to and polling the wrong nodes is silent and wrong.
+HOSTSPEC="host:$(IFS=,; echo "${HOSTS[*]}")"
 
 echo "nodes    : $NNODES (${HOSTS[*]})"
 echo "profile  : $PROFILE   sampling: $SAMPLING   effort: $GPTOSS_EFFORT (budget $GPTOSS_THINK_BUDGET)"
@@ -109,7 +115,7 @@ stage_one() {  # $1 = model key
     # Which nodes are missing it? Skipping the ones that have it is what makes
     # redeploying cheap.
     local missing
-    missing=$(flux run -N "$NNODES" --tasks-per-node 1 -t 5m \
+    missing=$(flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 5m \
         bash -c "got=\$(du -s --block-size=1 '$MODEL_CACHE/$leaf' 2>/dev/null | cut -f1)
                  [ \"\${got:-0}\" -ge '$size' ] || hostname" 2>/dev/null | sort -u | tr '\n' ' ')
     missing=${missing// /}
@@ -141,7 +147,7 @@ stage_one() {  # $1 = model key
     done
     for pid in "${pids[@]}"; do wait "$pid"; done
 
-    flux run -N "$NNODES" --tasks-per-node 1 -t 10m \
+    flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 10m \
         bash -c "got=\$(du -s --block-size=1 '$MODEL_CACHE/$leaf' 2>/dev/null | cut -f1)
                  if [ \"\${got:-0}\" -ge '$size' ]; then echo \"    \$(hostname): ok\"
                  else echo \"    \$(hostname): INCOMPLETE \${got:-0}/$size\"; fi" 2>&1 | sort
@@ -283,7 +289,7 @@ echo "=== waiting for the fleet"
 deadline=$((SECONDS + ${READY_TIMEOUT:-1200}))
 total=$((NNODES * GPUS_PER_NODE))
 while (( SECONDS < deadline )); do
-    ready=$(flux run -N "$NNODES" --tasks-per-node 1 -t 5m bash -c "
+    ready=$(flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 5m bash -c "
         n=0
         for g in \$(seq 0 $((GPUS_PER_NODE - 1))); do
             curl -sf -m 4 -o /dev/null http://localhost:\$(($BASE_PORT + g))/health && n=\$((n+1))

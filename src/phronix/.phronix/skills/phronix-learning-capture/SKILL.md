@@ -14,6 +14,8 @@ type: skill
 | `I3` | Instructions | Update in place, or write one new block |
 | `I4` | Instructions | Build a tool when the procedure is deterministic |
 | `I5` | Instructions | Report your own cycle, so the learner can improve |
+| `R0` | Rules | A skill that solves a problem must say how to solve it |
+| `R0c` | Rules | A solution skill is as specific as you can make it |
 | `R1` | Rules | Capture is additive; merging is the other tier's job |
 | `R2` | Rules | Write for the kind of work, not for the task |
 | `R3` | Rules | Say what failed, not what to abandon |
@@ -74,15 +76,55 @@ Report it as you would any observation: `worked=false` when the cycle went wrong
 
 ## Rules
 
+### R0 — A skill that solves a problem must say how to solve it
+
+[[phronix-skill-authoring]] `R0` is the rule and carries the evidence, and `R0b` is its companion: every label you cite must resolve — a bare `X15` means a section of THIS skill, and a research record's approach identifier is not one. In short:
+whatever else you record, the `## Instructions` must contain the steps that fix
+the problem — file, function, line, and what to change it to. Not a description
+of the bug, not an argument about which finding is current.
+
+Measured: a skill written for `pallets__flask-4045` held the complete correct
+answer inside 7,433 characters of Rules and References with an EMPTY
+Instructions section, and cited an `I1` that did not exist. The model handed it
+scored 0/2; the same task from scratch scored 1/2 on its first try. Reuse was
+worse than nothing.
+
+Read it back before you finish: could someone fix this from the Instructions
+alone?
+
+### R0c — A solution skill is as specific as you can make it
+
+[[phronix-skill-authoring]] `R0c` is the rule. For anything you write about ONE
+problem: the exact file, the exact function, the line it goes before or after,
+the exact code, the exact message string. A reader should never have to decide
+something you already decided.
+
+Then name every way it can still go wrong — the construct that looks equivalent
+and is not, the subset that looks sufficient and is not, the neighbouring style
+that will be copied, the passing test a CORRECT fix breaks. You know these
+because you watched the attempts; nobody downstream does.
+
+Measured: a skill carrying the literal correct code was read by a smaller model,
+which reproduced its message string verbatim and still wrote `assert` where the
+test wanted `raise ValueError` — 0/2, the right change in the right places in
+the wrong construct. Nothing had said "it must be `ValueError`, and the
+`assert`s beside it are the trap."
+
 ### R1 — Capture is additive; merging is the other tier's job
 
 You run every ten seconds. Write the block, update the block you found, move on. Do not restructure a skill, do not merge two blocks that overlap, do not reorganise an index — `phronix-learning-reconcile` runs every minute and that is its work.
 
 Splitting it this way is what lets capture be aggressive: nothing you add can accumulate, because a compaction pass is always a minute behind you.
 
-### R2 — Write for the kind of work, not for the task
+### R2 — Write for the kind of work, not for the task — in a METHOD skill
 
 "A subprocess whose output you parse needs stderr merged, or the parse loses the error" is a lesson about `bash` that every later task inherits. "pylint-7080 needed stderr merged" helps one instance and is already recorded in that task's own skill.
+
+**This is about WHICH skill a lesson goes in, not about writing vaguely.** A
+method skill covers a kind of work and generalises. A solution skill covers ONE
+problem and must not: there, generality is the defect — see `R0c`. The same
+finding is written twice in different registers, and the mistake is putting the
+general form in the problem's own skill, where a reader needs the specific one.
 
 ### R3 — Say what failed, not what to abandon
 

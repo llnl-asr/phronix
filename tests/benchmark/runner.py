@@ -75,6 +75,12 @@ class RunConfig:
     #: Empty disables carry-over entirely and every run starts from the bundled
     #: skeleton, which is what makes a run comparable to published numbers.
     carry_root: str = ""
+    #: Stop starting tasks once this many dollars have been charged. 0 = no cap.
+    #
+    # A cap on spend, not on tasks: one task here cost $2.34 with three tries
+    # while a first-try pass costs a third of that, so `--limit` bounds the task
+    # count and cannot bound the bill.
+    max_spend_usd: float = 0.0
     pull: bool = True
     out: Path = Path("runs/latest")
     image_template: str = ""
@@ -977,6 +983,11 @@ class Runner:
     def __init__(self, config: RunConfig, instances: Dict[str, Dict[str, Any]]) -> None:
         self.config = config
         self.instances = instances
+        #: Dollars charged so far, and the lock that keeps the count honest when
+        #: arms and tasks run concurrently. Both arms bill the same account, so
+        #: the ceiling is per RUN rather than per arm.
+        self._spent_usd = 0.0
+        self._spend_lock = threading.Lock()
         self.out = Path(config.out)
         self.out.mkdir(parents=True, exist_ok=True)
         # Image store on the PFS, never $HOME — see tests/benchmark/paths.py.
@@ -1154,7 +1165,26 @@ class Runner:
         finally:
             self._sync_research_session()
 
-    def _sync_research_session(self, quiet: bool = False) -> None:
+    def _over_budget(self) -> str:
+        """Why this run must not start another task, or "" to continue.
+
+        A cap on DOLLARS rather than on tasks, because the two are only loosely
+        related: one task here cost $2.34 and took three tries, while a task that
+        passes on try 1 costs a third of that. `--limit` bounds the task count
+        and cannot bound the bill.
+        """
+        ceiling = float(getattr(self.config, "max_spend_usd", 0.0) or 0.0)
+        if ceiling <= 0:
+            return ""
+        with self._spend_lock:
+            spent = self._spent_usd
+        if spent < ceiling:
+            return ""
+        return (f"spend ceiling reached: ${spent:.2f} of ${ceiling:.2f} — "
+                f"remaining tasks skipped")
+
+    def _sync_research_session(self, quiet: bool = False,
+                               store_root: Optional[Path] = None) -> None:
         """Fold this run's research into the common, checked-in folder.
 
         Automatic, and in a ``finally``, because the runs whose research is most
@@ -1177,7 +1207,26 @@ class Runner:
         previous = {k: os.environ.get(k) for k in
                     ("PHRONIX_PROJECT_ROOT", "PHRONIX_RESEARCH_SESSION")}
         try:
-            os.environ["PHRONIX_PROJECT_ROOT"] = str(Path(self.config.carry_root).parent)
+            # Where the session's records ACTUALLY are.
+            #
+            # They are written to the run's own store — `<run>/<arm>/store/
+            # .phronix/research/sessions/<id>/` — because a session must not be
+            # able to read its way out of its isolation. This pointed at the
+            # carry root instead, which has no `sessions/` at all, so the fold
+            # returned "no such session" every time and nothing was ever synced.
+            #
+            # `promote_store` then skips `research/sessions/` on purpose, on the
+            # understanding that this function has already folded them into the
+            # common folder. It had not. So the records were skipped by one step
+            # and never reached by the other, and every run's research died with
+            # its run directory: measured on `claude-0822-175928`, which SOLVED
+            # its task and left the carry root with one unrelated record.
+            #
+            # Fold inside the run store, then let `promote_store` carry the
+            # common folder up as it already does for skills.
+            os.environ["PHRONIX_PROJECT_ROOT"] = str(
+                store_root if store_root is not None
+                else Path(self.config.carry_root).parent)
             os.environ["PHRONIX_RESEARCH_SESSION"] = session
             result = research.sync_session(session)
             if result.get("synced") and not quiet:
@@ -1392,8 +1441,32 @@ class Runner:
 
         def one(job):
             order, instance = job
+            # Stop before starting, not after finishing.
+            #
+            # A ceiling checked after the work is a report, not a control. This
+            # is checked at the door of every task, so the overrun is bounded by
+            # ONE task rather than by however many were still queued — measured
+            # at $2.34 and 47 minutes for a single task with three tries, so the
+            # difference between the two is the whole bill.
+            over = self._over_budget()
+            if over:
+                result = TaskResult(instance_id=str(instance.get("instance_id", "")),
+                                    repo=str(instance.get("repo", "")),
+                                    arm=arm_name)
+                result.stopped_early = over
+                if tracer:
+                    tracer.event("BUDGET", over)
+                print(f"  [{order:3d}] {result.instance_id:38s} SKIPPED — {over}",
+                      flush=True)
+                return order, result
+
             result = self.run_task(arm, instance, order, store_root,
                                    arm_dir, ledger, tracer)
+            with self._spend_lock:
+                # `cost_total_usd`, never `cost_usd`: the latter is the solve
+                # agent alone and research is the larger half — $0.70 of a $2.34
+                # task. A ceiling fed the wrong one overshoots roughly 3x.
+                self._spent_usd += float(result.cost_total_usd or 0.0)
 
             # The task's own result file, written by the only thread that owns
             # that directory. No lock, no shared file, nothing to interleave —
@@ -1817,6 +1890,23 @@ class Runner:
             # so the run produced a report showing one arm at 1/6 and the other
             # at 0/6, which reads as a result rather than as a crash.
             if self.config.carry_root:
+                # Fold FIRST, then promote. The order is load-bearing.
+                #
+                # `promote_store` skips `research/sessions/` by design, on the
+                # understanding that the fold has already moved those records
+                # into the run store's common `research/` folder. Promoting
+                # before folding carries a folder this task has not been written
+                # into yet, so its research is left behind by exactly one step —
+                # which is what happened to every run so far.
+                #
+                # Sync after every task, not only at the end of the run.
+                # Whatever this task learned is durable the moment it is learned;
+                # holding it in the session folder until the run finishes means a
+                # run that is killed — and several have been — contributes
+                # nothing, which is exactly when its findings matter most. It
+                # also lets task N+1 of a reusing run start from task N's work
+                # through the common folder rather than only through the session.
+                self._sync_research_session(quiet=True, store_root=store_root)
                 try:
                     promoted = promote_store(store_root,
                                              Path(self.config.carry_root))
@@ -1828,16 +1918,6 @@ class Runner:
                 except Exception as exc:
                     if tracer:
                         tracer.event("promote-failed", str(exc)[:200])
-
-                # Sync after every task, not only at the end of the run.
-                #
-                # Whatever this task learned is durable the moment it is learned;
-                # holding it in the session folder until the run finishes means a
-                # run that is killed — and several have been — contributes
-                # nothing, which is exactly when its findings matter most. It
-                # also lets task N+1 of a reusing run start from task N's work
-                # through the common folder rather than only through the session.
-                self._sync_research_session(quiet=True)
         return result
 
     def _race_plans(self, arm, instance, store_root, attempt_dir, plans,

@@ -97,6 +97,35 @@ sections:
 
       A good lesson lets someone who has never seen the problem recognise it and
       fix it without repeating the diagnosis.
+
+      **When you write a skill for ONE problem, be as explicit as you possibly
+      can.** [[phronix-skill-authoring]] `R0`, `R0b` and `R0c` are the rules and
+      they are not style preferences — each one is a measured failure:
+
+      - `R0` — the `## Instructions` section must contain the steps that fix it:
+        exact file, exact function, the line it goes before or after, the exact
+        code, the exact message string. A skill of 7,433 characters with an EMPTY
+        Instructions section — all Rules and References, arguing about which
+        earlier finding superseded which — scored the model that read it **0/2**,
+        where the same task from scratch scored 1/2 on its first try. Reuse was
+        worse than nothing.
+      - `R0b` — every label you cite must resolve. A bare `X15` means a section
+        of THIS skill; a research record's approach identifier is not one.
+      - `R0c` — name every way it can still go wrong. A skill carrying the
+        literal correct code was read by a smaller model, which reproduced its
+        message string verbatim and still wrote `assert` where the test wanted
+        `raise ValueError` — **0/2**, the right change in the right places in the
+        wrong construct. Nothing had said "it must be `ValueError`, and the
+        `assert`s beside it are the trap."
+
+      Specificity is the whole value. Anything you write that would still be true
+      of a different bug in a different project belongs in a METHOD skill, not in
+      this problem's — see [[phronix-learning-capture]] `R2` for the split. In a
+      solution skill, generality is the defect.
+
+      You are the only one who saw the attempts. Every candidate that failed is a
+      wrong reading somebody actually had: write it down with what it scored, or
+      the next model pays for it again.
   - include: retrieve-context-first
   - include: context-economy
   - include: self-learning

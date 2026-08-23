@@ -4475,3 +4475,129 @@ def test_a_capability_lists_with_what_it_says_it_does():
         ''')
     match = re.search(r'\n\s+def\s+\w+\([^)]*\)[^:]*:\s*"""(.*?)"""', source, re.S)
     assert match and match.group(1).startswith("Do the thing")
+
+
+def test_a_solved_task_is_recognised_by_a_later_run(tmp_path, monkeypatch):
+    """Reuse must find the skill for the task it is about to attempt.
+
+    Measured: `pallets__flask-4045` was SOLVED, `skills/pallets-flask-4045/` was
+    carried into the project layer, and the next run reported "no skill covers
+    this task; solving from scratch" — then recalled
+    `flask-routes-subdomain-display`, which belongs to a different bug.
+
+    The cause was that both lookup paths went through the research record, and a
+    record does not survive a run unless its session was folded into the common
+    folder.
+    """
+    from tests.benchmark import arms
+
+    arm = arms.PhronixOpenCodeArm.__new__(arms.PhronixOpenCodeArm)
+    skills = tmp_path / "skills"
+    # No record at all: exactly the state a fresh run inherits.
+    monkeypatch.setattr(arm, "_in_store", lambda root, fn, *a, **k: "")
+
+    (skills / "pallets-flask-4045").mkdir(parents=True)
+    (skills / "pallets-flask-4045" / "SKILL.md").write_text("# topic skill\n")
+    assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == "pallets-flask-4045"
+
+    # A candidate written by a previous pass outranks the bare topic skill: it
+    # is the one that was actually raced against the tests.
+    cand = skills / "solution-pallets-flask-4045-reject-dotted-name"
+    cand.mkdir(parents=True)
+    (cand / "SKILL.md").write_text("# candidate\n")
+    assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == cand.name
+
+    # The merged solution outranks both — it carries the answer plus links to
+    # every candidate tried.
+    merged = skills / "solution-pallets-flask-4045"
+    merged.mkdir(parents=True)
+    (merged / "SKILL.md").write_text("# merged\n")
+    assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == merged.name
+
+    # A different problem must still find nothing — this is a lookup by the
+    # naming convention, not a fuzzy match on words the tasks share.
+    assert arm.best_skill_for(tmp_path, "pallets__flask-5063") == ""
+
+    # An explicit record pointer still wins over convention.
+    monkeypatch.setattr(arm, "_in_store", lambda root, fn, *a, **k: "")
+    assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == merged.name
+
+
+def test_the_session_is_folded_from_the_run_store_before_promotion():
+    """Fold, then promote. The order is what carries research between runs.
+
+    `promote_store` skips `research/sessions/` on purpose, on the understanding
+    that the fold has already moved those records into the run store's common
+    `research/` folder. The fold ran against the CARRY root, which has no
+    sessions, so it returned "no such session" every time — and promotion then
+    carried a folder nothing had been written into.
+    """
+    import inspect
+
+    from tests.benchmark.runner import Runner
+
+    sync = inspect.getsource(Runner._sync_research_session)
+    # Folds where the records actually are.
+    assert "store_root" in inspect.signature(Runner._sync_research_session).parameters
+    assert "store_root if store_root is not None" in sync
+
+    # And the caller folds BEFORE promoting, or the promotion is a step early.
+    caller = inspect.getsource(Runner.run_task)
+    assert caller.index("_sync_research_session(quiet=True, store_root=") < \
+        caller.index("promote_store(store_root")
+
+
+def test_a_run_stops_starting_tasks_at_its_spend_ceiling():
+    """A cap on dollars, checked BEFORE each task rather than after.
+
+    `--limit` bounds the task count and cannot bound the bill: one measured task
+    cost $2.34 with three tries, while a first-try pass costs a third of that.
+    And a ceiling checked after the work is a report, not a control — checking at
+    the door bounds the overrun by one task instead of by the whole queue.
+    """
+    import threading
+
+    from tests.benchmark.runner import Runner, RunConfig
+
+    runner = Runner.__new__(Runner)
+    runner._spent_usd = 0.0
+    runner._spend_lock = threading.Lock()
+
+    # No ceiling configured: never blocks, whatever has been spent.
+    runner.config = RunConfig(out="/tmp/x", tasks=[])
+    assert runner.config.max_spend_usd == 0.0
+    runner._spent_usd = 10_000.0
+    assert runner._over_budget() == ""
+
+    runner.config = RunConfig(out="/tmp/x", tasks=[], max_spend_usd=50.0)
+    runner._spent_usd = 49.99
+    assert runner._over_budget() == ""          # under, so the next task starts
+    runner._spent_usd = 50.0
+    stop = runner._over_budget()
+    assert stop and "50.00" in stop and "skipped" in stop
+
+
+def test_the_spend_ceiling_counts_the_whole_bill():
+    """`cost_usd` is the solve agent alone; research is the larger half.
+
+    Measured on one task: solve $0.70 of a $2.34 total, because research ran
+    4.5M tokens against solve's 1.3M. An earlier version of the ceiling read
+    `getattr(result, "cost_total_usd", 0.0)` on a TaskResult that had no such
+    property — so it defaulted to 0.0, never accumulated, and never tripped.
+    """
+    from tests.benchmark.metrics import Attempt, TaskResult
+
+    task = TaskResult(instance_id="x", repo="r", arm="a")
+    first = Attempt(index=1)
+    first.cost_usd, first.research_cost_usd = 0.40, 1.10
+    second = Attempt(index=2)
+    second.cost_usd, second.research_cost_usd = 0.30, 0.54
+    task.attempts = [first, second]
+
+    # The property exists — the bug was that it did not.
+    assert hasattr(task, "cost_total_usd")
+    assert round(task.cost_usd, 2) == 0.70          # solve alone
+    assert round(task.cost_total_usd, 2) == 2.34    # what was actually billed
+
+    # And it reaches results.jsonl, so a grouped report reads the bill.
+    assert round(task.to_dict()["cost_total_usd"], 2) == 2.34

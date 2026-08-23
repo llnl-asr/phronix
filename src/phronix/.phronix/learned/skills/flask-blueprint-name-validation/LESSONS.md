@@ -7,73 +7,20 @@ the other.
 
 ## Pitfalls
 
+### P2 — P2 — P1 is resolved: the "empty" state P1 warned about is now the intended pointer
+
+2026-08-22 — P1 warned reconcile passes not to mistake this skill for empty/orphaned, since SKILL.md's I1 used to hold the verified fix directly. Since then, a reconcile pass (I1b) deliberately rewrote SKILL.md's I1 into a superseded pointer to [[pallets-flask-4045#R1]] and [[flask-blueprint-dot-names]], preserving this LESSONS.md content per I1b's rule. So SKILL.md is now intentionally thin — that is correct, not the mistaken-empty state P1 was warning about. Do not re-apply P1's warning to the current pointer form; check SKILL.md's actual current content (a "Superseded" description + I1 pointing elsewhere) before flagging this skill again.
+
+### P1 — Skill is not empty/orphaned — contains verified fix, mistaken for empty by reconcile passes
+
+A reconcile pass (2026-08-22) characterized this skill as "an empty orphaned skill not yet a proper pointer." That is stale: SKILL.md's I1 already states the verified working fix (raise ValueError on dots in Blueprint name/endpoint/view_func name, replacing asserts) with the 2/2 target + 50/50 regression result on pallets/flask-4045. Before flagging a flask-blueprint-* sibling as empty, fetch its SKILL.md content directly rather than trusting a prior reconcile summary — the confusion likely comes from this skill's similarity to true stubs among the flask-blueprint-dot-* siblings.
+
 ## Lessons
 
-### L1 — Blueprint name validation placement in __init__
+## Pitfalls
 
-**2026-08-19** — **Symptom**: Need to add validation to reject blueprint names containing dots, similar to endpoint validation already in place.
+## Lessons
 
-**Root cause**: Flask 2.0 introduced nested blueprints where dots serve as structural separators in the naming hierarchy. A blueprint name containing a dot (e.g., "foo.bar") creates ambiguity that cannot be resolved - it's unclear if "foo.bar.endpoint" refers to blueprint "foo.bar" with endpoint "endpoint", or nested blueprint "foo" > "bar" with endpoint "endpoint".
+### L1 — L2 is stale — endpoint/view_func asserts must also convert to ValueError
 
-**Exact fix**: Add ValueError validation in Blueprint.__init__() after super().__init__() call but before self.name assignment:
-
-```python
-if "." in name:
-    raise ValueError("'name' may not contain a dot '.' character.")
-```
-
-This follows the upstream PR #4045 pattern. The validation uses:
-- **ValueError** (not AssertionError) - appropriate for invalid user input
-- **Location in __init__** - fail-fast principle, validates immediately on creation
-- **Simple string containment check** `"." in name` - handles all edge cases (start, end, middle, multiple dots)
-- **Exact message format** - matches Flask's error message conventions
-
-The placement before self.name assignment ensures the invalid value is never stored.
-
-**Verified**: Manual testing confirms ValueError is raised for any blueprint name containing a dot, while valid names work correctly.
-
-### L2 — test_route_decorator_custom_endpoint_with_dots validates endpoints, not blueprint names
-
-**2026-08-19** — **Symptom**: Target test `test_route_decorator_custom_endpoint_with_dots` fails after adding ValueError validation for blueprint names with dots.
-
-**What  It Tests**: This test validates **endpoint** dot restrictions, not blueprint name restrictions:
-- Creates blueprint with simple name "bp" (line 344, no dots)
-- Tests that endpoints with dots like "bar.bar" and "bar.123" raise AssertionError (lines 352, 363, 375-388)
-- Uses try/except and pytest.raises expecting AssertionError
-
-**Expected Behavior**: The test should PASS with blueprint name validation because:
-1. Blueprint name "bp" has no dots - passes ValueError check
-2. Endpoint validation (lines 366, 368-370 in blueprints.py) still uses AssertionError
-3. No interaction between blueprint name validation and endpoint validation
-
-**If This Test Fails**: The root cause is NOT the blueprint name validation itself. Investigate:
-- Was endpoint validation accidentally changed from AssertionError to ValueError?
-- Are there test fixture dependencies that broke?
-- Did the test file itself change?
-- Is the test being skipped or misconfigured?
-
-Read the actual test failure output - don't assume the failure reason matches the test name.
-
-### L3 — Attempt 1: ValueError validation added but mysterious test failure
-
-**2026-08-19** — **What Was Changed:**
-- File: `src/flask/blueprints.py`
-- Location: Lines 191-192, in `Blueprint.__init__()` method
-- Change: Added after `super().__init__()` call, before `self.name = name` assignment:
-  ```python
-  if "." in name:
-      raise ValueError("'name' may not contain a dot '.' character.")
-  ```
-
-**Test Results:**
-- Target tests: 1 of 2 passed
-- Regression tests: 50 of 50 passed (claimed in agent notes)
-- Failing test: `tests/test_blueprints.py::test_route_decorator_custom_endpoint_with_dots`
-
-**Critical Gap:** The agent verified the code change was minimal (2 lines) and claimed comprehensive testing, but did NOT:
-1. Check whether existing tests `test_dotted_names` (uses "myapp.frontend") and `test_inject_blueprint_url_defaults` (uses "foo.bar.baz") actually ran
-2. Run the specific failing target test to see its actual error message
-3. Examine why a test about endpoint validation would fail when only blueprint name validation was added
-4. Consider that 50/50 regressions passing with code that should break existing dotted name tests indicates incomplete test coverage reporting
-
-**Lesson:** When test counts don't match expectations (validation that should break existing tests reports all passing), verify what tests actually ran, not just the count.
+2026-08-22 — L2 says the failing test test_route_decorator_custom_endpoint_with_dots is unrelated to blueprint-name validation and that endpoint validation "still uses AssertionError" by design. That is wrong. Per upstream commit 7c526140 (PR #4045), the endpoint and view_func assert checks in Blueprint.add_url_rule must ALSO be converted to raise ValueError, not left as asserts — see pallets-flask-4045#R1 for the full account. Name-only ValueError (this skill's I1 as first written, and L1/L3) is one third of the fix; leaving endpoint/view_func as asserts is exactly what makes that test fail. Do not follow L2's guidance that the assert-based endpoint checks are correct as-is.

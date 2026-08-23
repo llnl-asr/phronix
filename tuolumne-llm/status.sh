@@ -17,6 +17,7 @@ evenly across replicas.
 import json
 import os
 import select
+import shutil
 import sys
 import time
 import urllib.error
@@ -38,6 +39,112 @@ GAUGES = ("requests_processing", "requests_deferred", "n_tokens_max",
           "n_busy_slots_per_decode")
 FIELDS = COUNTERS + GAUGES
 SPARK = " ▁▂▃▄▅▆▇█"
+
+#: Running peak per rate, so a gauge has a ceiling to draw against.
+#: There is no fixed maximum for a fleet's token rate — it depends on the
+#: model, the batch and how many replicas are up — so the only honest scale
+#: is the best this fleet has managed while the display has been watching.
+PEAK = {"prompt": 0.0, "generate": 0.0}
+
+#: Which stat groups are drawn, toggled by the key in the first column.
+#
+# The summary grew a line per question worth asking — session, rates, load,
+# balance, lifetime — and all of them together is more than fits above the
+# replica table on a normal window, so the table scrolls off and the display
+# stops being a `top`. Grouping lets a watcher keep the two lines they are
+# actually chasing and drop the rest, the same way the benchmark's top toggles
+# its panels.
+#
+# All on by default: the reader who has not pressed anything should see what
+# this has always shown.
+GROUPS = {
+    "s": ["session", True],
+    "t": ["throughput", True],
+    "l": ["load", True],
+    "b": ["balance", True],
+    "f": ["lifetime", True],
+}
+
+
+def showing(name):
+    return any(g[0] == name and g[1] for g in GROUPS.values())
+
+
+def toggle_group(key):
+    """Flip one group. Returns True if *key* named a group."""
+    if key in GROUPS:
+        GROUPS[key][1] = not GROUPS[key][1]
+        return True
+    return False
+
+# ---- colour ------------------------------------------------------------------
+# The same convention the benchmark's top.sh uses, so the two displays can be
+# read side by side without relearning what a colour means:
+#
+#   green   healthy, and doing work      red     down, or a fault to act on
+#   yellow  a warning worth reading      dim     context, not a finding
+#
+# Off when stdout is not a terminal: escape codes in a log or a pipe are noise,
+# and they break the column alignment anything parsing this would rely on.
+COLOUR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+_stdout_print = print
+
+#: Lines written since the frame began, so the footer can be put on the last
+#: row rather than wherever the content happened to end.
+_ROW = 0
+
+
+def print(*args, **kwargs):                      # noqa: A001 - deliberate
+    """`print`, with each line erasing whatever it overwrites.
+
+    The live view repaints by homing the cursor and writing over the previous
+    frame rather than clearing the screen, because clearing makes the whole
+    display blink. Overwriting leaves the tail of any line that used to be
+    longer, so every line ends with `\033[K`. Wrapping `print` once is what
+    keeps that invariant true for the twenty-odd call sites that render a frame,
+    including the ones added later.
+    """
+    global _ROW
+    end = kwargs.pop("end", "\n")
+    if end == "\n":
+        _ROW += 1
+        if COLOUR:
+            end = "\033[K\n"
+    _stdout_print(*args, end=end, **kwargs)
+
+
+def paint(text, code):
+    return f"\033[{code}m{text}\033[0m" if COLOUR else text
+
+
+def green(t):
+    return paint(t, "32")
+
+
+def red(t):
+    return paint(t, "31;1")
+
+
+def yellow(t):
+    return paint(t, "33")
+
+
+def dim(t):
+    return paint(t, "2")
+
+
+def heat(text, frac):
+    """Colour a replica by whether it is actually working.
+
+    Idle replicas are what this display exists to surface: a fleet can be
+    perfectly healthy and still have three quarters of its GPUs doing nothing,
+    and in plain text that reads exactly like a fleet that is busy.
+    """
+    if frac <= 0:
+        return dim(text)
+    return green(text) if frac > 0.02 else yellow(text)
 
 
 class Keys:
@@ -98,8 +205,73 @@ def gateway_ok(gw):
 
 
 def scrape(servers):
+    if not servers:
+        return []
     with ThreadPoolExecutor(max_workers=min(64, len(servers))) as ex:
         return list(ex.map(fetch, servers))
+
+
+# ---- following the fleet that is actually up ---------------------------------
+# The config on disk is a snapshot taken when a deploy FINISHED, and a fleet is
+# most interesting before that: `deploy.sh` writes cluster.json last, so while
+# the servers are loading their weights the in-repo copy still describes the
+# previous fleet — or, if the deploy wrote its placeholder first, describes this
+# one with an empty `servers` list (which used to crash this display outright:
+# "max_workers must be greater than 0").
+#
+# So: take the NEWEST config of the ones written, and fill in `servers` from the
+# per-GPU records `gpu-server.sh` drops in <run_dir>/nodes as each replica comes
+# up. That directory is the fleet's real membership, live, and it is what makes
+# `status.sh` show a cluster mid-launch instead of the last one.
+def newest_cfg_path(explicit=None):
+    if explicit:
+        return explicit
+    cands = [REPO_CFG, os.path.join(LLM_ROOT, "logs", "cluster.json")]
+    cands = [c for c in cands if os.path.exists(c)]
+    if not cands:
+        return None
+    return max(cands, key=lambda c: _run_stamp(c))
+
+
+def _run_stamp(path):
+    """A config's age, by its run directory rather than its own mtime.
+
+    The in-repo copy is written by `cp`, so its mtime is the copy's; the run
+    directory's name is the deploy's own timestamp and is what actually orders
+    two fleets.
+    """
+    try:
+        with open(path) as f:
+            rd = json.load(f).get("run_dir", "")
+        return (os.path.basename(rd), os.path.getmtime(path))
+    except Exception:
+        return ("", 0.0)
+
+
+def load_cfg(path):
+    with open(path) as f:
+        cfg = json.load(f)
+    servers = [s for s in cfg.get("servers") or [] if s]
+    if not servers:
+        servers = read_node_records(cfg.get("run_dir", ""))
+    cfg["servers"] = servers
+    return cfg
+
+
+def read_node_records(run_dir):
+    d = os.path.join(run_dir, "nodes")
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for name in sorted(os.listdir(d)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(d, name)) as f:
+                out.append(json.load(f))
+        except Exception:
+            continue  # being written right now; it will be there next refresh
+    return out
 
 
 def fairness(values):
@@ -109,7 +281,9 @@ def fairness(values):
 
 
 def verdict(fi):
-    return "balanced" if fi >= 0.95 else "slightly uneven" if fi >= 0.85 else "IMBALANCED"
+    if fi >= 0.95:
+        return green("balanced")
+    return yellow("slightly uneven") if fi >= 0.85 else red("IMBALANCED")
 
 
 def bar(frac, width=10):
@@ -128,12 +302,83 @@ def human(n):
     return str(int(n))
 
 
+# ---- the open session, if there is one ---------------------------------------
+# Everything above is "since the fleet booted" or "in the last interval". A
+# session is the third question — what has happened since a benchmark said
+# start — and it is the one worth reading while a benchmark is running, so it
+# goes at the top of the display whenever a session is open. The per-replica
+# table is dropped: this display already has one.
+#
+# Cached, because building it is not free: an open session has no end snapshot
+# on disk, so the report takes a LIVE one — every replica's /metrics and /slots
+# again, on top of the scrape this display just did. At a 2s refresh that
+# doubled the per-cycle network work and made the whole view stutter. The
+# session window is minutes long; recomputing it every ten seconds loses
+# nothing a human could see.
+_SESSION_CACHE = {"at": 0.0, "lines": []}
+_SESSION_TTL = 10.0
+
+
+def session_lines():
+    link = os.path.join(LLM_ROOT, "logs", "sessions", "current")
+    if not os.path.exists(link):
+        return []
+    now = time.time()
+    if now - _SESSION_CACHE["at"] < _SESSION_TTL:
+        return _SESSION_CACHE["lines"]
+    try:
+        import importlib.machinery
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session.sh")
+        loader = importlib.machinery.SourceFileLoader("phronix_session", path)
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        text = mod.report(os.path.realpath(link))
+    except Exception as e:
+        return [dim(f"  session     unreadable ({e})")]
+    out = []
+    for line in text.splitlines():
+        if line.strip().startswith("REPLICA"):
+            break
+        out.append(line)
+    lines = [l for l in out if l.strip()]
+    _SESSION_CACHE.update(at=now, lines=lines)
+    return lines
+
+
 def footer():
-    if INTERACTIVE:
-        print(f"\n\033[2m[a] {'aggregated view' if PER_GPU else 'all replicas'}   [q] quit\033[0m")
+    """Pin the key legend to the bottom row, and never scroll the terminal.
+
+    Two bugs, one cause. The legend used to be printed wherever the content
+    happened to end, with a trailing newline — and when the frame filled the
+    window that newline scrolled everything up by one line. `\033[H` then homed
+    to a display shifted out from under it, so the previous frame's legend
+    survived below the new one and the whole view looked doubled.
+
+    So: pad to the last row with blank lines that erase what they land on, and
+    write the legend with NO trailing newline. Nothing is ever printed past the
+    bottom-right cell, so the terminal has no reason to scroll and the frame
+    stays registered with `\033[H` from one refresh to the next.
+    """
+    if not INTERACTIVE:
+        return
+    # Named with their state, so the footer says what is ON as well as what the
+    # key does — a toggle whose current setting is invisible reads as broken.
+    marks = " ".join(f"[{k}]{name}{'*' if on else ''}"
+                     for k, (name, on) in GROUPS.items())
+    text = (f"\033[2m{marks}   "
+            f"[a] {'aggregated view' if PER_GPU else 'all replicas'}   "
+            f"[q] quit\033[0m")
+    height = shutil.get_terminal_size((80, 24)).lines
+    while _ROW < height - 1:
+        print("")
+    _stdout_print(("\033[K" if COLOUR else "") + text, end="", flush=True)
 
 
 def render(cfg, rows, prev, dt):
+    global _ROW
+    _ROW = 0
     gw = cfg["gateway"]
     live = prev is not None and dt > 0
     per = []
@@ -163,41 +408,88 @@ def render(cfg, rows, prev, dt):
     cum_g = sum(r["metrics"].get("tokens_predicted_total", 0) for r in rows)
 
     # ---- summary -------------------------------------------------------------
+    alive = gateway_ok(gw)
+    # The gateway is the single point everything else depends on: with it down
+    # every replica below can be perfectly healthy and nothing can reach them.
     print(f"\033[1m{cfg['alias']}\033[0m  profile {cfg.get('profile', '?')}  "
-          f"gateway {gw['host']}:{gw['port']} [{'UP' if gateway_ok(gw) else 'DOWN'}]  "
-          f"replicas {up}/{len(rows)}  "
+          f"gateway {gw['host']}:{gw['port']} "
+          f"[{green('UP') if alive else red('DOWN')}]  "
+          f"replicas {(green if up == len(rows) else red)(f'{up}/{len(rows)}')}  "
           f"{'live, last %.1fs' % dt if live else 'cumulative since start'}")
-    if live:
+    if showing("session"):
+        for line in session_lines():
+            print(line)
+    # One shape for every stat line, the way `top` writes its summary block:
+    # a dim label in a fixed column, then the value, then a gauge where there is
+    # a ceiling worth seeing. Before this each line invented its own spacing and
+    # its own units, so nothing lined up vertically and the eye had to re-find
+    # the number on every row.
+    def stat(label, body, gauge=None):
+        bars = f"  {dim(gauge)}" if gauge else ""
+        print(f"  {dim(f'{label:<11}')} {body}{bars}")
+
+    if live and showing("throughput"):
         busy = sum(r["metrics"].get("n_busy_slots_per_decode", 0) for r in rows)
-        print(f"  throughput   prompt {tot['prompt_tokens_total'] / window:8.0f} tok/s  "
-              f"generate {tot['tokens_predicted_total'] / window:8.0f} tok/s  "
-              f"total {(tot['prompt_tokens_total'] + tot['tokens_predicted_total']) / window:8.0f} tok/s"
-              f"   (counted as requests complete)")
-        print(f"  activity     {tot['n_decode_total'] / window:8.0f} decode iters/s  "
-              f"{busy:8.1f} slots busy across the fleet")
-    else:
-        print(f"  totals       prompt {tot['prompt_tokens_total']:9.0f} tokens  "
-              f"generate {tot['tokens_predicted_total']:9.0f} tokens  "
-              f"total {tot['prompt_tokens_total'] + tot['tokens_predicted_total']:9.0f} tokens")
-    print(f"  load         {int(inflight):4d} in flight   {int(deferred):4d} deferred   "
-          f"{active}/{len(rows)} replicas active")
+        pr = tot["prompt_tokens_total"] / window
+        gn = tot["tokens_predicted_total"] / window
+        # Prompt and generate are on wildly different scales — a 13:1 ratio is
+        # normal — so a shared axis would leave the generate bar always empty.
+        # Each is drawn against its own running peak instead, which is what
+        # makes a stall visible: the bar falls even though the number is large.
+        PEAK["prompt"] = max(PEAK["prompt"], pr)
+        PEAK["generate"] = max(PEAK["generate"], gn)
+        stat("throughput",
+             f"prompt {green(f'{pr:8.0f}')} tok/s   "
+             f"generate {green(f'{gn:8.0f}')} tok/s   "
+             f"total {pr + gn:8.0f} tok/s",
+             bar(pr / PEAK["prompt"] if PEAK["prompt"] else 0))
+        # Busy slots against the fleet's capacity, which is the ceiling that
+        # actually exists: replicas x slots each.
+        slots = max(1, len(rows))
+        stat("activity",
+             f"{tot['n_decode_total'] / window:8.0f} decode it/s   "
+             f"{heat(f'{busy:.1f}', busy / slots)} slot(s) busy of {slots} replica(s)",
+             bar(busy / slots))
+    elif showing("throughput"):
+        stat("totals",
+             f"prompt {tot['prompt_tokens_total']:9.0f}   "
+             f"generate {tot['tokens_predicted_total']:9.0f}   "
+             f"total {tot['prompt_tokens_total'] + tot['tokens_predicted_total']:9.0f} tokens")
+    # Active replicas coloured against the fleet size: this is the number that
+    # answers "is the run big enough to fill what is deployed".
+    share_active = active / max(1, len(rows))
+    if showing("load"):
+        stat("load",
+         f"{int(inflight):4d} in flight   "
+         f"{(yellow if deferred else dim)(f'{int(deferred):4d}')} deferred   "
+             f"{heat(f'{active}/{len(rows)}', share_active)} replica(s) active"
+             + (dim("   most of the fleet is idle") if share_active < 0.5 else ""),
+             bar(share_active))
     # With only a handful of requests left in flight a low fairness score says
     # nothing useful, so do not cry imbalance over a draining queue.
-    if inflight < len(rows) and active < len(rows) / 2:
-        print(f"  balance      too little load to judge "
-              f"({int(inflight)} in flight across {len(rows)} replicas)")
+    if not showing("balance"):
+        pass
+    elif inflight < len(rows) and active < len(rows) / 2:
+        stat("balance", dim(f"too little load to judge — {int(inflight)} in "
+                            f"flight across {len(rows)} replicas"))
     else:
-        note = "" if inflight >= 2 * len(rows) else \
-            f"  [light load: {int(inflight)} in flight, discount this]"
-        print(f"  balance      work {work_fi:.3f} ({verdict(work_fi)})   "
-              f"requests {req_fi:.3f} ({verdict(req_fi)})   "
-              f"(share of {'decode work' if live else 'generated tokens'}){note}")
-    print(f"  lifetime     {human(cum_p + cum_g)} tokens  "
-          f"({human(cum_p)} prompt + {human(cum_g)} generated)")
+        note = "" if inflight >= 2 * len(rows) else dim(
+            f"   light load: {int(inflight)} in flight, discount this")
+        stat("balance",
+             f"work {work_fi:.3f} ({verdict(work_fi)})   "
+             f"requests {req_fi:.3f} ({verdict(req_fi)})   "
+             + dim(f"share of {'decode work' if live else 'generated tokens'}")
+             + note,
+             bar(work_fi))
+    if showing("lifetime"):
+        stat("lifetime", f"{human(cum_p + cum_g)} tokens   "
+                         + dim(f"{human(cum_p)} prompt + {human(cum_g)} generated"))
     drafted = tot["spec_decode_num_draft_tokens_total"]
-    if drafted:
-        print(f"  speculative  {tot['spec_decode_num_accepted_tokens_total'] / drafted * 100:.1f}% "
-              f"of {int(drafted)} drafted tokens accepted")
+    if drafted and showing("lifetime"):
+        accepted = tot["spec_decode_num_accepted_tokens_total"] / drafted
+        stat("speculative",
+             f"{green(f'{accepted * 100:.1f}%')} of {int(drafted)} drafted "
+             f"tokens accepted", bar(accepted))
     print()
 
     if PER_GPU:
@@ -209,12 +501,13 @@ def render(cfg, rows, prev, dt):
             s, m = row["server"], row["metrics"]
             share = d[gen_key] / gen_sum
             print(f"{s['host']:<14}{s['gpu']:>4}{s['port']:>6}{s['pid']:>9}"
-                  f"{'up' if row['up'] else 'DOWN':>5}"
+                  f"{green('   up') if row['up'] else red(' DOWN')}"
                   f"{int(m.get('requests_processing', 0)):>5}{int(m.get('requests_deferred', 0)):>5}"
                   f"{d['prompt_tokens_total'] / window:>9.0f}"
                   f"{d['tokens_predicted_total'] / window:>9.0f}"
                   f"{d['n_decode_total'] / window:>9.0f}"
-                  f"{share * 100:>7.1f}%  {bar(share * len(per))}")
+                  f"{heat(f'{share * 100:>7.1f}%', share)}  "
+                  f"{heat(bar(share * len(per)), share)}")
         footer()
         return
 
@@ -243,9 +536,14 @@ def render(cfg, rows, prev, dt):
         n = nodes[host]
         share = n["share"] / gen_sum
         gpus = "".join(spark(n["gpus"].get(g, 0.0) * len(per)) for g in range(ngpu))
-        print(f"{host:<14}{n['up']:>3}/{len(n['gpus']):<1}{int(n['run']):>5}{int(n['def']):>5}"
+        healthy = n["up"] == len(n["gpus"])
+        alive = f"{n['up']:>3}/{len(n['gpus']):<1}"
+        print(f"{host:<14}"
+              f"{(green if healthy else red)(alive)}"
+              f"{int(n['run']):>5}{int(n['def']):>5}"
               f"{n['pp'] / window:>10.0f}{n['tg'] / window:>10.0f}{n['dec'] / window:>9.0f}"
-              f"{share * 100:>7.1f}%  [{gpus:<4}] {bar(share * len(nodes))}")
+              f"{heat(f'{share * 100:>7.1f}%', share)}  "
+              f"[{heat(f'{gpus:<4}', share)}] {heat(bar(share * len(nodes)), share)}")
     footer()
 
 
@@ -260,11 +558,10 @@ def main():
         i = args.index("--interval")
         args.pop(i)
         interval = float(args.pop(i))
-    cfg_path = args[0] if args else DEFAULT_CFG
-    if not os.path.exists(cfg_path):
-        sys.exit(f"no cluster config at {cfg_path} — is a fleet running?")
-    with open(cfg_path) as f:
-        cfg = json.load(f)
+    cfg_path = newest_cfg_path(args[0] if args else None)
+    if not cfg_path or not os.path.exists(cfg_path):
+        sys.exit("no cluster config found — is a fleet running?")
+    cfg = load_cfg(cfg_path)
 
     if once:
         render(cfg, scrape(cfg["servers"]), None, 0)
@@ -276,12 +573,31 @@ def main():
     try:
         with Keys() as keys:
             while True:
+                # Re-read every cycle: a deploy launched while this is open
+                # should appear here, and replicas should appear as they come
+                # up rather than at the end.
+                cfg_path = newest_cfg_path(args[0] if args else None) or cfg_path
+                try:
+                    cfg = load_cfg(cfg_path)
+                except Exception:
+                    pass  # mid-write; keep the last good one
                 rows = scrape(cfg["servers"])
                 now = time.time()
                 dt = now - t_prev if t_prev else 0
                 while True:  # redraw without rescraping when a key toggles the view
-                    print("\033[2J\033[H", end="")
+                    # Home the cursor and overwrite; do NOT clear the screen.
+                    #
+                    # `\033[2J` blanks every cell and the redraw fills it back
+                    # in, so on a remote terminal the empty state is visible and
+                    # the whole view blinks twice a second — for a display where
+                    # most of the frame is identical to the last one. Overwriting
+                    # in place leaves nothing to flash: each line erases its own
+                    # tail as it is written (see `print` above), and `\033[J`
+                    # after the frame clears whatever the shorter new frame did
+                    # not reach.
+                    print("\033[H", end="")
                     render(cfg, rows, prev, dt)
+                    print("\033[J", end="", flush=True)
                     sys.stdout.flush()
                     key = keys.wait(interval)
                     if key is None:
@@ -290,6 +606,12 @@ def main():
                         return
                     if key.lower() == "a":
                         PER_GPU = not PER_GPU
+                        continue
+                    # A group toggle redraws from the SAME scrape rather than
+                    # falling through to a rescrape: the numbers did not change,
+                    # only which of them are drawn, and waiting a full interval
+                    # to see the effect of a keypress reads as a dropped key.
+                    if toggle_group(key.lower()):
                         continue
                     break
                 prev = {(r["server"]["host"], r["server"]["port"]): r["metrics"] for r in rows}

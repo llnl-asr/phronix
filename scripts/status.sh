@@ -4,6 +4,7 @@
 #   status.sh                 full detail for the newest run (the default)
 #   status.sh <run>           full detail for that run (name or path)
 #   status.sh --all           every run, one line each, newest first
+#   status.sh --recent [N]    the last N runs with passed/failed/pending per arm
 #   status.sh --list [N]      just the names of the last N runs (default 5)
 #   status.sh --markdown      tables as markdown, for redirecting into a file
 #
@@ -22,7 +23,8 @@ SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # suddenly showed 13 and the line read as if the BASELINE had learned something,
 # which it cannot do. A constant that tracks a number in another repository is a
 # constant that will be wrong and will be believed.
-BASELINE=$(ls /usr/WS2/haridev/phronix/src/phronix/.phronix/skills 2>/dev/null | wc -l)
+BUNDLED_SKILLS=/usr/WS2/haridev/phronix/src/phronix/.phronix/skills
+BASELINE=$(ls "$BUNDLED_SKILLS" 2>/dev/null | wc -l)
 BASELINE=${BASELINE:-0}
 
 # One way to write a duration, everywhere.
@@ -88,6 +90,96 @@ for results in sorted(run.glob("*/results.jsonl")):
     print(f"      {results.parent.name:<18} {passed}/{rows} passed"
           f"  ({started} started)  {tokens/1000:.0f}k tok{money}")
 PY
+}
+
+recent() {  # recent [N] -> the last N runs, one block each, with their tally
+  # What ran lately and how it went, without opening each one.
+  #
+  # `--all` prints every run there has ever been and `--list` prints names with
+  # no outcome, so the ordinary question — "what have the last few runs done" —
+  # had no answer short of running the detail view several times. Pending is
+  # counted as well as passed and failed: a run that is still going and one
+  # that finished badly both show "2/6 passed", and they are not the same
+  # thing.
+  local want=${1:-5} run state
+  echo "last $want run(s) in $RUNS (newest first)"
+  echo
+  # Ordered by what each run last WROTE, not by directory age: an arm's
+  # directory stops being touched early, so directory mtime ranks a finished
+  # run above a live one.
+  python3 - "$RUNS" "$want" <<'PY'
+import json, pathlib, sys, time
+
+
+def human(seconds):
+    s = int(seconds or 0)
+    if s >= 3600:
+        return f"{s // 3600}h{s % 3600 // 60:02d}m"
+    if s >= 60:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s}s"
+
+
+runs_dir, want = pathlib.Path(sys.argv[1]), int(sys.argv[2])
+now = time.time()
+
+candidates = sorted((p for p in runs_dir.glob("*/") if p.is_dir()),
+                    key=lambda p: p.stat().st_mtime, reverse=True)[:max(want * 3, 12)]
+
+
+def touched(run):
+    stamps = [run.stat().st_mtime]
+    for pattern in ("*/trace.log", "*/results.jsonl", "manifest.json",
+                    "*/tasks/*/trace.log"):
+        for path in run.glob(pattern):
+            try:
+                stamps.append(path.stat().st_mtime)
+            except OSError:
+                pass
+    return max(stamps)
+
+
+for run in sorted(candidates, key=touched, reverse=True)[:want]:
+    age = now - touched(run)
+    state = f"ACTIVE {human(age)}" if age < 180 else f"INACTIVE {human(age)}"
+    try:
+        manifest = json.loads((run / "manifest.json").read_text())
+    except (OSError, ValueError):
+        manifest = {}
+    mode = "fresh" if manifest.get("fresh") else "reuse"
+    print(f"  {run.name:<26} {state:<20} "
+          f"{manifest.get('model', '?')} ({manifest.get('provider', '?')})  {mode}")
+    print(f"    {run}")
+
+    for arm in sorted(p for p in run.iterdir() if p.is_dir() and (p / "tasks").is_dir()):
+        started = passed = failed = 0
+        for task in (arm / "tasks").glob("*"):
+            if not task.is_dir():
+                continue
+            # A directory with neither a trace nor a result never started; the
+            # runner leaves those shells behind and counting them makes every
+            # tally read short.
+            result = task / "result.json"
+            if result.is_file():
+                started += 1
+                try:
+                    passed += 1 if json.loads(result.read_text()).get("resolved") else 0
+                except (OSError, ValueError):
+                    pass
+            elif (task / "trace.log").is_file():
+                started += 1
+        failed = started - passed - sum(
+            1 for t in (arm / "tasks").glob("*")
+            if t.is_dir() and not (t / "result.json").is_file()
+            and (t / "trace.log").is_file())
+        pending = started - passed - failed
+        if not started:
+            continue
+        print(f"      {arm.name:<20} {passed:>3} passed  {failed:>3} failed  "
+              f"{pending:>3} pending   of {started}")
+    print()
+PY
+  echo "detail:  $SCRIPTS/status.sh <run>   |   live view:  $SCRIPTS/top.sh <run>"
 }
 
 overview() {
@@ -254,7 +346,18 @@ assets() {   # assets <run-dir> -> what was learned, and what used it
     if [ -d "$arm/store/.phronix/skills" ]; then
       have=$(ls "$arm/store/.phronix/skills" | wc -l)
       tools=$(ls "$arm/store/.phronix/capabilities"/*.py 2>/dev/null | wc -l)
-      echo "  store: $have skill(s) — seeded $BASELINE, learned $(( have - BASELINE ))"\
+      # Learned is a set difference, not a subtraction.
+      #
+      # `have - BASELINE` counts the bundled skills that are PRESENT against the
+      # bundled skills that exist, and those are different questions the moment
+      # any bundled skill is absent from a store. Observed: 26 present against a
+      # 28-skill framework printed "learned -2" — a run cannot learn a negative
+      # number of things, and the two it had actually written were invisible
+      # because two others had not been copied in. The names below already do
+      # this correctly; only the headline was wrong.
+      kept=$(comm -12 <(ls "$arm/store/.phronix/skills" | sort) \
+                      <(ls "$BUNDLED_SKILLS" 2>/dev/null | sort) | wc -l)
+      echo "  store: $have skill(s) — $kept of $BASELINE bundled, learned $(( have - kept ))"\
 "   |   $tools tool(s)"
       echo "  retrievals: $(cat "$arm"/tasks/*/retrievals.jsonl 2>/dev/null | wc -l)"
 
@@ -475,11 +578,22 @@ bundled = {p.name for p in BUNDLED.iterdir()} if BUNDLED.is_dir() else set()
 calls = collections.Counter()      # phronix tool -> times called
 named = collections.Counter()      # skill/tool asked for by name -> times
 per_arm = collections.Counter()    # arm -> phronix calls
-# Arms run one after another, so an arm with no transcripts has not started
-# yet. Reporting "nothing used the store" for it would be a false alarm — the
-# claim is only meaningful about an arm that actually ran.
-started, waiting = [], []
+# Three states, not two: an arm can be running and have written nothing yet.
+#
+# This read "an arm with no transcripts has not started yet, because arms run
+# one after another" — and both halves are now wrong. Arms run in PARALLEL by
+# default, and a transcript is only flushed when the agent subprocess exits, so
+# an arm six minutes into its first task has task directories, a live trace and
+# no `.jsonl` at all. It was being reported as "not started yet — arms run in
+# sequence" while visibly working, which is worse than saying nothing: it sent
+# the reader looking for a scheduling problem that did not exist.
+#
+# A task directory appears the moment the task starts, so that is what "started"
+# means. Whether a transcript exists is a separate question, and the "nothing
+# called the store" alarm is only meaningful once one does.
+started, waiting, silent = [], [], []
 for arm in sorted(p for p in root.iterdir() if (p / "tasks").is_dir()):
+    began = any((arm / "tasks").iterdir())
     seen_any = False
     for tr in (arm / "tasks").glob("*/attempt-*/*.jsonl"):
         seen_any = True
@@ -505,12 +619,16 @@ for arm in sorted(p for p in root.iterdir() if (p / "tasks").is_dir()):
                     if isinstance(value, str) and value:
                         named[value] += 1
                         break
-    (started if seen_any else waiting).append(arm.name)
+    (started if seen_any else silent if began else waiting).append(arm.name)
 
 print()
 print("  --- what actually called the store")
 for arm in waiting:
-    print(f"  {arm}: not started yet — arms run in sequence")
+    print(f"  {arm}: no task started yet")
+for arm in silent:
+    # Running, but the agent subprocess has not exited, so nothing is flushed.
+    # Saying anything about what it called would be a guess.
+    print(f"  {arm}: running — first transcript not written yet")
 # Only a phronix arm is expected to reach the store; a bare arm has no MCP
 # server by design, so its zero is the control, not a fault.
 expected = [a for a in started if "phronix" in a]
@@ -940,6 +1058,25 @@ for r in rows:
                  + (f" learn tok={learn:,}" if learn else ""))
     print(line)
 
+    # What this task left behind, by NAME.
+    #
+    # The counts were already here as `new=4 reused=0`, and a count cannot
+    # answer the question the benchmark exists to ask: a task that passed and
+    # wrote `sympy-units-dimensions` has produced something a later sympy task
+    # can use, and one that wrote four notes about its own scratch directory has
+    # not. `+` is written, `~` is reused from an earlier task — reuse is the
+    # payoff, so it is never folded into the same list as creation.
+    created = list(r.get("skills_created") or [])
+    reused = list(r.get("skills_reused") or [])
+    cross = list(r.get("skills_reused_cross_repo") or [])
+    if created or reused or cross:
+        parts = [f"+{name}" for name in created]
+        parts += [f"~{name}" for name in reused]
+        # A skill that crossed repositories is the strongest evidence the store
+        # generalises rather than memorising, so it is marked apart.
+        parts += [f"~{name} (cross-repo)" for name in cross if name not in reused]
+        print(f"        skills: {', '.join(parts)}")
+
     # One line per try, because a task's story is the progression.
     #
     # The totals above answer "what did this task cost"; they cannot answer
@@ -1317,6 +1454,9 @@ case "${1:-}" in
     ;;
   --all)
     overview
+    ;;
+  --recent)
+    recent "${2:-5}"
     ;;
   *)
     target=$(resolve "$1") || { echo "no such run: $1" >&2; exit 1; }

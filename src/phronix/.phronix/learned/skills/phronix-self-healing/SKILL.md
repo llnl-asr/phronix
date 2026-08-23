@@ -1,7 +1,7 @@
 ---
 name: phronix-self-healing
 description: How to diagnose and repair phronix when a tool, skill, agent file or harness wiring is broken, stale or missing. Load the moment something in the framework misbehaves, before working around it.
-subject: diagnosing and repairing the framework itself
+subject: phronix-self-healing
 type: skill
 ---
 
@@ -14,22 +14,21 @@ type: skill
 | `I3` | Instructions | Verify the diagnosis before repairing |
 | `I4` | Instructions | Fix the class, not just the instance |
 | `I5` | Instructions | Prove the heal, then record it |
+| `I6` | Instructions | Graph tool call raises OSError: Directory not empty (or FileNotFoundError) |
+| `I7` | Instructions | skill_load(name=...) returns not_found for a skill that skill_search/graph_query find fine |
 | `R1` | Rules | Fix the tool; never reproduce its job by hand |
 | `R2` | Rules | Edit the source, never the generated artifact |
 | `R3` | Rules | When a fix needs a server restart, stop and say so |
 | `R4` | Rules | A heal is a prediction — prove it |
-| `R5` | Rules | Graph rebuild crash is retry-once-then-fallback, not a blocker |
 | `X1` | References | Turning a repeated repair into a tool |
 | `X2` | References | Recording the repair |
-| `X3` | References | OSError from skill_search's graph fallback is the same rebuild-race pattern |
+
 
 ## Instructions
 
 ### I1 — Start with status
 
-`phronix_status()` reports which layers exist, which are writable, what each holds,
-and where new learning is being written. A surprising share of "the tool is broken"
-reports are really "the write went to a layer nobody is reading".
+`phronix_status()` reports which layers exist, which are writable, what each holds, and where new learning is being written. A surprising share of "the tool is broken" reports are really "the write went to a layer nobody is reading".
 
 ### I2 — Match the symptom to its cause
 
@@ -47,32 +46,35 @@ reports are really "the write went to a layer nobody is reading".
 
 ### I3 — Verify the diagnosis before repairing
 
-Read the actual file, run the actual tool, list the actual directory. A repair
-applied to a misdiagnosed problem leaves the real one in place and adds a change
-nobody can explain later.
+Read the actual file, run the actual tool, list the actual directory. A repair applied to a misdiagnosed problem leaves the real one in place and adds a change nobody can explain later.
 
 ### I4 — Fix the class, not just the instance
 
-Ask what would have caught this automatically: a check in the startup self-heal, a
-capability that detects the bad state, a guard in the tool that produced it, a
-privacy rule if it was a leak class. Fixing an instance is triage.
+Ask what would have caught this automatically: a check in the startup self-heal, a capability that detects the bad state, a guard in the tool that produced it, a privacy rule if it was a leak class. Fixing an instance is triage.
 
 ### I5 — Prove the heal, then record it
 
-Run `verify_run(target=<what you fixed>)`. If nothing covers it, write a corrector
-whose constraints encode the breakage you just fixed, so the class cannot recur
-silently. Then record symptom → root cause → exact fix with
-`skill_write_lesson`.
+Run `verify_run(target=<what you fixed>)`. If nothing covers it, write a corrector whose constraints encode the breakage you just fixed, so the class cannot recur silently. Then record symptom → root cause → exact fix with `skill_write_lesson`.
+
+### I6 — Graph tool call raises OSError: Directory not empty (or FileNotFoundError)
+
+Symptom: `graph_query`, `graph_get_node`, or `skill_search`'s internal rebuild raises `OSError: [Errno 39] Directory not empty` — or, the same race observed at a different moment, a plain `FileNotFoundError` — on a path under `learner-cache/graph/knowledge/stage/...` (seen at `graphify-out/cache/ast` and at `phronix/.phronix`). Match on either exception plus that path prefix, not one fixed leaf path or one fixed exception class. Likely cause: a concurrent or previously-interrupted rebuild left files behind, so the next rebuild's remove/replace either finds the directory non-empty (ENOTEMPTY) or finds a file already gone (FileNotFoundError).
+
+Repair: retry the exact same call once — the retry commonly succeeds because a later rebuild clears the leftover state. If it fails twice in a row, stop calling graph tools for the rest of the stage instead of looping; fall back to `skill_load`/`memory_recall` for retrieval. This is a tooling flake, not evidence the underlying skill/memory content is missing — do not delete or rewrite content based on a failed rebuild alone. Details: [[phronix-self-healing#L1]].
+
+### I7 — skill_load(name=...) returns not_found for a skill that skill_search/graph_query find fine
+
+Symptom: `skill_load(name="some-skill")` returns `not_found`, and that skill's own name is absent from the "available skills" list skill_load returns alongside the miss — even though the SKILL.md file exists on disk with correct frontmatter, and `skill_search`/`graph_query` both locate and return its content correctly. This is distinct from [[phronix-self-healing#I6]] (graph rebuild race, an OSError/FileNotFoundError raised during a call) — here every call returns cleanly, only the name-index entry is stale/missing.
+
+Likely cause: skill_load's exact-name lookup index was built before this skill was written or renamed and has not been refreshed, while skill_search/graph_query rebuild or traverse fresh each time.
+
+Repair: don't treat the not_found as evidence the skill is missing or broken. Fall back to `skill_search(query=<subject>)` or `graph_query(mode="docs", question=<subject>)` to retrieve it by content instead of by exact name. If this repeats, the class fix is refreshing/rebuilding skill_load's name index (parity with what skill_search already does on a miss).
 
 ## Rules
 
 ### R1 — Fix the tool; never reproduce its job by hand
 
-A manual workaround is how drift and corruption get introduced: an ad-hoc script
-producing subtly different results, a shim papering over a real bug. It also
-leaves the tool broken for the next session, which writes its own, different
-workaround. "The tool didn't work so I did it manually" is a bug report you failed
-to file.
+A manual workaround is how drift and corruption get introduced: an ad-hoc script producing subtly different results, a shim papering over a real bug. It also leaves the tool broken for the next session, which writes its own, different workaround. "The tool didn't work so I did it manually" is a bug report you failed to file.
 
 ### R2 — Edit the source, never the generated artifact
 
@@ -83,35 +85,22 @@ to file.
 | `<layer>/skills/<name>/` | `.claude/skills/<name>` (a symlink) |
 | `workspace/permissions.yaml` | the `permissions` block in each harness config |
 
-Every generated file carries a `generated-by: phronix` marker. If you see one, you
-are in the wrong file.
+Every generated file carries a `generated-by: phronix` marker. If you see one, you are in the wrong file.
 
 ### R3 — When a fix needs a server restart, stop and say so
 
-A running MCP server holds tool closures captured at registration time, so a newly
-written or edited capability cannot be spliced in. Name the exact tools you need
-and wait. Do not fill the gap by hand in the meantime.
+A running MCP server holds tool closures captured at registration time, so a newly written or edited capability cannot be spliced in. Name the exact tools you need and wait. Do not fill the gap by hand in the meantime.
 
 ### R4 — A heal is a prediction — prove it
 
-"I fixed it" is exactly the claim that comes back a week later. See
-[[phronix-verification#R1]].
-
-### R5 — Graph rebuild crash is retry-once-then-fallback, not a blocker
-
-When `graph_ensure`/`graph_query` themselves throw (`OSError`, `FileNotFoundError`, or `[Errno 39] Directory not empty` in `graphify-out/cache`) rather than returning a stale-but-usable graph, retry `graph_ensure(force=True)` once — this has been observed to self-clear. If it fails again, fall back to `grep`/Explore for that lookup instead of blocking, and report it with `research_observe(worked=false)` so the recurring pattern stays visible. See [[phronix-self-healing#P4]] for the observed detail.
+"I fixed it" is exactly the claim that comes back a week later. See [[phronix-verification#R1]].
 
 ## References
 
 ### X1 — Turning a repeated repair into a tool
 
-If you have made the same repair twice, it is deterministic:
-[[phronix-capability-authoring#I1]].
+If you have made the same repair twice, it is deterministic: [[phronix-capability-authoring#I1]].
 
 ### X2 — Recording the repair
 
 Symptom → root cause → exact fix: [[phronix-self-learning#I3]].
-
-### X3 — OSError from skill_search's graph fallback is the same rebuild-race pattern
-
-`skill_search` falls through to `graph_query` on an empty index result (see its own docstring); when that fallback hits the rebuild race it can surface as `OSError` rather than `FileNotFoundError`. Same failure family, same handling: see [[phronix-self-healing#P4]] (symptom list, root cause, retry-once-then-fallback) and [[phronix-self-healing#R5]] (the rule). Do not write a second pitfall for this — it is a variant surface of P4, not a new cause.
