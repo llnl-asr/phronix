@@ -41,7 +41,7 @@ GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 #             setting the model was evaluated under.
 export PROFILE=${PROFILE:-solo}
 export SAMPLING=${SAMPLING:-reference}
-export GPTOSS_EFFORT=${GPTOSS_EFFORT:-medium}
+export GPTOSS_EFFORT=${GPTOSS_EFFORT:-low}
 export GPTOSS_THINK_BUDGET=${GPTOSS_THINK_BUDGET:-2048}
 
 #: Node-local, on real disk. NOT /tmp — that is tmpfs on these nodes, so a
@@ -100,6 +100,20 @@ for ((g = 0; g < GPUS_PER_NODE; g++)); do
     echo "  gpu$g port $((BASE_PORT + g)) -> ${ALIAS[$key]}"
 done
 
+# No `-t` on any `flux run` below.
+#
+# Inside an allocation a job inherits the instance's lifetime, and naming a
+# duration longer than what remains is refused outright:
+#
+#   flux-run: ERROR: job duration (1h) exceeds remaining instance lifetime (48m)
+#
+# Measured: with 48 minutes left on the allocation, staging asked for `-t 60m`,
+# both `dbcast` and its `dcp` fallback were rejected before doing any work, and
+# the deploy went on to launch servers whose weights had never been copied —
+# reporting `INCOMPLETE 0/63387346208` and then waiting for a fleet that could
+# not start. A ceiling that is only ever wrong near the end of an allocation is
+# worse than none: it fails exactly when time is shortest.
+
 # ---- 1. stage weights onto each node's SSD -------------------------------------
 _stage_with_dcp() {  # $1 = model key, $2 = source, $3 = leaf name
     local key=$1 from=$2 leaf=$3
@@ -114,7 +128,7 @@ _stage_with_dcp() {  # $1 = model key, $2 = source, $3 = leaf name
     local pids=() h
     for h in "${HOSTS[@]}"; do
         (
-            flux run -N1 -n "$PPN" --requires="host:$h" -t 60m \
+            flux run -N1 -n "$PPN" --requires="host:$h" \
                 bash -c "module load $MPIFILEUTILS_MODULE >/dev/null 2>&1
                          mkdir -p '$MODEL_CACHE'
                          exec dcp '$from' '$MODEL_CACHE/$leaf'" \
@@ -140,7 +154,7 @@ stage_one() {  # $1 = model key
     # Which nodes are missing it? Skipping the ones that have it is what makes
     # redeploying cheap.
     local missing
-    missing=$(flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 5m \
+    missing=$(flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 \
         bash -c "got=\$(du -s --block-size=1 '$MODEL_CACHE/$leaf' 2>/dev/null | cut -f1)
                  [ \"\${got:-0}\" -ge '$size' ] || hostname" 2>/dev/null | sort -u | tr '\n' ' ')
     missing=${missing// /}
@@ -163,23 +177,40 @@ stage_one() {  # $1 = model key
     # It broadcasts ONE FILE, so a sharded model staged as a directory still
     # takes the per-node `dcp` path.
     #
-    # One rank per node, not $PPN: dbcast's tree is over RANKS, and several
-    # ranks on one node would make it send the same bytes to that node more
-    # than once.
+    # TWO tasks per node, not one. dbcast refuses fewer:
+    #
+    #   dbcast.c:624 ERROR: Must run with at least two tasks per node
+    #
+    # Reasoning that its tree is over ranks and one per node avoids resending
+    # was wrong — it needs a second task on each node to write while the first
+    # receives. And the failure was silent: the wrapper returned rc=0, so the
+    # `dcp` fallback never fired and the deploy went on to launch servers whose
+    # weights had never been copied.
     local pids=() h
     if [ -f "$from" ]; then
         echo "    dbcast: one read of the source, propagated across $NNODES node(s)"
-        flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 60m \
+        flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 2 \
             bash -c "module load $MPIFILEUTILS_MODULE >/dev/null 2>&1
                      mkdir -p '$MODEL_CACHE'
                      exec dbcast '$from' '$MODEL_CACHE/$leaf'" \
             > "$RUNDIR/dbcast-$key.log" 2>&1
         local rc=$?
-        echo "    dbcast: rc=$rc"
-        if [ $rc -ne 0 ]; then
+        # Trust the BYTES, not the exit code.
+        #
+        # dbcast reported rc=0 while copying nothing — its error went to the log
+        # and the launcher still exited clean. A staging step that says it
+        # succeeded and leaves an empty destination is worse than one that
+        # fails, because the fallback is skipped and the servers start anyway.
+        local staged
+        staged=$(flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 \
+                 bash -c "du -s --block-size=1 '$MODEL_CACHE/$leaf' 2>/dev/null | cut -f1" \
+                 2>/dev/null | sort -n | head -1)
+        echo "    dbcast: rc=$rc, smallest copy $(numfmt --to=iec "${staged:-0}" 2>/dev/null)"
+        if [ $rc -ne 0 ] || [ "${staged:-0}" -lt "$size" ]; then
             # Fall back rather than fail the deploy: a staging method that does
             # not work here should cost time, not the run.
-            echo "    dbcast failed (see $RUNDIR/dbcast-$key.log) — falling back to dcp"
+            echo "    dbcast did not stage the file (see $RUNDIR/dbcast-$key.log)"
+            echo "    — falling back to dcp"
             _stage_with_dcp "$key" "$from" "$leaf"
         fi
     else
@@ -187,7 +218,7 @@ stage_one() {  # $1 = model key
         _stage_with_dcp "$key" "$from" "$leaf"
     fi
 
-    flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 10m \
+    flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 \
         bash -c "got=\$(du -s --block-size=1 '$MODEL_CACHE/$leaf' 2>/dev/null | cut -f1)
                  if [ \"\${got:-0}\" -ge '$size' ]; then echo \"    \$(hostname): ok\"
                  else echo \"    \$(hostname): INCOMPLETE \${got:-0}/$size\"; fi" 2>&1 | sort
@@ -392,17 +423,99 @@ write_cluster_json pending && echo "wrote $LLM_SCRIPTS/cluster.json"
 
 echo
 echo "=== waiting for the fleet"
+READY_PY=/p/lustre5/haridev/phronix-bench/venv/bin/python
+[ -x "$READY_PY" ] || READY_PY=$(command -v python3)
+
 deadline=$((SECONDS + ${READY_TIMEOUT:-1200}))
 total=$((NNODES * GPUS_PER_NODE))
+# Stop when the fleet is FULL, or when it has stopped growing.
+#
+# This only ever broke on `ready == total`, where total is what was ASKED for —
+# so a deploy that lands 23 of 32 servers polls for the whole 20-minute
+# READY_TIMEOUT after the last one came up, and the script looks hung while the
+# fleet has been serving for a quarter of an hour. Measured exactly that.
+#
+# A count that has not moved for three polls in a row is the fleet's real size:
+# a server still loading its weights makes progress somewhere in that 90s, and
+# one that is never coming up does not. The deadline is still the outer bound,
+# for the case where nothing has come up at all and there is nothing to settle.
+STABLE_POLLS=${STABLE_POLLS:-3}
+previous=-1
+unchanged=0
 while (( SECONDS < deadline )); do
-    ready=$(flux run -N "$NNODES" --requires="$HOSTSPEC" --tasks-per-node 1 -t 5m bash -c "
-        n=0
-        for g in \$(seq 0 $((GPUS_PER_NODE - 1))); do
-            curl -sf -m 4 -o /dev/null http://localhost:\$(($BASE_PORT + g))/health && n=\$((n+1))
-        done
-        echo \$n" 2>/dev/null | paste -sd+ - | bc 2>/dev/null)
-    echo "  ${ready:-0}/$total ready"
-    [ "${ready:-0}" = "$total" ] && break
+    # Health checked DIRECTLY, not through a Flux job.
+    #
+    # This ran `flux run -N$NNODES ... -t 5m` every 30 seconds purely to curl
+    # localhost on each node — so every poll queued for an allocation of the
+    # whole fleet, competed with the servers it was waiting for, and could sit
+    # in the scheduler longer than the interval it was meant to sample.
+    #
+    # The server ports answer from here. Measured: all 24 backends probed from
+    # the login node in well under a second. So ask them, in parallel, and spend
+    # no scheduler resources at all.
+    ready=$(HOSTS_CSV="$(IFS=,; echo "${HOSTS[*]}")" \
+            GPUS="$GPUS_PER_NODE" BASE="$BASE_PORT" \
+            "$READY_PY" - <<'EOF' 2>/dev/null
+import os, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+hosts = [h for h in os.environ.get("HOSTS_CSV", "").split(",") if h]
+gpus = int(os.environ.get("GPUS", "4"))
+base = int(os.environ.get("BASE", "8050"))
+targets = [f"http://{h}:{base + g}/health" for h in hosts for g in range(gpus)]
+
+
+def up(url):
+    try:
+        with urllib.request.urlopen(url, timeout=4) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+if targets:
+    with ThreadPoolExecutor(max_workers=min(64, len(targets))) as pool:
+        print(sum(pool.map(up, targets)))
+else:
+    print(0)
+EOF
+)
+    ready=${ready:-0}
+    # What actually REGISTERED, from the per-GPU records each server writes as
+    # it starts — the same source `status.sh` counts, and the reason the two
+    # disagreed: status said "23/23 up" while this waited for 32 and looked hung.
+    registered=$(ls "$RUNDIR"/nodes/*.json 2>/dev/null | wc -l)
+    if [ "$registered" -gt 0 ] && [ "$total" -ne "$registered" ]; then
+        echo "  ${ready}/$total ready  (${registered} server(s) ever registered)"
+    else
+        echo "  ${ready}/$total ready"
+    fi
+    [ "$ready" = "$total" ] && break
+    # Every server that registered is healthy AND no new one appeared since the
+    # last poll: that is the fleet, whatever was asked for.
+    #
+    # Both halves are needed. Without the healthy check this exits while servers
+    # are still loading; without the "no new ones" check it exits at the first
+    # poll, when two have registered, two are healthy, and thirty are still
+    # starting — which is worse than waiting too long.
+    if [ "$registered" -gt 0 ] && [ "$ready" = "$registered" ] \
+       && [ "$registered" = "${seen_registered:--1}" ]; then
+        echo "  all ${ready} registered server(s) are healthy — continuing"
+        break
+    fi
+    seen_registered=$registered
+
+    if [ "$ready" = "$previous" ]; then
+        unchanged=$((unchanged + 1))
+    else
+        unchanged=0
+    fi
+    previous=$ready
+    if [ "$unchanged" -ge "$STABLE_POLLS" ] && [ "$ready" -gt 0 ]; then
+        echo "  settled at ${ready}/$total after $((STABLE_POLLS * 30))s with no change"
+        echo "  — the rest are not coming up; continuing with what is serving"
+        break
+    fi
     sleep 30
 done
 

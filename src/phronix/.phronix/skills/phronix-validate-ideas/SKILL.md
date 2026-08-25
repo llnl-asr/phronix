@@ -20,6 +20,7 @@ Three good ideas is the target. Fewer means the plan runs again.
 | --- | --- | --- |
 | `I1` | Instructions | What makes an idea good |
 | `I2` | Instructions | What to do with a bad one |
+| `I2b` | Instructions | Judge the SET, not only each idea |
 | `I3` | Instructions | Three, and say the number |
 | `X1` | References | Judge from what you were given, and stop |
 | `X2` | References | Do not explore, and do not solve |
@@ -53,6 +54,27 @@ that is the plan's job, and the plan gets another turn if you leave it short.
 Record the surviving ideas with `research_set_aspects`, in priority order. The
 list you write IS the list that gets explored, so an idea you leave in is one
 you are committing two minutes to.
+
+### I2b — Judge the SET, not only each idea
+
+An idea can pass every test in `I1` and still be worthless in the list it is in.
+Before you count, ask: **would any two of these be investigated in the same
+place?** If so they are one idea with two names, and keeping both spends two
+slots, two explorations and two trials on one reading of the problem.
+
+Check the `where` each idea names. Same file — often the same function — means
+overlap. Send the list back asking for an idea somewhere else, and say which two
+clashed and where; "be more diverse" gets you a rename.
+
+Measured on `pylint-dev__pylint-7114`: four ideas survived this stage —
+`module-name-conflict-resolution`, `init-file-fallback`, `module-search-order`,
+`expand_modules` — and every resulting patch changed `get_python_path` in
+`pylint/lint/expand_modules.py`. The combination built from them rewrote the
+same loop. Three tries, five containers each, nothing passed. Each idea was
+defensible alone; the SET was one idea.
+
+An idea with no `where` cannot be checked. Ask for one rather than guessing —
+that is a cheap question and this is what it buys.
 
 ### I3 — Three, and say the number
 

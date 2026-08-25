@@ -1499,6 +1499,39 @@ class Arm:
             named = (record.get(key) or "")
             if isinstance(named, str) and named and named == skill:
                 return True
+        # The NAMING CONVENTION, which is available before the pointer is.
+        #
+        # Those pointers are written when a pass finishes; skills are written
+        # throughout it. So there is a window — long, because each idea is
+        # written up as it lands — where the skill exists and nothing points at
+        # it. Measured on `pylint-dev__pylint-7114`: while `build-solution` was
+        # still running, every racer was told
+        #
+        #   [recall] `pylint-dev-pylint-7114` was written for another problem
+        #            in this area — offered as knowledge, not as the plan
+        #
+        # about a skill named for THIS problem, demoting the task's own answer
+        # to background reading.
+        #
+        # Not fuzzy matching: `candidate_skill_name` DERIVES these names so that
+        # several writers and a reader agree without negotiating, and reading
+        # that back is deterministic.
+        mine = self.candidate_skill_name(topic, "")
+        prefix = mine[:-1] if mine.endswith("-") else mine
+        if skill == prefix or skill.startswith(f"{prefix}-"):
+            return True
+
+        # Same PROBLEM, differently spelled.
+        #
+        # The issue NUMBER is the discriminator: `pylint-dev__pylint-7114` and
+        # `-7080` are both pylint and both about module resolution, and they are
+        # not the same bug. A plain substring test is what gets this right — a
+        # cleverer pattern matched `1379` inside `21379` and rejected a task's
+        # own skill, the one answer that was certainly correct.
+        number = re.sub(r"[^0-9]", " ", str(topic)).split()
+        if number and number[-1] in skill:
+            return True
+
         # No record yet is not a mismatch: nothing has claimed the skill, so
         # the ordinary lookup stands.
         return not record.get("aspects") and not record.get("approaches")
@@ -4196,8 +4229,20 @@ phase owes and how to mark a partial measurement as partial.
             # not a fresh count.
             ideas = self._in_store(store_root, self._load_aspects, topic) or []
             report = last_output.get("validate-ideas", "") or report
-            if len(ideas) >= self.MIN_ASPECTS:
+            # Enough ideas is not the same as enough DIFFERENT ideas.
+            #
+            # This counted them and stopped. Five ideas all aimed at one
+            # function passed that test and cost three tries to disprove — so
+            # the count is now a floor on INDEPENDENT ideas, and an overlapping
+            # set is sent back with the overlap named.
+            clashes = self.overlapping_ideas(ideas)
+            if len(ideas) >= self.MIN_ASPECTS and not clashes:
                 break
+            if clashes and on_call:
+                on_call("[plan] " + "; ".join(
+                    f"{', '.join(names)} all look in {place}"
+                    for place, names in list(clashes.items())[:3])
+                    + " — asking for an idea somewhere else")
             # A flat round is a signal to ask DIFFERENTLY, not to stop.
             #
             # Measured: `2 good idea(s) kept, asking for 1 more` four rounds
@@ -4458,6 +4503,55 @@ phase owes and how to mark a partial measurement as partial.
 
             with ThreadPoolExecutor(max_workers=len(plans)) as pool:
                 list(pool.map(write_candidate, list(enumerate(plans, 1))))
+
+            # THE SUPER IDEA: one more candidate, combining what every idea found.
+            #
+            # The one place a barrier is right. Each idea is written up on its
+            # own above, and none of them waits — but a combination is not a
+            # combination until all of them are in, so it is built here, once,
+            # from the whole set.
+            #
+            # It earns its place because a task is often not one bug: an attempt
+            # can put the right check in the right function and still fail
+            # because the same issue needed two more sites changed. Each idea
+            # holds a piece; no single idea holds the task.
+            #
+            # An ADDITIONAL racer, never a replacement. Combining is a bet that
+            # the pieces belong together, and the singles stay in the race for
+            # when they do not — `reconcile_trials` then folds the table of what
+            # passed and what did not into one skill.
+            super_name = "super-idea"
+            findings = "\n".join(
+                f"- {plan['name']}: {(plan.get('summary') or '')[:200]}"
+                for plan in plans)
+            tree, unavailable = private_tree("solution-super")
+            if unavailable and on_call:
+                on_call(f"[build-solution:{super_name}] worktree unavailable "
+                        f"({unavailable}); working in place")
+            try:
+                if on_call:
+                    on_call(f"[build-solution:{super_name}] combining "
+                            f"{len(plans)} idea(s) into one candidate: "
+                            + ", ".join(p["name"] for p in plans))
+                stage(f"build-solution:{super_name}",
+                      self.SUPER_IDEA_PROMPT.format(
+                          topic="{topic}", findings=findings,
+                          skill=self.candidate_skill_name(topic, super_name)),
+                      0, brief_only, tree)
+                # Recorded as an approach, or `candidate_plans` cannot see it and
+                # the skill is built at full cost and never run.
+                self._in_store(
+                    store_root, research_mod.add_approach, topic, super_name,
+                    "the combination of " + ", ".join(p["name"] for p in plans),
+                    "Each idea fixes part of this task; applied together they fix "
+                    "the whole of it. False if the combined change passes no more "
+                    "target tests than the best single idea.")
+            except Exception as exc:          # noqa: BLE001 - reported, not raised
+                if on_call:
+                    on_call(f"[build-solution:{super_name}] could not "
+                            f"combine: {exc}")
+            finally:
+                drop_tree(tree)
         else:
             stage("build-solution", self.BUILD_SOLUTION_PROMPT, 0)
 
@@ -4757,6 +4851,18 @@ phase owes and how to mark a partial measurement as partial.
             # measured and lost.
             if str(entry.get("status") or "") in ("falsified", "failed"):
                 continue
+            # Nor is the LEDGER's own record of an attempt. It writes one entry
+            # per try whose NAME is the files that changed, which is not an idea:
+            # measured on `pylint-dev__pylint-7114`, `a/__init__.py, a/a.py`
+            # became `trial-1-a-init-py-a-a-py` and was raced like a plan —
+            # spending a container, an agent and an evaluation on a file list,
+            # and displacing a real idea from the limit.
+            if str(entry.get("source") or "") == "benchmark attempt":
+                continue
+            # Belt and braces: a name that is a path is a file list however it
+            # came to be recorded.
+            if name.endswith(".py") or "/" in name or name.startswith("("):
+                continue
             out.append({"name": name, "summary": summary[:600],
                         "skill": self.candidate_skill_name(topic, name)})
             if len(out) >= limit:
@@ -4789,6 +4895,41 @@ phase owes and how to mark a partial measurement as partial.
     #: skills, the graph indexes them, and reconcile keeps one copy of each
     #: fact — none of which reaches a string literal in a benchmark harness.
     #: What stays here is the INPUT, which is genuinely per-run.
+    SUPER_IDEA_PROMPT = """\
+Every idea for `{topic}` has been explored and written up on its own. Your job is
+the one candidate none of them can be: the SUPER IDEA — the single coherent
+change that takes what is right in each and puts it together.
+
+The ideas, and what each concluded:
+
+{findings}
+
+Write one solution skill named `{skill}` describing the combined change.
+
+This exists because a task is often not one bug. An attempt that adds a check in
+one place can be correct and still fail, because the same issue needed two more
+sites changed; each idea holds a piece and no single idea holds the task.
+
+How to combine them:
+
+1. Take every idea that found something real. An idea whose finding was "there is
+   nothing here" contributes nothing — leave it out and say so, rather than
+   padding the skill with it.
+2. Where two ideas touch the same code, reconcile them into ONE change. Two edits
+   to the same function are a conflict to resolve now, not two steps for the
+   attempt to discover.
+3. Where they touch different code, order them so the result is coherent: the
+   shared helper first, then its callers.
+4. Say what the combination achieves that no single idea does. If you cannot name
+   that, the honest answer is that these ideas do not combine — write the skill
+   for the strongest one alone and say why the others did not join it.
+
+Be specific: files, functions, line numbers, the actual edit, the exact exception
+type or return value. This skill is handed to an agent that will implement it
+without seeing any of the exploring, and it may be a smaller model than you —
+see [[phronix-skill-authoring]] `R0c` for what that demands.
+"""
+
     SOLUTION_SKILL_PROMPT = """\
 Write the solution skill for ONE approach.
 `skill_load("phronix-solution-candidate")` is your first action and the skill is
@@ -4950,10 +5091,71 @@ It is the plan itself, not background reading.
         return {a.get("aspect") for a in record.get("approaches", []) if a.get("aspect")}
 
     @staticmethod
-    def _load_aspects(topic: str) -> List[Dict[str, str]]:
+    def overlapping_ideas(ideas: List[Dict[str, str]]) -> Dict[str, List[str]]:
+        """Ideas that would be investigated in the same place, grouped by place.
+
+        Independence is what makes several ideas worth exploring: three readings
+        of one function are one reading with three names, and the combination
+        built from them is a no-op.
+
+        Measured on `pylint-dev__pylint-7114`. Four ideas —
+        `module-name-conflict-resolution`, `init-file-fallback`,
+        `module-search-order`, `expand_modules` — plus the super idea built from
+        them, and every patch changed `get_python_path` in
+        `pylint/lint/expand_modules.py`. Three tries, five containers each,
+        every candidate scoring 0, and the super idea's diff was the original
+        loop rewritten. The names differed; the target did not.
+
+        Judged on `where`, which the plan is asked to state and `explore` already
+        passes through. An idea with no `where` is counted as its own island: the
+        remedy for that is to ask for one, not to guess.
+        """
+        seen: Dict[str, List[str]] = {}
+        for idea in ideas:
+            where = str(idea.get("where") or "").strip().lower()
+            if not where:
+                continue
+            # The FILE is the unit of overlap, not the whole phrase: "line 40 of
+            # expand_modules.py" and "get_python_path in expand_modules.py" are
+            # the same place described twice.
+            for token in re.findall(r"[\w./-]+\.py\b", where) or [where]:
+                seen.setdefault(token, []).append(str(idea.get("name") or "?"))
+        return {place: names for place, names in seen.items() if len(names) > 1}
+
+    #: Idea names that are bookkeeping rather than ideas.
+    #
+    # The planner is shown what the record already holds so it does not repeat
+    # itself, and it reads back whatever is in there — including entries nothing
+    # ever proposed. Measured on `pylint-dev__pylint-7114` try 3:
+    #
+    #   5 idea(s): a_init_py, rename_a_py, super_idea, no_files_changed,
+    #              pylint_auto_init_helper
+    #
+    # `super_idea` is the candidate the PREVIOUS try synthesised from all the
+    # others, and `no_files_changed` is the ledger's note that an attempt changed
+    # nothing. Exploring either spends a worktree and a clock on a word, and the
+    # combination is rebuilt from whatever the real ideas find anyway.
+    SYNTHETIC_IDEAS = ("super-idea", "super_idea", "superidea",
+                       "no-files-changed", "no_files_changed",
+                       "(no files changed)")
+
+    @classmethod
+    def _is_synthetic_idea(cls, name: str) -> bool:
+        flat = re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-")
+        if flat in {re.sub(r"[^a-z0-9]+", "-", n.lower()).strip("-")
+                    for n in cls.SYNTHETIC_IDEAS}:
+            return True
+        # A name that is a path is a file list, however it got recorded.
+        return name.endswith(".py") or "/" in name
+
+    @classmethod
+    def _load_aspects(cls, topic: str) -> List[Dict[str, str]]:
         from phronix import research
 
-        return (research.load(research.resolve_topic(topic)) or {}).get("aspects", [])
+        aspects = (research.load(research.resolve_topic(topic))
+                   or {}).get("aspects", [])
+        return [a for a in aspects
+                if not cls._is_synthetic_idea(str(a.get("name") or ""))]
 
     @staticmethod
     def _count_research_calls(stdout: str) -> Dict[str, int]:
@@ -5784,6 +5986,7 @@ class ClaudeArm(OpenCodeArm):
                    "--model", model or self.qualified_model]
         if self.effort:
             command += ["--effort", self.effort]
+        command += self._denial_flags(agent)
         if agent:
             # The agent's REAL definition, not just its name.
             #
@@ -5816,11 +6019,42 @@ class ClaudeArm(OpenCodeArm):
         spec = self._agent_spec(agent)
         flags = ["--agents", json.dumps({agent: spec})]
         wanted = spec.get("tools") or []
-        if wanted:
-            denied = [name for name in self.BUILT_IN_TOOLS if name not in wanted]
-            if denied:
-                flags += ["--disallowedTools", ",".join(denied)]
+        # Merged into ONE `--disallowedTools`, never two.
+        #
+        # The base argv already denies the tools whose schema breaks a llama.cpp
+        # grammar; a second flag here would be the one Claude Code keeps, and
+        # those two tools would come back for exactly the restricted agents that
+        # run most of the research.
+        # No `--disallowedTools` here: `agent_command` emits one merged flag,
+        # because a second would be the one Claude Code keeps.
         return flags
+
+    def _denial_flags(self, agent: str = "") -> List[str]:
+        """ONE `--disallowedTools`, built from both reasons to deny a tool.
+
+        Two flags would mean Claude Code keeps the last, and the
+        schema-breaking tools would come back for exactly the restricted agents
+        that run most of the research.
+
+        Shared by both Claude arms. Putting it in one of them left the other
+        sending `Artifact` and `RemoteTrigger` — and since the server rejects the
+        WHOLE request when they are present, that arm failed every call.
+        """
+        denied = list(self.SCHEMA_BREAKING_TOOLS)
+        if agent:
+            wanted = self._agent_spec(agent).get("tools") or []
+            if wanted:
+                denied += [name for name in self.BUILT_IN_TOOLS
+                           if name not in wanted]
+        return ["--disallowedTools", ",".join(dict.fromkeys(denied))]
+
+    #: Tools whose JSON Schema llama.cpp cannot compile into a grammar.
+    #
+    # The server rejects the WHOLE request — "Failed to initialize samplers:
+    # failed to parse grammar" — so every call fails, not only one that would
+    # have used them. Measured by replaying a captured request: 100 tools
+    # failed, the same 100 without these two succeeded, and each failed alone.
+    SCHEMA_BREAKING_TOOLS = ("Artifact", "RemoteTrigger")
 
     #: The built-in tools a restricted agent has to be denied by name.
     BUILT_IN_TOOLS = ("Bash", "Edit", "Write", "Read", "Grep", "Glob",
@@ -5944,6 +6178,12 @@ class ClaudePhronixArm(PhronixOpenCodeArm, ClaudeArm):
                       agent: str = "", model: str = "") -> List[str]:
         command = ClaudeArm.agent_command(self, prompt, checkout, files,
                                           agent="", model=model)
+        # The base builder emitted its own `--disallowedTools` for `agent=""`;
+        # this one re-emits it with the agent's restrictions, and Claude Code
+        # keeps the LAST flag. Drop the base pair so exactly one survives.
+        if "--disallowedTools" in command:
+            at = command.index("--disallowedTools")
+            del command[at:at + 2]
 
         # The phronix MCP server, declared inline rather than written into the
         # checkout: a config file inside the repository would show up as an
@@ -5953,6 +6193,8 @@ class ClaudePhronixArm(PhronixOpenCodeArm, ClaudeArm):
             "args": ["-m", "phronix.mcp_server"],
         }}}
         command += ["--mcp-config", json.dumps(config)]
+        command += self._denial_flags(agent)
+
         if agent:
             # The same flags the plain Claude arm builds. This declared only a
             # description, so the phronix arm — the one that actually uses

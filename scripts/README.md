@@ -111,21 +111,51 @@ invoice. `run-group.sh` runs one slice at a time, sized so a slice fits a short
 allocation.
 
 ```bash
-scripts/run-group.sh 1 f3TkgpQVfpEb              # group 1, inside that allocation
-scripts/run-group.sh 4 f3TkgpQVfpEb --spend 60   # a smaller ceiling
-scripts/run-group.sh 2 ""                        # no allocation: containers run here
+scripts/run-group.sh 1 <alloc>            # group 1, hosted Sonnet
+scripts/run-group.sh 4 <alloc> --spend 60 # a smaller ceiling
+scripts/run-group.sh 3 <alloc> --local    # the local GPU fleet instead
+scripts/run-group.sh 2 ""                 # no allocation: containers run here
 ```
 
-Defaults: **34 tasks, $100, 6 in parallel, 2 nodes** — about five hours. That
-sizing comes from one measured task on Sonnet: **$2.34 and 47 minutes** for three
-tries. Six in parallel is what turns 34 × 47 minutes into five hours; the $100
-is what 34 tasks cost at that rate.
+Defaults: **30 tasks, hosted Claude Sonnet, 5 at a time, $100 ceiling** — a few
+hours per group. Five rather than thirty because the hosted model is the shared
+resource: a task's own turns are serialised anyway, so past a point more
+concurrency only puts every stage behind rate limits. At the measured **$2.34
+and 47 minutes** per task, a group lands near $70, inside the ceiling.
 
-The nine group files are contiguous slices of `lite-300.txt`:
+`--local` serves the model from the GPU fleet instead and drops the ceiling — on
+your own GPUs the dollar figure is notional, and a cap there would stop a run
+over a number that means nothing.
+
+The ten group files are contiguous slices of `lite-300.txt`:
 
 ```
-/p/lustre5/haridev/phronix-bench/groups/group-01.txt … group-09.txt
+/p/lustre5/haridev/phronix-bench/groups/group-01.txt … group-10.txt
 ```
+
+### The allocation, and what it is for
+
+`<alloc>` must be a **running** Flux job — `flux jobs -a` and look for state
+`R`. `S` is scheduled and has not started; `TO` has timed out. The script checks
+this and names the state, because `flux proxy` against anything else fails with
+*"Unable to resolve &lt;id&gt; to a URI"*, which reads like a typo rather than an
+expired reservation. Measured the hard way: a run lost its fleet and its
+container hosts mid-flight when the allocation hit its wall.
+
+The allocation is for the evaluation **containers**, not for the model:
+
+* **hosted** (default) — the model is Anthropic's, so the nodes only run
+  containers. A small allocation is enough; five concurrent tasks need ten.
+* **`--local`** — the model comes from the GPU fleet in the same allocation, so
+  the container hosts are the allocation **minus** the nodes the fleet is on.
+  See `tuolumne-llm/README.md` for deploying the fleet on part of an allocation.
+
+Container hosts are derived, never hardcoded: the allocation's hostlist, minus
+whatever the fleet's per-GPU records say is serving, minus anything that refuses
+ssh. On one 16-node allocation that correctly excluded the 6 serving nodes and 2
+that were unreachable, leaving exactly the 8 usable ones — where reading the
+*intended* host list would have placed containers on two nodes that never served
+and skipped two that did.
 
 Each group is **independent** — `--fresh --no-carry` gives it its own store, so
 groups can run in any order, on any allocation, and a group that dies takes
@@ -133,13 +163,12 @@ nothing with it. Within a group the learning arm still benefits from its own
 earlier tasks, and that is what these runs measure; cross-group reuse is not
 measured, because there is none.
 
-`--nodes` takes a COUNT here and is resolved to real hostnames from the
-allocation. The underlying `run-benchmark.sh --nodes` wants hostnames: give it a
-number and it reads "2" as a host, resolves it to `0.0.0.2`, and the run dies
-with *"container host on 2 is not usable"*.
-
-The allocation is for the evaluation **containers**. These runs use the Anthropic
-API, so no GPU fleet is involved and nodes buy container capacity only.
+Every researched plan is built, attempted and evaluated separately — that is the
+default now. Research explores several ideas and writes each up; testing only the
+top-ranked one pays for the rest and never tries them, and never checks the
+ranking against the task's own tests. `reconcile_trials` then folds the results
+into one skill: what several passing candidates agree on becomes the fix, and
+each failure becomes a named lesson.
 
 ### The spend ceiling
 

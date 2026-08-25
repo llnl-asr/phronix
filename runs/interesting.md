@@ -43,6 +43,9 @@
 
 /p/lustre5/haridev/phronix-bench/runs/fresh30-0822-000948
 
+#### Group 1 - Fresh
+
+/p/lustre5/haridev/phronix-bench/runs/claude-0824-150741
 
 
 ## opencode run with local cluster

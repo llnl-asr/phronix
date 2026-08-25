@@ -24,7 +24,7 @@ and neither needs a stage of its own.
 | `I3` | Instructions | At least twenty instances, genuinely diverse |
 | `I4` | Instructions | Add the instances in the same breath as the axes |
 | `I5` | Instructions | Plan around what is already known |
-| `I6` | Instructions | Finding an idea the existing ones do not cover |
+| `I6` | Instructions | Ideas must be INDEPENDENT, from the first list onward |
 | `X1` | References | No approaches yet |
 | `R1` | Rules | Why the metric comes first |
 | `R2` | Rules | Ideas are appended, not replaced |
@@ -109,12 +109,22 @@ is how the re-check happens. But do not spend a NEW aspect on covered ground:
 aspects are the expensive stage, only a few run, and one spent re-deriving a
 known answer is one not spent on the part nobody has looked at.
 
-### I6 — Finding an idea the existing ones do not cover
+### I6 — Ideas must be INDEPENDENT, from the first list onward
 
-When you are asked for more ideas, you are given the ones already kept as a
-single line each. That is deliberate: enough to see what is covered, not enough
-to elaborate on. Elaborating is the trap — it produces a third idea that is the
-first one reworded, which is filler and will be rejected.
+Two ideas are one idea when they would be investigated in the same place. This
+is not a rule about wording — it is a rule about where you would have to look.
+
+**State `where` for every idea, and make every `where` different.** The file, and
+the function if you know it. `research_set_aspects` takes it, `explore` passes it
+to whoever investigates, and it is checked: a list whose ideas name the same file
+is sent back with the overlap named, however many ideas it has.
+
+Measured on `pylint-dev__pylint-7114`. Four ideas were kept —
+`module-name-conflict-resolution`, `init-file-fallback`, `module-search-order`,
+`expand_modules` — and every one of them changed `get_python_path` in
+`pylint/lint/expand_modules.py`. The super idea built from them rewrote the same
+loop. Three tries, five containers each, every candidate scoring zero. Four names
+for one reading of the problem.
 
 **Move along an axis instead of along the wording.** Given two ideas, ask which
 of these they *both* share, and change that one:
@@ -129,8 +139,14 @@ of these they *both* share, and change that one:
 | time | they both look at the code now; look at what changed and why |
 
 A genuinely new idea usually feels like it is about a different part of the
-system. If your third idea would be investigated by opening the same file as
-the first, it is probably the first one again.
+system. **If your third idea would be investigated by opening the same file as
+the first, it is the first one again** — rename it and it is still the first one.
+
+The failing case tells you where to start, not where the cause is. When every
+idea points at the function that raised, ask instead: who called it with that
+argument, what decided the argument, what the test would need to be true, and
+what a version that works does differently. Those live in different files, which
+is the point.
 
 **Two good ideas and an honest count beats three where the third is padding.**
 Say so if the angles are genuinely exhausted — but say it after trying the axes

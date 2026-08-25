@@ -3100,7 +3100,10 @@ def test_a_plan_must_record_three_ideas():
     # Predict, then correct: the validator decides which ideas survive, and
     # the COUNT of survivors decides whether the plan runs again.
     assert 'stage("validate-ideas"' in flow
-    assert "if len(ideas) >= self.MIN_ASPECTS:" in flow
+    # The count is a floor on INDEPENDENT ideas: enough ideas is not the same
+    # as enough different ones, and a set aimed at one function used to pass
+    # this check and cost three tries to disprove.
+    assert "if len(ideas) >= self.MIN_ASPECTS and not clashes:" in flow
     # "Plan MORE", not "plan again": the ideas the validator kept stay, and
     # the next round is asked only for the shortfall — with the validator's
     # report so it does not put up what was just rejected.
@@ -3552,7 +3555,11 @@ def test_a_stalled_plan_is_asked_differently_rather_than_abandoned():
     # And the method for finding a genuinely different angle is in the skill.
     skill = (Path(__file__).parent.parent / "src" / "phronix" / ".phronix"
              / "skills" / "phronix-research-plan" / "SKILL.md").read_text()
-    assert "do not cover" in skill and "axis" in skill
+    assert "axis" in skill
+    # Independence is now the requirement, stated for the FIRST list rather
+    # than only when topping one up.
+    assert "INDEPENDENT" in skill
+    assert "it is the first one again" in skill
 
 
 def test_two_bugs_in_one_repository_do_not_share_a_solution_skill():
@@ -3611,12 +3618,29 @@ def test_a_restricted_agent_is_actually_denied_the_built_in_tools():
         spec = cmd[cmd.index("--agents") + 1]
         assert "mcp__phronix__research_set_aspects" in spec, cls.__name__
 
-    # An agent with no declared tools keeps its defaults: the denial applies
-    # only where a restriction was actually expressed.
+    # An agent with no declared tools keeps its BUILT-IN defaults: the
+    # restriction applies only where one was actually expressed.
+    #
+    # The schema-breaking pair is denied regardless, which is a different
+    # concern — `Artifact` and `RemoteTrigger` carry JSON Schemas llama.cpp
+    # cannot compile, and the server rejects the whole request when they are
+    # present, so every call fails rather than only one that would use them.
     arm = ClaudePhronixArm(model="m", provider="tuolumne",
                            base_url="http://h:4000/v1", api_key="k")
-    assert "--disallowedTools" not in arm.agent_command(
-        "p", Path("/tmp"), [], agent="no-such-agent")
+    cmd = arm.agent_command("p", Path("/tmp"), [], agent="no-such-agent")
+    denied = cmd[cmd.index("--disallowedTools") + 1].split(",")
+    assert sorted(denied) == ["Artifact", "RemoteTrigger"]
+    for kept in ("Edit", "Bash", "Write", "Read"):
+        assert kept not in denied
+
+    # And exactly one such flag, whatever the arm: Claude Code keeps the last,
+    # so a second would silently undo the first.
+    for cls in (ClaudePhronixArm, ClaudeArm):
+        one = cls(model="m", provider="tuolumne",
+                  base_url="http://h:4000/v1", api_key="k")
+        for which in ("phronix-validator", "no-such-agent", ""):
+            argv = one.agent_command("p", Path("/tmp"), [], agent=which)
+            assert argv.count("--disallowedTools") == 1, (cls.__name__, which)
 
 
 def test_an_approach_is_always_chosen_so_the_outcome_can_be_marked(isolated_layers):
@@ -4861,3 +4885,170 @@ def test_backends_are_dealt_in_turn_rather_than_hashed():
     bare = ClusterConfig({"model": "gpt-oss-120b"})
     bare._aliases_from_gateway = lambda: []
     assert bare.model_for("task-1") == "gpt-oss-120b"
+
+
+def test_the_super_idea_is_built_recorded_and_raced():
+    """One more candidate: the combination of every idea, tried like the rest.
+
+    A task is often not one bug. An attempt can put the right check in the right
+    function and still fail because the same issue needed two more sites
+    changed — each idea holds a piece and no single idea holds the task. So
+    after the singles are written up, one further candidate combines them, and
+    it is attempted and evaluated like any other.
+    """
+    import inspect
+
+    from tests.benchmark import arms
+
+    src = inspect.getsource(arms.PhronixOpenCodeArm.research)
+    body = src[src.index('super_name = "super-idea"'):]
+
+    # Built after the singles, from all of them.
+    assert "SUPER_IDEA_PROMPT" in body
+    assert "findings" in body
+    # Recorded as an approach, or `candidate_plans` cannot see it and the skill
+    # is built at full cost and never run.
+    assert "add_approach" in body
+    # With a falsifiable hypothesis, so the race tests the combination rather
+    # than crowning it.
+    assert "no more" in body and "target tests" in body
+
+    # The prompt itself demands specificity, because a weaker model implements it.
+    prompt = arms.PhronixOpenCodeArm.SUPER_IDEA_PROMPT
+    assert "files, functions, line numbers" in prompt
+    assert "phronix-skill-authoring" in prompt
+    # And it must be willing to say the ideas do NOT combine.
+    assert "do not combine" in prompt
+
+    # It is an ADDITIONAL racer: the singles are written before it, not replaced.
+    assert body.index("add_approach") > 0
+    assert "write_candidate" in src[:src.index('super_name = "super-idea"')]
+
+
+def test_the_ledgers_file_lists_are_not_raced_as_ideas(tmp_path, monkeypatch):
+    """An attempt's list of changed files is not a plan.
+
+    Taken from `pylint-dev__pylint-7114`: the ledger records one entry per try
+    whose NAME is the files that changed, and `a/__init__.py, a/a.py` became
+    `trial-1-a-init-py-a-a-py` — a container, an agent and an evaluation spent
+    on a file list, which also displaced a real idea from the limit.
+    """
+    from tests.benchmark import arms
+
+    arm = arms.PhronixOpenCodeArm.__new__(arms.PhronixOpenCodeArm)
+    record = {"aspects": [], "approaches": [
+        {"name": "a/__init__.py, a/a.py", "source": "benchmark attempt"},
+        {"name": "src/pylint/lint.py", "source": ""},        # path-shaped
+        {"name": "(no files changed)", "source": ""},
+        {"name": "super-idea", "summary": "the combination", "status": "potential"},
+        {"name": "module_resolution", "summary": "resolve modules differently"},
+    ]}
+    monkeypatch.setattr(arm, "_in_store", lambda root, fn, *a, **k: record)
+
+    names = [p["name"] for p in
+             arm.candidate_plans(tmp_path, "pylint-dev__pylint-7114", limit=0)]
+    assert names == ["super-idea", "module_resolution"]
+
+
+def test_a_task_recognises_its_own_skill_and_rejects_a_neighbours(
+        tmp_path, monkeypatch):
+    """The record's pointer is written last; the skill exists throughout.
+
+    Measured on `pylint-dev__pylint-7114`: while `build-solution` was still
+    running, every racer was told `pylint-dev-pylint-7114` "was written for
+    another problem in this area" — the task's own answer demoted to background
+    reading, because no pointer had been set yet.
+    """
+    from tests.benchmark import arms
+
+    arm = arms.PhronixOpenCodeArm.__new__(arms.PhronixOpenCodeArm)
+    topic = "pylint-dev__pylint-7114"
+    # Mid-pass: real content, no pointer yet.
+    monkeypatch.setattr(arm, "_in_store", lambda root, fn, *a, **k:
+                        {"aspects": [{"name": "create_init"}],
+                         "approaches": [{"name": "super-idea"}]})
+
+    assert arm._skill_is_for(tmp_path, "pylint-dev-pylint-7114", topic) is True
+    assert arm._skill_is_for(
+        tmp_path, arm.candidate_skill_name(topic, "super-idea"), topic) is True
+    assert arm._skill_is_for(
+        tmp_path, arm.candidate_skill_name(topic, "create_init"), topic) is True
+
+    # A DIFFERENT pylint bug is still rejected — that is what the check is for.
+    assert arm._skill_is_for(tmp_path, "pylint-dev-pylint-7080", topic) is False
+    assert arm._skill_is_for(tmp_path, "solution-sympy-sympy-21847-x", topic) is False
+
+
+def test_synthetic_entries_do_not_become_research_ideas():
+    """`super_idea` and `no_files_changed` are bookkeeping, not ideas.
+
+    Measured on `pylint-dev__pylint-7114` try 3, whose idea list came back as
+    `a_init_py, rename_a_py, super_idea, no_files_changed,
+    pylint_auto_init_helper` — the candidate the previous try synthesised, and
+    the ledger's note that an attempt changed nothing, both queued for
+    exploration.
+    """
+    from tests.benchmark import arms
+
+    arm = arms.PhronixOpenCodeArm
+    for junk in ("super_idea", "super-idea", "no_files_changed",
+                 "(no files changed)", "a/__init__.py, a/a.py", "src/lint.py"):
+        assert arm._is_synthetic_idea(junk), junk
+    for real in ("create_init", "module_resolution", "namespace_pkg_handling",
+                 "file_collection_order", "rename_a_py"):
+        assert not arm._is_synthetic_idea(real), real
+
+
+def test_ideas_that_look_in_the_same_place_are_not_independent():
+    """Several readings of one function are one reading with several names.
+
+    Measured on `pylint-dev__pylint-7114`: four ideas survived validation —
+    `module-name-conflict-resolution`, `init-file-fallback`,
+    `module-search-order`, `expand_modules` — and every resulting patch changed
+    `get_python_path` in `pylint/lint/expand_modules.py`. The super idea built
+    from them rewrote the same loop. Three tries, five containers each, every
+    candidate scoring 0.
+    """
+    from tests.benchmark import arms
+
+    overlap = arms.PhronixOpenCodeArm.overlapping_ideas
+
+    # The measured case: four names, one file.
+    clashes = overlap([
+        {"name": "module-name-conflict-resolution",
+         "where": "pylint/lint/expand_modules.py get_python_path"},
+        {"name": "init-file-fallback", "where": "pylint/lint/expand_modules.py"},
+        {"name": "module-search-order",
+         "where": "line 40 of pylint/lint/expand_modules.py"},
+    ])
+    assert "pylint/lint/expand_modules.py" in clashes
+    assert len(clashes["pylint/lint/expand_modules.py"]) == 3
+
+    # Genuinely different places are not a clash.
+    assert overlap([
+        {"name": "caller", "where": "pylint/lint/pylinter.py"},
+        {"name": "producer", "where": "pylint/lint/expand_modules.py"},
+        {"name": "config", "where": "pylintrc"},
+    ]) == {}
+
+    # An idea with no `where` is its own island: the remedy is to ask for one,
+    # not to guess that it overlaps.
+    assert overlap([{"name": "a"}, {"name": "b"}]) == {}
+
+
+def test_the_plan_loop_asks_again_when_the_ideas_overlap():
+    """Enough ideas is not the same as enough DIFFERENT ideas.
+
+    The loop counted them and stopped, so a set aimed entirely at one function
+    passed and cost three tries to disprove.
+    """
+    import inspect
+
+    from tests.benchmark import arms
+
+    src = inspect.getsource(arms.PhronixOpenCodeArm.research)
+    assert "clashes = self.overlapping_ideas(ideas)" in src
+    # The count alone must no longer be sufficient to break out.
+    assert "if len(ideas) >= self.MIN_ASPECTS and not clashes:" in src
+    # And the ask names the overlap — "be more diverse" gets a rename.
+    assert "all look in" in src

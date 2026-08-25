@@ -17,6 +17,35 @@ tuolumne-llm/status.sh                                  # live view (a = all rep
 flux proxy <alloc-jobid> tuolumne-llm/stop.sh           # STOP: tear down + reap
 ```
 
+### Getting an allocation
+
+Everything below runs INSIDE a Flux allocation, and `flux proxy <alloc>` is how a
+command reaches it. Nothing works without one:
+
+```bash
+# ask for one — 8 nodes for 12 hours
+flux alloc -N8 -t 12h --queue=pbatch
+
+# or submit and let it start when the scheduler is ready
+flux batch -N8 -t 12h --queue=pbatch --wrap "sleep infinity"
+
+# what you have, and whether it is usable yet
+flux jobs -a
+```
+
+The state column is what matters. **`R` is running and can host work**; `S` is
+scheduled and has not started; `TO` has timed out. A `flux proxy` against
+anything but `R` fails with *"Unable to resolve &lt;id&gt; to a URI"*, which reads
+like a typo rather than an expired reservation — measured the hard way, with a
+benchmark that lost its fleet and its container hosts mid-run when the
+allocation hit its wall.
+
+Check the time remaining before starting anything long:
+
+```bash
+flux jobs -a --no-header | awk '$5=="R"{print $1, $6" nodes", $8" left"}'
+```
+
 ### Starting the cluster
 
 `deploy.sh` is the one command. It stages the weights onto every node's local
@@ -39,6 +68,47 @@ SAMPLING=greedy flux proxy <alloc> tuolumne-llm/deploy.sh
 ```
 
 Model keys: `gptoss120`, `gptoss20`, `nemosuper`, `nemotron`, `muse`, `ornith`.
+
+**Serving on part of an allocation.** `NNODES` makes the fleet take a PREFIX of
+the allocation and leave the rest free — which is what you want when the same
+allocation also has to run the benchmark's evaluation containers, because a node
+serving four llama-servers has no room for them and a container competing with a
+server slows the model for every task.
+
+```bash
+# 16-node allocation: fleet on the first 8, benchmark on the other 8
+NNODES=8 flux proxy <alloc> tuolumne-llm/deploy.sh gptoss120
+```
+
+Do not assume the fleet got the nodes it asked for. Asked for 8 nodes this
+deploy landed 23 servers on 6 — two nodes never came up at all. `deploy.sh` now
+rebuilds the gateway config from the per-GPU records each replica writes as it
+starts, so the gateway advertises what exists rather than what was intended, and
+`scripts/run-group.sh` derives its container hosts the same way — the allocation
+minus whatever is actually serving, minus anything that refuses ssh.
+
+```bash
+tuolumne-llm/status.sh          # replicas up, and on which hosts
+```
+
+### Redeploying
+
+Stop first, then deploy. `deploy.sh` does not tear down what is already there,
+and two fleets on one allocation fight over ports and GPUs:
+
+```bash
+flux proxy <alloc> tuolumne-llm/stop.sh
+NNODES=8 flux proxy <alloc> tuolumne-llm/deploy.sh gptoss120
+```
+
+`stop.sh` cancels every `llama-*` and `litellm-*` job and reaps orphaned servers
+on every node. One thing it cannot reach: a gateway started BY HAND rather than
+through Flux — `flux cancel` only knows about jobs. If you have restarted one
+manually, kill the process too, or it keeps serving a stale config from the old
+run directory on the same port.
+
+Re-deploying costs almost nothing when the weights are already on the nodes:
+staging is skipped per node when the copy is there, so only the servers restart.
 
 **Staging is why it is fast and reliable.** Every server otherwise reads its
 weights off lustre, and gpt-oss-120b is 63 GB — eight nodes starting together
