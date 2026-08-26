@@ -9,7 +9,10 @@
 # The pid is recorded in $LLM_ROOT/logs/pids/<host>-<port>.pid and a JSON record in
 # $RUNDIR/nodes/<host>-<port>.json, for status.sh and reap-node.sh.
 set -uo pipefail
-source "${LLM_SCRIPTS:-/usr/WS2/haridev/phronix/tuolumne-llm}/env.sh"
+# Resolve env.sh NEXT TO THIS SCRIPT, not from a hardcoded path: corona-llm/
+# symlinks these scripts and carries its own env.sh, and a hardcoded default
+# would have every corona invocation silently load Tuolumne's paths and arch.
+source "${LLM_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/env.sh"
 source "$LLM_SCRIPTS/profiles.sh"
 
 key=$1
@@ -131,7 +134,13 @@ case "${SAMPLING:-reference}" in
        exit 1 ;;
 esac
 
-args=("${PROFILE_ARGS[@]}" -ngl 999 --flash-attn on --jinja --metrics
+# --flash-attn is a knob because it is not universally available.
+#
+# MI300A (gfx942) has the kernels; corona's MI50 (gfx906) is a 2018 part that
+# llama.cpp's HIP flash-attention path does not cover, and forcing `on` there
+# fails the server at startup rather than falling back. `auto` lets llama.cpp
+# decide per build, which is what a gfx906 fleet wants.
+args=("${PROFILE_ARGS[@]}" -ngl 999 --flash-attn "${LLAMA_FLASH_ATTN:-on}" --jinja --metrics
       "${SAMPLE_ARGS[@]}" --seed 1
       --repeat-penalty 1.0 --repeat-last-n 0
       -fit off --host 0.0.0.0 --port "$port")

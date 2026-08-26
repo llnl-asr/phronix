@@ -14,6 +14,7 @@ type: skill
 | `I2b` | Instructions | Exactly one worked: merge, keeping the winner's spine |
 | `I3` | Instructions | Nothing worked: find the shared assumption |
 | `I3b` | Instructions | Carry every failure forward as a named corner case |
+| `I3c` | Instructions | Say WHICH STEP failed, and record it |
 | `I4` | Instructions | Score the result on outcome, cost, and transfer |
 | `R1` | Rules | A losing approach is not wrong in every part |
 | `R0` | Rules | A skill that solves a problem must say how to solve it |
@@ -88,6 +89,33 @@ the two `add_url_rule` sites scores 1/2, not partial credit toward 2/2".
 
 Discarding this is how the next model repeats an attempt you already paid for.
 [[phronix-skill-authoring]] `R0c` carries the measured case.
+
+### I3c — Say WHICH STEP failed, and record it
+
+The plan is an ordered method — see [[phronix-research-plan]] `I5b` — so a
+failure has a position, and finding it is the most useful thing this stage does.
+
+Read the test output against the steps: which step's expectation was the first
+not to hold? Then:
+
+```
+research_record_step_reached(topic, "<step name>", "<what the output showed>")
+```
+
+Why this matters more than it looks. "0 target tests passing" is the same number
+on try 1 and try 3, so a task that is converging looks identical to one that is
+stuck, and both are stopped at the same ceiling. A position does distinguish
+them: failing at step 2, then at step 4, is progress — and a task that shows it
+is granted another try rather than being cut off while closing in.
+
+It also aims the next pass. A whole-fix retry re-derives everything; a retry that
+knows step 3 was where it broke keeps steps 1 and 2 and looks for another way to
+do step 3 — which is what [[phronix-research-plan]] `I5b` set the method up for.
+
+Be honest about which step. If the failure is that the steps do not compose, or
+that a step nobody planned was needed, say that instead of picking the nearest
+name — a wrong attribution moves the next pass away from the problem, and the
+progress signal then rewards noise.
 
 ### I4 — Score the result on outcome, cost, and transfer
 

@@ -1,0 +1,1 @@
+../tuolumne-llm/smoke-test.sh

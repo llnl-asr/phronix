@@ -35,6 +35,9 @@ Read them. The repository alone will not tell you what was investigated or why.
 | `I4` | Instructions | Short, actionable entries — the constraint that matters most |
 | `I5` | Instructions | Only record what the evidence supports |
 | `I6` | Instructions | Name it for the subject |
+| `I7` | Instructions | A solved task owes the next run a skill it can LOOK UP |
+| `I8` | Instructions | A partial pass is evidence in both directions |
+| `I9` | Instructions | Memory is this session; a skill is what survives it |
 
 ## Instructions
 
@@ -120,3 +123,95 @@ same problem shape.
 Finish by stating which calls you made. If you genuinely learned nothing
 reusable, say so and why — but that is rare after a real debugging session, and
 never true after one that passed.
+
+
+### I7 — A solved task owes the next run a skill it can LOOK UP
+
+`best_skill_for` does not search. Before an attempt starts it looks up
+`solution-<topic>` by name, then the record's topic skill, then
+`solution-<topic>-<plan>`. A skill filed under any other name is invisible to
+it, however good the skill is.
+
+Measured on `django__django-13551`: the attempt passed 2 of 2, this pass wrote
+a memory holding the correct fix *and* the corner case that had broken the
+earlier version — `user.email` is `None` on a model with a custom email field —
+and wrote no skill. The store held the answer; the one mechanism that asks for
+it saw nothing, and the next run opened at "no skill covers this task".
+
+**A memory is not a substitute.** Memories are recalled through a different
+route than the pre-attempt lookup takes, so a solution living only in memory is
+one the next run re-derives at full price.
+
+What the solution skill holds, in order of value:
+
+1. **The change that worked**, precisely enough to apply — the file, the
+   function, what the line became.
+2. **Why that form and not the obvious one.** If an earlier attempt failed
+   first, the difference between the two is the most valuable thing on the
+   page: *"use `get_email_field_name()` rather than `user.email`, because a
+   custom user model has no `email` attribute and the naive form raises
+   `TypeError: must be str, not NoneType`"* is worth more than any description
+   of the bug.
+3. **What the tests checked**, so the next run knows when it is done.
+
+Do not describe the issue. The next run has the issue; what it does not have is
+the answer.
+
+
+### I8 — A partial pass is evidence in both directions
+
+`1 of 2` is not a failure. It is a result that says one part of the change is
+CORRECT — the tests were failing before it and pass because of it — and another
+part is missing. Only the missing half was ever being recorded.
+
+`attempt-notes.md` and the verdict now name both: `fail_to_pass_passing` and
+`fail_to_pass_failing`. Write both down.
+
+* The passing half is **established**. Record it as a finding with the test
+  that confirms it, so the next attempt builds on it rather than re-deriving
+  it — or worse, rewriting it and regressing a target the run had banked.
+* The failing half is the open question, and it is narrower than the original
+  issue because part of the issue is now solved.
+
+Measured on `django__django-13551` at 1 of 2: the change had correctly added
+the user's email to the token hash and its target test passed. The record kept
+only "still failing: test_token_with_different_secret", and the next pass
+planned a step for the email handling that already worked.
+
+"The email belongs in the token hash — confirmed by its own target test; what
+is still missing is X" is worth more than either half stated alone.
+
+
+### I9 — Memory is this session; a skill is what survives it
+
+The two stores have different lifetimes, and that — not importance — decides
+where something goes.
+
+**Memory holds what is true of THIS run.** The exchange, the attempt log, which
+container was used, what this particular agent tried and in what order, the
+state a later stage of the same session needs. It is working context. It is
+allowed to be long, specific and disposable, because nothing outside this
+session will read it.
+
+**A skill holds what is true AFTER this run ends.** The change that worked, the
+corner case that broke the obvious version, the method. Anything a future task
+on this subject would want, and anything a later run would otherwise pay to
+re-derive.
+
+The test is one question: **would a run that never saw this session want it?**
+
+| the exchange, the transcript, the diff of this attempt | memory |
+| "this attempt tried X and the tests said Y" | memory |
+| the change that made the target tests pass | **skill** |
+| why that form beat the obvious one | **skill** |
+| a corner case that cost an attempt to find | **skill** |
+
+Getting this backwards is not a filing error, it is a lost result. Measured on
+`django__django-13551`: the attempt passed 2 of 2, and the fix — with the
+corner case that had broken three earlier runs — was written as a memory. It
+was correct, it was well written, and it died with the run, because the
+pre-attempt lookup reads skills.
+
+The failure mode is asymmetric. A session fact written as a skill is clutter
+that reconciliation can merge away later. A durable finding written as a memory
+is gone, and the next run re-derives it at full price.

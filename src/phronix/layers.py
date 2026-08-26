@@ -171,9 +171,37 @@ def _writable(path: Path) -> bool:
     return os.access(probe, os.W_OK)
 
 
+#: Set to make the bundled layer READ-ONLY, whatever the install looks like.
+#:
+#: The bundled layer is writable when phronix is installed editable from a
+#: clone — which is how it is developed, and which leaves the framework's own
+#: `.phronix` sitting in a git worktree for the life of the process. Anything
+#: that resolves a write to it then edits the REPOSITORY.
+#:
+#: For a benchmark that is not a nuisance, it is a corrupted result. Measured:
+#: a run launched `--fresh --no-carry` wrote `sympy-itermonomials-degree-filter`
+#: into `src/phronix/.phronix/skills/` while working on a django task, and the
+#: six near-duplicate `column-domain` skills that reached later runs through
+#: the bundled skeleton arrived the same way. Every from-scratch comparison
+#: after that was measuring a skeleton earlier runs had edited.
+#:
+#: An env var rather than a call-site argument because the leak is not at one
+#: call site: agents, sub-agents and the always-on learner are separate
+#: processes that inherit an environment and resolve layers for themselves.
+#: This closes the boundary for all of them at once.
+BUNDLED_READONLY_ENV = "PHRONIX_BUNDLED_READONLY"
+
+
+def bundled_readonly() -> bool:
+    """Is writing to the framework's own layer forbidden in this process?"""
+    return str(os.environ.get(BUNDLED_READONLY_ENV, "")).strip().lower() in (
+        "1", "true", "yes")
+
+
 def bundled_layer() -> Layer:
     root = bundled_root()
-    developing = _in_git_worktree(root) and _writable(root)
+    developing = (not bundled_readonly()
+                  and _in_git_worktree(root) and _writable(root))
     return Layer(name="bundled", root=root, writable=developing, shared=True)
 
 
@@ -325,8 +353,41 @@ def merged_files(kind: str, pattern: str = "*", start: Optional[Path] = None) ->
 
 
 def skill_dirs(start: Optional[Path] = None) -> Dict[str, Path]:
-    """All skills visible here: ``{skill_name: directory}``."""
-    return merged_dirs("skills", start)
+    """All skills visible here: ``{skill_name: directory}``.
+
+    Two homes, one lookup. `skills/` holds the framework's method; a problem's
+    ANSWER lives under `capabilities/tasks/<subject>/`, where it is found by
+    subject and filtered by provenance. Both are returned so every reader —
+    `skill_load`, the graph, retrieval — keeps working without knowing which
+    store a skill came from.
+
+    Answers are subject to `--fresh`: a from-scratch run sees the ones this
+    session authored plus the bundled ones, and not what a previous run left
+    behind. That filter is the whole reason answers moved out of `skills/`,
+    which has no notion of provenance.
+    """
+    found = merged_dirs("skills", start)
+    found.update(task_skill_dirs(start))
+    return found
+
+
+def task_skill_dirs(start: Optional[Path] = None) -> Dict[str, Path]:
+    """Answers filed as skills under ``capabilities/tasks/<subject>/``."""
+    from phronix.capabilities import session_authored, session_only
+
+    fresh = session_only()
+    mine = session_authored() if fresh else {}
+    out: Dict[str, Path] = {}
+    for layer in layers(start):
+        root = layer.dir("capabilities") / "tasks"
+        if not root.is_dir():
+            continue
+        for skill_file in sorted(root.glob("*/*/SKILL.md")):
+            name = skill_file.parent.name
+            if fresh and layer.name != "bundled" and name not in mine:
+                continue
+            out[name] = skill_file.parent
+    return out
 
 
 def agent_templates(start: Optional[Path] = None) -> Dict[str, Path]:

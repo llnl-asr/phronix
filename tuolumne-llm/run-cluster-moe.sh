@@ -19,7 +19,10 @@
 # The split is by node because a GPU holds one model: 128 GB of HBM against
 # 30-38 GB of weights plus a megabyte-per-slot KV pool.
 set -euo pipefail
-source "${LLM_SCRIPTS:-/usr/WS2/haridev/phronix/tuolumne-llm}/env.sh"
+# Resolve env.sh NEXT TO THIS SCRIPT, not from a hardcoded path: corona-llm/
+# symlinks these scripts and carries its own env.sh, and a hardcoded default
+# would have every corona invocation silently load Tuolumne's paths and arch.
+source "${LLM_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/env.sh"
 
 GATEWAY_PORT=${GATEWAY_PORT:-4000}
 BASE_PORT=${BASE_PORT:-8050}

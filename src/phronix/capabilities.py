@@ -208,6 +208,27 @@ def task_slug(topic: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(topic).lower()).strip("-") or "unknown"
 
 
+def for_topic(topic: str) -> List[str]:
+    """Capability names filed against *topic*, respecting `--fresh`.
+
+    The lookup a task does before it starts: has this subject been solved
+    before, by anything this run is allowed to see? Under `--fresh` that is
+    only what this session authored, which is what makes a from-scratch run
+    from-scratch — see :func:`visible_files`.
+
+    Solutions live here rather than in `skills/` because the two have different
+    audiences. `skills/` is the framework's own method — how to plan, how to
+    explore, how to judge — and it is read by every task on every repository. A
+    fix for one bug in one project is not method; it is an answer, and an
+    answer belongs where it can be looked up by subject and filtered by
+    provenance.
+    """
+    wanted = TASK_CAPABILITY_DIR + "/" + task_slug(topic)
+    return sorted(
+        Path(name).stem for name, path in visible_files().items()
+        if wanted in path.as_posix())
+
+
 def new(
     name: str,
     description: str,

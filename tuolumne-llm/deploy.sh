@@ -27,11 +27,25 @@
 # Nothing was broken; they were starved of read bandwidth. A local copy removes
 # the shared resource instead of scheduling around it.
 set -uo pipefail
-source "${LLM_SCRIPTS:-/usr/WS2/haridev/phronix/tuolumne-llm}/env.sh"
+# Resolve env.sh NEXT TO THIS SCRIPT, not from a hardcoded path: corona-llm/
+# symlinks these scripts and carries its own env.sh, and a hardcoded default
+# would have every corona invocation silently load Tuolumne's paths and arch.
+source "${LLM_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/env.sh"
 
 GATEWAY_PORT=${GATEWAY_PORT:-4000}
 BASE_PORT=${BASE_PORT:-8050}
-GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+# Per-node shape, defaulted BY THE CLUSTER's env.sh rather than by this file.
+# Tuolumne is 4 MI300A per node with 96 cores; corona is 8 MI50 per node with
+# 48. GPUS_PER_NODE counts SERVERS per node and GPUS_PER_SERVER how many GPUs
+# each one gets, which is how a model larger than one card's VRAM is served:
+# gpt-oss-120b is 63 GB against the MI50's 32, so it runs as GPUS_PER_NODE=1
+# GPUS_PER_SERVER=8 (one server sharded across the node) where on Tuolumne's
+# 128 GB APUs it is simply one server per GPU.
+GPUS_PER_NODE=${GPUS_PER_NODE:-${FLEET_GPUS_PER_NODE:-4}}
+GPUS_PER_SERVER=${GPUS_PER_SERVER:-${FLEET_GPUS_PER_SERVER:-1}}
+CORES_PER_SERVER=${CORES_PER_SERVER:-${FLEET_CORES_PER_SERVER:-22}}
+GATEWAY_CORES=${GATEWAY_CORES:-${FLEET_GATEWAY_CORES:-8}}
+LLM_KEY=${LLM_KEY:-${FLEET_KEY:-sk-tuolumne}}
 # Defaults are the measured ones, not the historical ones:
 #   solo      one slot per GPU, so a conversation's prompt cache is never
 #             evicted by another agent's (prefill was 77% of GPU time).
@@ -39,7 +53,7 @@ GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 #             top-k disabled). `diverse` truncated the distribution twice.
 #   medium    the reasoning effort published SWE-bench work uses; low is not a
 #             setting the model was evaluated under.
-export PROFILE=${PROFILE:-solo}
+export PROFILE=${PROFILE:-${FLEET_PROFILE:-solo}}
 export SAMPLING=${SAMPLING:-reference}
 export GPTOSS_EFFORT=${GPTOSS_EFFORT:-low}
 export GPTOSS_THINK_BUDGET=${GPTOSS_THINK_BUDGET:-2048}
@@ -243,7 +257,7 @@ for h in "${HOSTS[@]}"; do
     for ((g = 0; g < GPUS_PER_NODE; g++)); do
         key=${GPU_MODEL[$((g % ${#GPU_MODEL[@]}))]}
         port=$((BASE_PORT + g))
-        jid=$(flux submit -N1 -n1 -c 22 -g 1 --requires="host:$h" \
+        jid=$(flux submit -N1 -n1 -c "$CORES_PER_SERVER" -g "$GPUS_PER_SERVER" --requires="host:$h" \
                 --job-name="llama-$h-gpu$g" --output="$RUNDIR/$h-gpu$g.flux.log" \
                 --env=RUNDIR="$RUNDIR" --env=PROFILE="$PROFILE" \
                 --env=SAMPLING="$SAMPLING" --env=MODEL_CACHE="$MODEL_CACHE" \
@@ -275,7 +289,7 @@ echo "  submitted; weights load from local SSD"
 # renumbers the aliases contiguously so a client counting `@0..@N-1` cannot land
 # in a hole.
 rebuild_config_from_records() {
-    local PBENCH_PY=/p/lustre5/haridev/phronix-bench/venv/bin/python
+    local PBENCH_PY=${BENCH_PY:-/p/lustre5/haridev/phronix-bench/venv/bin/python}
     [ -x "$PBENCH_PY" ] || PBENCH_PY=$(command -v python3)
     [ -n "$PBENCH_PY" ] || { echo "  no python to rebuild the config with"; return 1; }
     local records=("$RUNDIR"/nodes/*.json)
@@ -362,8 +376,8 @@ litellm_settings:
   drop_params: true
   request_timeout: 1800
 general_settings:
-  master_key: sk-tuolumne
 YAML
+  echo "  master_key: $LLM_KEY"
 } > "$CFG"
 
 GW_HOST=${HOSTS[0]}
@@ -399,8 +413,8 @@ print(json.dumps([f'{sys.argv[1]}@{i}' for i in range(int(sys.argv[2]))]))" \
     printf '  "models": [%s],\n' \
       "$(printf '%s\n' "${GPU_MODEL[@]}" | sort -u | while read -r k; do printf '"%s",' "${ALIAS[$k]}"; done | sed 's/,$//')"
     printf '  "alias": "%s",\n' "${ALIAS[${GPU_MODEL[0]}]}"
-    printf '  "gateway": {"host": "%s", "port": %s, "job": "%s", "key": "sk-tuolumne"},\n' \
-      "$GW_HOST" "$GATEWAY_PORT" "$gwid"
+    printf '  "gateway": {"host": "%s", "port": %s, "job": "%s", "key": "%s"},\n' \
+      "$GW_HOST" "$GATEWAY_PORT" "$gwid" "$LLM_KEY"
     printf '  "servers": [\n'
     cat "$RUNDIR"/nodes/*.json 2>/dev/null | paste -sd, - | sed 's/,/,\n    /g; s/^/    /'
     printf '\n  ]\n}\n'
@@ -423,7 +437,7 @@ write_cluster_json pending && echo "wrote $LLM_SCRIPTS/cluster.json"
 
 echo
 echo "=== waiting for the fleet"
-READY_PY=/p/lustre5/haridev/phronix-bench/venv/bin/python
+READY_PY=${BENCH_PY:-/p/lustre5/haridev/phronix-bench/venv/bin/python}
 [ -x "$READY_PY" ] || READY_PY=$(command -v python3)
 
 deadline=$((SECONDS + ${READY_TIMEOUT:-1200}))
@@ -532,7 +546,7 @@ if [ "${ready:-0}" != "$total" ] && [ "${ready:-0}" -gt 0 ]; then
         # untouched and keep their weights; this is the gateway process only.
         flux cancel "$gwid" 2>/dev/null && echo "  cancelled gateway $gwid"
         sleep 3
-        gwid=$(flux submit -N1 -n1 -c 8 --requires="host:$GW_HOST" \
+        gwid=$(flux submit -N1 -n1 -c "$GATEWAY_CORES" --requires="host:$GW_HOST" \
                 --job-name="litellm-$GW_HOST" --output="$RUNDIR/litellm.log" \
                 "$LLM_SCRIPTS/gateway-node.sh" "$CFG" "$GATEWAY_PORT")
         echo "  gateway restarted as $gwid"
@@ -548,7 +562,7 @@ write_cluster_json "${ready:-0}/$total"
 
 echo
 echo "================================================================="
-echo "Gateway:   http://$GW_HOST:$GATEWAY_PORT   (key: sk-tuolumne)"
+echo "Gateway:   http://$GW_HOST:$GATEWAY_PORT   (key: $LLM_KEY)"
 echo "Models:    $(printf '%s\n' "${GPU_MODEL[@]}" | sort -u | while read -r k; do printf '%s ' "${ALIAS[$k]}"; done)"
 echo "Profile:   $PROFILE    Sampling: $SAMPLING"
 echo "Weights:   $MODEL_CACHE (node-local)"
@@ -569,5 +583,5 @@ if [ "$CAPACITY" -gt 0 ]; then
 fi
 echo "Run dir:   $RUNDIR"
 echo "Config:    $LLM_SCRIPTS/cluster.json"
-echo "Stop:      flux proxy <alloc> tuolumne-llm/stop.sh"
+echo "Stop:      flux proxy <alloc> $(basename "$LLM_SCRIPTS")/stop.sh"
 echo "================================================================="

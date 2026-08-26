@@ -240,6 +240,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     from .runner import RunConfig, Runner
     from .tasks import DatasetUnavailable, load_instances, read_task_file
 
+    # Set before anything imports arms: the resolver reads this once and
+    # caches, because `auto` is an HTTP probe of the fleet and every stage of
+    # every task would otherwise repeat it.
+    os.environ["PHRONIX_BUDGET_SCALE"] = str(args.budget_scale)
+
     try:
         task_ids = read_task_file(Path(args.tasks))
     except FileNotFoundError as exc:
@@ -301,6 +306,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"cluster: {spec.describe()}", file=sys.stderr)
         print(f"         opencode provider '{wired['provider']}' -> "
               f"{wired['file']}", file=sys.stderr)
+
+    # Say what the budgets ended up being, and why.
+    #
+    # A stage cut off at its ceiling looks like a slow stage from the outside,
+    # so the scale has to be visible BEFORE the run rather than reconstructed
+    # from the manifest afterwards.
+    from .arms import budget_scale, measured_decode_rate
+
+    resolved = budget_scale()
+    if str(args.budget_scale).strip().lower() == "auto":
+        rate = measured_decode_rate()
+        if rate:
+            print(f"budgets: x{resolved:.1f} — fleet decodes {rate:.0f} tok/s "
+                  f"against a calibration of 1000", file=sys.stderr)
+        else:
+            print("budgets: x1.0 — no fleet to measure, using the calibration "
+                  "the budgets were set at", file=sys.stderr)
+    elif resolved != 1.0:
+        print(f"budgets: x{resolved:.1f} (set explicitly)", file=sys.stderr)
 
     if "opencode-phronix" in arms and "opencode-phronix-frozen" not in arms:
         print("note: running the learning arm without `opencode-phronix-frozen`. Any "
@@ -671,6 +695,19 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Run containers inside this flux allocation (single-node) "
                           "while the agent runs locally. Needed here because opencode "
                           "segfaults on the compute nodes but podman must run there.")
+    run.add_argument("--budget-scale",
+                     default=os.environ.get("PHRONIX_BUDGET_SCALE", "auto"),
+                     help="Multiplier on every research stage budget, or 'auto' "
+                          "(the default) to derive it from the fleet's measured "
+                          "decode rate. The budgets are seconds but what a stage "
+                          "needs is tokens, so they only mean anything paired "
+                          "with a rate: they were calibrated at ~1000 tok/s, and "
+                          "corona's MI50 fleet decodes ~34, so unscaled every "
+                          "planning agent is killed mid-investigation and the "
+                          "run is scored as though the research happened. 'auto' "
+                          "reads /metrics from the replicas and is a no-op for a "
+                          "hosted endpoint, where there is no fleet to measure "
+                          "and the calibration already applies.")
     run.add_argument("--split", default="lite", choices=("lite", "verified", "full"))
     run.add_argument("--dataset-cache", default="")
     run.add_argument("--no-fresh", action="store_true",

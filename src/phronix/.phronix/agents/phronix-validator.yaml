@@ -27,6 +27,14 @@ effort: medium
 tools:
   - mcp__phronix__research_status
   - mcp__phronix__research_set_aspects
+  # Appending, for the case where a planning stage found ideas and filed them
+  # somewhere the pipeline does not read. The re-ask that recovers them runs as
+  # this agent precisely BECAUSE it has no Bash and no Edit: asked to file its
+  # ideas while holding those tools, a planner goes off and fixes the code
+  # instead — measured twice on django-13551, once ignoring the instruction
+  # outright. Appending rather than replacing so a recovery can never erase
+  # what a concurrent stage recorded.
+  - mcp__phronix__research_add_aspects
   - mcp__phronix__research_notice
   - mcp__phronix__research_observe
   - mcp__phronix__skill_load

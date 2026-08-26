@@ -8,7 +8,10 @@
 # every spawned agent's argv (--add-dir / --dir) and in nothing else.
 set -uo pipefail
 
-BENCH=/p/lustre5/haridev/phronix-bench
+# Per-CLUSTER, like run-group.sh: /p/lustre5 is Tuolumne's and is not mounted
+# on corona, so a corona run's processes are matched against a corona path.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bench-root.sh"
+BENCH=$(bench_root)
 RUNS="$BENCH/runs"
 VENV=$BENCH/venv
 DRY=""

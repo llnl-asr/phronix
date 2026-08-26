@@ -49,7 +49,7 @@ set -uo pipefail
 
 PROJECT=/usr/WS2/haridev/phronix
 BENCH=/p/lustre5/haridev/phronix-bench
-CLUSTER=${CLUSTER:-/usr/workspace/haridev/phronix/tuolumne-llm/cluster.json}
+CLUSTER=${CLUSTER:-/usr/workspace/haridev/phronix/${PHRONIX_FLEET:-tuolumne-llm}/cluster.json}
 
 HARNESS=opencode
 #: Where the model comes from.

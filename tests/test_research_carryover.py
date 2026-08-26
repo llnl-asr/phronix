@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 import pytest
+from tests.skill_paths import skill_home_under, skill_names_under
 
 
 def _record(store, topic="pylint-dev-pylint-7080"):
@@ -126,12 +127,14 @@ def test_promotion_carries_the_run_and_not_the_framework(tmp_path):
 
     (first / "research").mkdir(parents=True, exist_ok=True)
     (first / "research" / "topic.json").write_text('{"topic": "topic"}')
-    (first / "skills" / "learned-here").mkdir(parents=True, exist_ok=True)
-    (first / "skills" / "learned-here" / "SKILL.md").write_text("# learned\n")
+    (skill_home_under(first, "learned-here")).mkdir(parents=True, exist_ok=True)
+    (skill_home_under(first, "learned-here") / "SKILL.md").write_text("# learned\n")
 
     promoted = promote_store(first, carry)["promoted"]
     assert "research/topic.json" in promoted
-    assert "skills/learned-here/SKILL.md" in promoted
+    # An answer is promoted from its own home, not from `skills/`: that holds
+    # only the framework's method, and a run's learning is an answer.
+    assert "capabilities/tasks/learned-here/learned-here/SKILL.md" in promoted
 
     shipped = sorted(p.name for p in (bundled_root() / "skills").glob("*")
                      if p.is_dir())
@@ -143,7 +146,7 @@ def test_promotion_carries_the_run_and_not_the_framework(tmp_path):
     fresh_store(second)
     seed_store(second, carry)
     assert (second / "research" / "topic.json").is_file()
-    assert (second / "skills" / "learned-here" / "SKILL.md").is_file()
+    assert (skill_home_under(second, "learned-here") / "SKILL.md").is_file()
 
 
 def test_amendment_to_a_bundled_skill_is_carried(tmp_path):
@@ -178,17 +181,17 @@ def test_promotion_never_deletes(tmp_path):
     from tests.benchmark.isolation import fresh_store, promote_store
 
     carry = tmp_path / "carry" / ".phronix"
-    (carry / "skills" / "from-an-earlier-run").mkdir(parents=True)
-    (carry / "skills" / "from-an-earlier-run" / "SKILL.md").write_text("# earlier\n")
+    (skill_home_under(carry, "from-an-earlier-run")).mkdir(parents=True)
+    (skill_home_under(carry, "from-an-earlier-run") / "SKILL.md").write_text("# earlier\n")
 
     store = tmp_path / "run" / ".phronix"
     fresh_store(store)
-    (store / "skills" / "from-this-run").mkdir(parents=True, exist_ok=True)
-    (store / "skills" / "from-this-run" / "SKILL.md").write_text("# now\n")
+    (skill_home_under(store, "from-this-run")).mkdir(parents=True, exist_ok=True)
+    (skill_home_under(store, "from-this-run") / "SKILL.md").write_text("# now\n")
 
     promote_store(store, carry)
-    assert (carry / "skills" / "from-an-earlier-run" / "SKILL.md").is_file()
-    assert (carry / "skills" / "from-this-run" / "SKILL.md").is_file()
+    assert (skill_home_under(carry, "from-an-earlier-run") / "SKILL.md").is_file()
+    assert (skill_home_under(carry, "from-this-run") / "SKILL.md").is_file()
 
 
 def test_the_bare_arm_is_never_seeded():
@@ -243,7 +246,8 @@ def test_the_execution_plan_is_a_skill_holding_the_whole_research(isolated_layer
     result = research.playbook(topic)
     assert result["status"] == "ok", result
 
-    text = (isolated_layers["store"] / "skills" / result["skill"] / "SKILL.md").read_text()
+    text = (skill_home_under(isolated_layers["store"], result["skill"])
+            / "SKILL.md").read_text()
     assert "How to solve" in text                     # the ranked approaches
     assert "How to evaluate" in text                  # the figure of merit
     assert "Sources consulted" in text                # where it came from
@@ -536,7 +540,7 @@ def test_an_existing_skill_is_reused_whatever_order_it_named_things(isolated_lay
     """
     from phronix.research import _subject_of
 
-    existing = isolated_layers["store"] / "skills" / "normalize-ignore-paths"
+    existing = skill_home_under(isolated_layers["store"], "normalize-ignore-paths")
     existing.mkdir(parents=True)
     (existing / "SKILL.md").write_text(
         "---\nname: normalize-ignore-paths\ndescription: from an earlier run\n"
@@ -789,8 +793,8 @@ def test_fresh_ignores_the_learned_folder_entirely(tmp_path):
     carry = tmp_path / "carry" / ".phronix"
     earlier = tmp_path / "earlier" / ".phronix"
     fresh_store(earlier)
-    (earlier / "skills" / "learned-last-time").mkdir(parents=True, exist_ok=True)
-    (earlier / "skills" / "learned-last-time" / "SKILL.md").write_text("# learned\n")
+    (skill_home_under(earlier, "learned-last-time")).mkdir(parents=True, exist_ok=True)
+    (skill_home_under(earlier, "learned-last-time") / "SKILL.md").write_text("# learned\n")
     (earlier / "research").mkdir(parents=True, exist_ok=True)
     (earlier / "research" / "topic.json").write_text('{"topic": "topic"}')
     promote_store(earlier, carry)
@@ -799,14 +803,14 @@ def test_fresh_ignores_the_learned_folder_entirely(tmp_path):
     # research_reuse is off.
     store = tmp_path / "fresh-run" / ".phronix"
     fresh_store(store)
-    assert not (store / "skills" / "learned-last-time").exists()
+    assert not (skill_home_under(store, "learned-last-time")).exists()
     assert not list((store / "research").glob("*.json"))
 
     # Reuse: the same carry root, seeded.
     reusing = tmp_path / "reusing-run" / ".phronix"
     fresh_store(reusing)
     seed_store(reusing, carry)
-    assert (reusing / "skills" / "learned-last-time" / "SKILL.md").is_file()
+    assert (skill_home_under(reusing, "learned-last-time") / "SKILL.md").is_file()
     assert (reusing / "research" / "topic.json").is_file()
 
 
@@ -854,8 +858,7 @@ def test_repeated_harvests_write_one_skill(isolated_layers):
                               hypothesis=f"the {aspect} is wrong", source="probe")
         research.harvest("t")
 
-    skills = [p.name for p in (isolated_layers["store"] / "skills").glob("*")
-              if p.is_dir()]
+    skills = skill_names_under(isolated_layers["store"])
     assert len(skills) == 1, skills
 
 
@@ -924,7 +927,8 @@ def test_the_checkpoint_records_state_and_references_not_content(isolated_layers
     result = research.checkpoint("t")
     assert result["status"] == "ok"
 
-    text = (isolated_layers["store"] / "skills" / result["skill"] / "SKILL.md").read_text()
+    text = (skill_home_under(isolated_layers["store"], result["skill"])
+            / "SKILL.md").read_text()
     assert "Where research on this subject stands" in text
     assert "Still open" in text
     assert "aspect not yet answered: unanswered" in text
@@ -1056,8 +1060,9 @@ def test_the_plan_never_lists_a_dead_approach_as_a_thing_to_try(isolated_layers)
     research.mark_attempt_outcome(topic, "A1", worked=False, evidence="failed")
     research.playbook(topic)
 
-    text = (isolated_layers["store"] / "skills"
-            / research.topic_skill(topic) / "SKILL.md").read_text()
+    text = (skill_home_under(isolated_layers["store"],
+                             research.topic_skill(topic))
+            / "SKILL.md").read_text()
     ordered = text[text.index("1. `A"):text.index("**Already tried")]
     assert "A1" not in ordered, ordered
     assert "A2" in ordered and "A3" in ordered
@@ -1078,8 +1083,9 @@ def test_a_generated_block_refreshes_instead_of_going_stale(isolated_layers):
     result = research.checkpoint(topic)
     assert result["block"] == "ok"
 
-    text = (isolated_layers["store"] / "skills"
-            / research.topic_skill(topic) / "SKILL.md").read_text()
+    text = (skill_home_under(isolated_layers["store"],
+                             research.topic_skill(topic))
+            / "SKILL.md").read_text()
     assert text.count("— Where research on this subject stands") == 1
     assert "A1" not in text.split("**Still open**")[1].split("**")[0]
     assert "target test still failing" in text
@@ -3000,8 +3006,12 @@ def test_every_stage_prompt_is_a_pointer_to_a_skill():
         assert (skills / skill / "SKILL.md").is_file(), skill
         # A pointer, not a second copy of the method. The shared notes are
         # not part of the pointer — they are appended to every stage alike.
-        from tests.benchmark.arms import OBSERVE_NOTE
-        pointer = prompt.replace(OBSERVE_NOTE, "")
+        # `PATCHED_TREE_NOTE` is one of them: it describes the STATE OF THE
+        # CHECKOUT on a retry, which is true of every stage that reads it and
+        # is not method content belonging in a skill.
+        from tests.benchmark.arms import OBSERVE_NOTE, PhronixArm as _Arm
+        pointer = prompt.replace(OBSERVE_NOTE, "").replace(
+            _Arm.PATCHED_TREE_NOTE, "")
         assert len(pointer) < 1200, f"{skill}'s prompt is carrying the method"
 
 
@@ -4364,9 +4374,9 @@ def test_the_task_opens_with_the_merged_solution_skill():
     from tests.benchmark.arms import PhronixOpenCodeArm as Arm
 
     store = P(__file__).parent / "_solskill" / ".phronix"
-    (store / "skills" / "solution-pylint-dev-pylint-7080").mkdir(parents=True,
+    (skill_home_under(store, "solution-pylint-dev-pylint-7080")).mkdir(parents=True,
                                                                 exist_ok=True)
-    (store / "skills" / "solution-pylint-dev-pylint-7080" / "SKILL.md").write_text(
+    (skill_home_under(store, "solution-pylint-dev-pylint-7080") / "SKILL.md").write_text(
         "---\nname: solution-pylint-dev-pylint-7080\n---\n")
     try:
         arm = Arm.__new__(Arm)
@@ -4918,7 +4928,9 @@ def test_the_super_idea_is_built_recorded_and_raced():
     assert "files, functions, line numbers" in prompt
     assert "phronix-skill-authoring" in prompt
     # And it must be willing to say the ideas do NOT combine.
-    assert "do not combine" in prompt
+    # The steps are assembled into a method; when they genuinely do not
+    # compose, saying so beats manufacturing a merge.
+    assert "turn out not to compose" in prompt
 
     # It is an ADDITIONAL racer: the singles are written before it, not replaced.
     assert body.index("add_approach") > 0
@@ -5052,3 +5064,941 @@ def test_the_plan_loop_asks_again_when_the_ideas_overlap():
     assert "if len(ideas) >= self.MIN_ASPECTS and not clashes:" in src
     # And the ask names the overlap — "be more diverse" gets a rename.
     assert "all look in" in src
+
+
+def test_a_task_earns_another_try_by_getting_further_through_the_method(
+        isolated_layers, monkeypatch):
+    """Progress is a position in the method, not a passing test.
+
+    "0 target tests passing" reads the same on try 1 and try 3. Failing at step 2
+    and then at step 4 is a task closing in, and stopping it at a fixed ceiling
+    throws that away.
+    """
+    from phronix import research
+
+    directory = isolated_layers["store"] / "research"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "t.json").write_text(json.dumps({
+        "topic": "t", "slug": "t",
+        "aspects": [{"name": "decide-package-kind"}, {"name": "compute-name"},
+                    {"name": "choose-root"}, {"name": "keep-passing"}]}))
+    monkeypatch.setenv(research.TOPIC_ENV, "t")
+
+    # Nothing recorded yet: no progress to reward.
+    assert research.furthest_step("t")["advanced"] is False
+
+    research.record_step_reached("t", "decide-package-kind", "wrong branch")
+    first = research.furthest_step("t")
+    assert first["furthest"] == 0 and first["of"] == 4
+    assert first["advanced"] is False          # one data point is not a trend
+
+    # Failing at a LATER step is progress.
+    research.record_step_reached("t", "choose-root", "root was the parent")
+    assert research.furthest_step("t")["advanced"] is True
+    assert research.furthest_step("t")["furthest"] == 2
+
+    # Failing EARLIER again is not.
+    research.record_step_reached("t", "compute-name")
+    assert research.furthest_step("t")["advanced"] is False
+    assert research.furthest_step("t")["furthest"] == 2   # the best still stands
+
+    # A step nobody planned cannot count as progress.
+    research.record_step_reached("t", "invented-step")
+    assert research.furthest_step("t")["advanced"] is False
+
+
+def test_the_retry_loop_can_award_the_earned_try():
+    """The ceiling has to be able to move, or the signal changes nothing."""
+    import inspect
+
+    from tests.benchmark.runner import Runner
+
+    src = inspect.getsource(Runner.run_task)
+    assert "while attempt_index < ceiling + earned:" in src
+    assert "furthest_step" in src
+    # Bounded: a long method must not earn a try per step forever.
+    assert "MAX_EARNED" in src
+
+
+def test_ways_of_doing_one_step_must_differ_from_each_other_too():
+    """The independence rule governs ways within a step, not only the steps.
+
+    Two ways that touch the same line are one way described twice, and the
+    pipeline races them as if they were two — a container and an evaluation
+    each. Measured shape, from `pylint-dev__pylint-7114`: "return the parent
+    when __init__.py is absent" and "walk up while __init__.py exists" are the
+    same line inverted.
+    """
+    from tests.benchmark import arms
+
+    overlap = arms.PhronixOpenCodeArm.overlapping_ideas
+
+    # Ways carry `summary`/`hypothesis` rather than `where`; the same check
+    # must see them.
+    clashes = overlap([
+        {"name": "return-parent",
+         "summary": "in pylint/lint/expand_modules.py return the parent"},
+        {"name": "walk-up",
+         "hypothesis": "in pylint/lint/expand_modules.py walk up instead"},
+    ])
+    assert "pylint/lint/expand_modules.py" in clashes
+
+    # Genuinely different places stay distinct — caller, callee, config.
+    assert overlap([
+        {"name": "from-package-chain", "summary": "pylint/lint/expand_modules.py"},
+        {"name": "ask-astroid", "summary": "astroid/modutils.py"},
+        {"name": "caller-passes-root", "summary": "pylint/lint/pylinter.py"},
+    ]) == {}
+
+
+def test_ideas_are_salvaged_from_any_planning_round(monkeypatch):
+    """A planner that names its steps in a LATER round must still be heard.
+
+    Salvage read `last_output["plan"]` alone. Measured on
+    `pylint-dev__pylint-7114`: `plan` wrote "Problem Summary (from exchange.md
+    and issue.md)" and recorded nothing, then `plan-more-1` wrote "Three new
+    research aspects for pylint-dev__pylint-7114" and also recorded nothing. The
+    steps existed in prose, in the output salvage did not read, while the
+    validator judged an empty list round after round for twenty minutes.
+    """
+    import inspect
+
+    from tests.benchmark import arms
+
+    src = inspect.getsource(arms.PhronixOpenCodeArm.research)
+    salvage = src[src.index("Salvage from EVERY planning stage"):]
+
+    # Every planning stage is read, not just `plan`.
+    assert 'name.startswith(("plan-more"' in salvage
+    assert 'name == "plan"' in salvage
+    # Later rounds first: the planner's most considered answer, written after
+    # being told what was missing.
+    assert "sorted(last_output.items()," in salvage and "reverse=True" in salvage
+    # Deduplicated by name, so one idea named twice is not two.
+    assert "seen" in salvage
+
+    # And the silent case is now loud.
+    assert "recorded NOTHING" in src
+    assert "not researching THIS problem" in src
+
+
+def test_budget_scale_is_explicit_measured_or_tuned(tmp_path, monkeypatch):
+    """The stage budgets scale to the machine, and say which source decided it.
+
+    A stage budget is a number of seconds, but what a stage needs is a number
+    of tool calls — so a budget only means something paired with the decode
+    rate it was measured at. Left at 1.0 on a slow fleet, every planning agent
+    is killed mid-investigation and the run is scored as though the research
+    happened, which is the failure this resolver exists to prevent.
+    """
+    import json as _json
+
+    from tests.benchmark import arms
+
+    arms._BUDGET_SCALE_CACHE["value"] = None
+
+    # An explicit number wins outright, and is clamped: a scale below 1.0 would
+    # make budgets tighter than the calibration, which no measurement justifies.
+    monkeypatch.setenv("PHRONIX_BUDGET_SCALE", "12")
+    assert arms.budget_scale() == 12.0
+    monkeypatch.setenv("PHRONIX_BUDGET_SCALE", "0.1")
+    assert arms.budget_scale() == arms.BUDGET_SCALE_BOUNDS[0]
+    monkeypatch.setenv("PHRONIX_BUDGET_SCALE", "9999")
+    assert arms.budget_scale() == arms.BUDGET_SCALE_BOUNDS[1]
+
+    # `auto` derives it from what the fleet is actually decoding.
+    config = tmp_path / "cluster.json"
+    config.write_text(_json.dumps(
+        {"servers": [{"host": "h1", "port": 1}, {"host": "h2", "port": 2}]}))
+    monkeypatch.setenv("PHRONIX_CLUSTER", str(config))
+    monkeypatch.setenv("PHRONIX_BUDGET_SCALE", "auto")
+
+    monkeypatch.setattr(arms, "measured_decode_rate", lambda: 40.0)
+    arms._BUDGET_SCALE_CACHE["value"] = None
+    assert arms.budget_scale() == arms.CALIBRATION_TOKENS_PER_S / 40.0
+
+    # No fleet to measure is a HOSTED endpoint — faster than the calibration,
+    # not equal to it, so it gets its own scale below 1.0. Holding hosted runs
+    # at 1.0 spends minutes per stage on agents that finished thinking long
+    # before the clock did.
+    monkeypatch.setattr(arms, "measured_decode_rate", lambda: None)
+    arms._BUDGET_SCALE_CACHE["value"] = None
+    hosted = arms.budget_scale()
+    assert hosted == float(arms._tuned("research.hosted_budget_scale", 0.5))
+    assert hosted < 1.0
+    # And the floor allows it: budgets tighter than the calibration are the
+    # point on hardware the calibration was not measured on.
+    assert arms.BUDGET_SCALE_BOUNDS[0] < 1.0
+
+    # Unset falls back to tuning.yaml, the pin-it-by-hand path.
+    monkeypatch.delenv("PHRONIX_BUDGET_SCALE", raising=False)
+    arms._BUDGET_SCALE_CACHE["value"] = None
+    assert arms.budget_scale() == float(arms._tuned("research.budget_scale", 1.0))
+
+
+def test_measured_decode_rate_ignores_replicas_that_served_nothing(tmp_path, monkeypatch):
+    """A replica reporting 0 tok/s has not served yet — it is not a slow fleet.
+
+    `predicted_tokens_seconds` only advances when a request FINISHES, so a
+    freshly-deployed fleet reads zero everywhere. Averaging those in would
+    drive the derived scale to its ceiling and give every stage hours it has no
+    reason to need.
+    """
+    import json as _json
+
+    from tests.benchmark import arms
+
+    config = tmp_path / "cluster.json"
+    config.write_text(_json.dumps({"servers": [
+        {"host": "h1", "port": 1}, {"host": "h2", "port": 2},
+        {"host": "h3", "port": 3}]}))
+    monkeypatch.setenv("PHRONIX_CLUSTER", str(config))
+
+    bodies = {
+        "http://h1:1/metrics": "llamacpp:predicted_tokens_seconds 0\n",
+        "http://h2:2/metrics": "llamacpp:predicted_tokens_seconds 30.5\n",
+        "http://h3:3/metrics": "llamacpp:predicted_tokens_seconds 34.5\n",
+    }
+
+    class _Response:
+        def __init__(self, text): self.text = text
+        def read(self): return self.text.encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(arms.urllib.request, "urlopen",
+                        lambda url, timeout=5: _Response(bodies[url]))
+    # Median of the two that answered — 0 is dropped, not averaged in.
+    assert arms.measured_decode_rate() == 34.5
+
+    # Nothing has served anything: unknowable, not "infinitely slow".
+    for key in bodies:
+        bodies[key] = "llamacpp:predicted_tokens_seconds 0\n"
+    assert arms.measured_decode_rate() is None
+
+
+def test_aspects_must_be_steps_of_a_method_not_a_list_of_fixes(tmp_path, monkeypatch):
+    """The aspects slot holds the STEPS. Filling it with ways is silent damage.
+
+    Measured on django__django-13551 under Haiku: the planner recorded
+    `A1: Direct email with getattr() fallback` and `A2: Model method factoring`
+    as its aspects — four rival edits to one function, not a method. Every
+    count in the record read healthy, so nothing reported it, while the
+    decomposition the pipeline is built on had not happened:
+    `record_step_reached` had no real position to report and
+    `research_add_approach(aspect=...)` attached ways to something that was
+    already a way.
+
+    The `A1:`/`A2:` shape is not a coincidence — `research_add_approach` hands
+    back keys with exactly those names, so it is easy to echo back.
+    """
+    from phronix import research
+
+    monkeypatch.setattr(research, "RESEARCH_DIR", tmp_path)
+
+    ways = research.set_aspects("t", [
+        {"name": "A1: Direct email with getattr() fallback",
+         "question": "does reading the field directly work?",
+         "where": "django/contrib/auth/tokens.py"},
+        {"name": "A2: Model method factoring",
+         "question": "should the model expose the value?",
+         "where": "django/contrib/auth/base_user.py"}])
+    assert ways["status"] == "error"
+    assert "not STEPS" in ways["error"]
+    assert "I5b" in ways["error"]
+
+    # `I6` applied to steps: ANY repeated `where` means those two are one step
+    # with two ways, whatever the rest of the list is doing.
+    #
+    # Not a unanimous test. Measured on django-13551 once the naming rule went
+    # in: the planner dropped the `A1:`/`A2:` shape and produced
+    # `safe-email-field-access-with-classmethod` /
+    # `try-except-email-field-access` / `factor-token-data-to-model-method` —
+    # still three rival implementations, two in the same method, and an
+    # "all in one place" test would have let it straight through.
+    same_place = research.set_aspects("t", [
+        {"name": "safe access via classmethod", "question": "q1",
+         "where": "django/contrib/auth/tokens.py _make_hash_value"},
+        {"name": "try/except around the field", "question": "q2",
+         "where": "django/contrib/auth/tokens.py _make_hash_value"},
+        {"name": "factor onto the model", "question": "q3",
+         "where": "django/contrib/auth/models.py"}])
+    assert same_place["status"] == "error"
+    assert "same place are ONE step" in same_place["error"]
+
+    # A genuine method is recorded untouched: named after what must become
+    # true, each step somewhere different.
+    method = research.set_aspects("t", [
+        {"name": "locate the inputs the token hashes", "question": "which fields?",
+         "where": "django/contrib/auth/tokens.py _make_hash_value"},
+        {"name": "include the user's current email", "question": "how is it read?",
+         "where": "django/contrib/auth/base_user.py get_email_field_name"},
+        {"name": "keep tokens valid for users with no email", "question": "what then?",
+         "where": "tests/auth_tests/test_tokens.py"}])
+    assert method["status"] == "ok"
+    assert len(method["aspects"]) == 3
+
+
+def test_an_approach_is_told_which_step_it_belongs_to(tmp_path, monkeypatch):
+    """A way that names no step cannot be attributed when a try fails.
+
+    Guidance rather than rejection: approaches also arrive from the benchmark's
+    own attempt ledger, which has no steps to cite. But once a method exists, a
+    floating way defeats the reason for decomposing — "failed at step 3" says
+    which step to redo, "the approach failed" says start again.
+    """
+    from phronix import research
+
+    monkeypatch.setattr(research, "RESEARCH_DIR", tmp_path)
+
+    research.set_aspects("t", [
+        {"name": "locate the inputs the token hashes", "question": "which?",
+         "where": "tokens.py"},
+        {"name": "include the user's current email", "question": "how?",
+         "where": "base_user.py"}])
+
+    floating = research.add_approach(
+        "t", "read the field directly", "getattr on the email field",
+        hypothesis="the field is present on the base model; absent means None")
+    assert floating["status"] == "ok"
+    assert "attach this to the step" in floating.get("next", "")
+
+    # A way recorded when NO method exists at all. The steps gate cannot catch
+    # this — there is nothing to reject — so it is said as the way goes in.
+    # Observed live on django-13551: the planner skipped `set_aspects` and went
+    # straight to recording approaches.
+    research.set_aspects("fresh", [{"name": "placeholder", "question": "q",
+                                    "where": "x.py"}])
+    empty = research.load("fresh")
+    empty["aspects"] = []
+    research._save(empty)
+    first = research.add_approach("fresh", "a way", "does a thing", hypothesis="h")
+    assert "no method has been recorded" in first.get("next", "")
+
+    # The benchmark's own ledger has no steps to cite and must not be nagged.
+    ledger = research.add_approach("fresh", "some/file.py", "attempted by editing",
+                                   hypothesis="h", source="benchmark attempt")
+    assert "no method has been recorded" not in ledger.get("next", "")
+
+    unknown = research.add_approach(
+        "t", "another way", "does something else", hypothesis="h",
+        aspect="a step nobody planned")
+    assert "not one of the planned steps" in unknown.get("next", "")
+
+    attached = research.add_approach(
+        "t", "a third way", "does a third thing", hypothesis="h",
+        aspect="include the user's current email")
+    assert "next" not in attached
+
+
+def test_a_planning_stage_that_recorded_nothing_is_asked_to_file_its_ideas():
+    """Finding ideas and not recording them is the same as finding none.
+
+    Measured on django-13551 under Haiku: two scouts ran `ToolSearch` for
+    `research_add_aspects`, then used Bash to "create JSON with research aspects
+    to explore". The ideas existed, in a file nobody reads; the record stayed
+    empty; the trace showed every stage completing normally; and the whole
+    exploration phase was skipped in silence.
+
+    The round-level retry re-runs the WHOLE planning cycle when the count is
+    short, by which time this pass's ideas are gone. The re-ask happens while
+    the agent still has them.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm
+
+    # Normalised: these prompts are hard-wrapped, so a phrase that reads as one
+    # line in the file is split by a newline in the string.
+    flat = lambda text: " ".join(text.split())
+
+    prompt = flat(ClaudePhronixArm.RECORD_ASPECTS_PROMPT)
+    # It must not send the agent back to investigate — the work is done, and
+    # re-investigating is what the budget was already spent on.
+    assert "Do not investigate anything further" in prompt
+    assert "research_add_aspects" in prompt
+    # It has to name the specific wrong place the ideas went, or the agent has
+    # no reason to believe its file did not count.
+    assert "Writing JSON to a file" in prompt
+    # And it carries the two rules the tool will reject on, so the re-ask does
+    # not simply fail the gate a second time.
+    assert "not how you" in prompt
+    assert "DIFFERENT" in prompt
+
+    # And it runs as the FILER, which can read and record and nothing else.
+    #
+    # Asking more firmly does not work. Measured on django-13551: this exact
+    # prompt, which says "Do not investigate anything further", was handed to a
+    # stage holding file tools — which spent its whole turn reading tests,
+    # editing tokens.py and diffing the result, and never called the tool. The
+    # only reliable way to make the call unavoidable is to leave nothing else
+    # the agent CAN do.
+    from tests.benchmark.arms import ClaudePhronixArm as _Arm
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    reask = source[source.index('stage(f"{name}-record"'):]
+    assert "agent=self.filer_agent_name" in reask[:400]
+
+    arm = _Arm.__new__(_Arm)
+    tools = set(_Arm._agent_spec(_Arm.filer_agent_name).get("tools") or [])
+    denied = set(" ".join(
+        arm._denial_flags(_Arm.filer_agent_name)).split()[-1].split(","))
+    # It can file both kinds of record — aspects for a planning stage, ways for
+    # a scout — because one agent rescues every stage.
+    assert {"mcp__phronix__research_add_aspects",
+            "mcp__phronix__research_add_approach"} <= tools
+    # And it cannot edit, run, or delegate its way back to the tools withheld.
+    assert not tools & {"Bash", "Edit", "Write", "Agent", "Task"}
+    assert {"Bash", "Edit", "Write", "Agent", "Task"} <= denied
+
+    # The scout prompt closes the same door up front: the re-ask is the net.
+    scout = flat(ClaudePhronixArm.PLAN_SCOUT_PROMPT)
+    assert "The tool call is the only thing that records an idea" in scout
+    assert "never for the ideas themselves" in scout
+
+
+def test_where_is_compared_by_the_place_it_names_not_its_wording():
+    """Three descriptions of one function are one place, not three.
+
+    The same-place rule is what stops ways being recorded as steps, and
+    comparing `where` literally hands the planner an easy way around it.
+    Measured on django-13551 after the rule went in — eight aspects were
+    accepted, three of them pointing at the same method:
+
+        django/contrib/auth/tokens.py _make_hash_value() method
+        django/contrib/auth/tokens.py _make_hash_value() implementation
+        django/contrib/auth/tokens.py:_make_hash_value()
+    """
+    from phronix.research import _looks_like_alternatives, _where_key
+
+    a = _where_key("django/contrib/auth/tokens.py _make_hash_value() method")
+    b = _where_key("django/contrib/auth/tokens.py _make_hash_value() implementation")
+    c = _where_key("django/contrib/auth/tokens.py:_make_hash_value()")
+    assert a == b == c
+
+    # Different functions in one file stay different places.
+    assert _where_key("tokens.py:check_token()") != a
+    # As do different files.
+    assert _where_key("base_user.py:AbstractBaseUser") != a
+
+    # A `where` naming neither a file nor an identifier says nothing about
+    # collision, so it is not compared — two vague ones are not "the same place".
+    assert _where_key("Test subtests with email=None parameter") == ""
+    vague = [{"name": "one", "where": "somewhere in the auth code"},
+             {"name": "two", "where": "around the token logic"}]
+    assert _looks_like_alternatives(vague) == ""
+
+    # The live eight-aspect list is caught.
+    assert "same place are ONE step" in _looks_like_alternatives([
+        {"name": "Safe Attribute Access Pattern",
+         "where": "django/contrib/auth/tokens.py _make_hash_value() implementation"},
+        {"name": "modify-make-hash-value",
+         "where": "django/contrib/auth/tokens.py:_make_hash_value()"}])
+
+
+def test_the_search_for_more_steps_is_bounded_once_the_floor_is_met():
+    """`min_aspects` is a floor, not a target, and past it the clock runs.
+
+    Measured on django-13551: the loop kept eight independent steps, asked for
+    three more, and was still asking twenty-five minutes into a task the bare
+    arm had already finished twice. Nothing was failing — the search simply had
+    no reason to stop. When the clock runs out the pass finalises with what it
+    found and continues, rather than trading an unbounded amount of wall-clock
+    for ideas it does not need.
+    """
+    from phronix.tuning import get
+
+    # A clock, not a round cap: rounds are not the cost, an agent reading the
+    # repository for one more idea is.
+    assert int(get("research.extra_ideas_seconds", 240)) > 0
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # Scaled like every other research clock, so a slow endpoint is not cut off
+    # mid-idea for being slow.
+    assert 'int(_tuned("research.extra_ideas_seconds", 240)' in source
+    assert "* budget_scale())" in source
+    # And the floor still has to be MET before the clock starts.
+    assert "if len(ideas) >= self.MIN_ASPECTS and not clashes:" in source
+
+
+def test_the_method_is_written_first_and_the_ways_fan_out_over_its_steps():
+    """One writer for the decomposition; the parallelism moves to the ways.
+
+    The old shape was one bag: the planner and every angle scout proposed ideas
+    at once, the validator filtered, and a count decided when to stop. That
+    cannot produce a method, because nobody is asked for one — four agents each
+    answering "what could fix this?" return four rival fixes however the prompt
+    is worded, and a gate downstream can only reject the wrong shape, never
+    supply the missing one. Four successive tightenings on django-13551 each
+    caught their evasion and were met by the same shape in new clothes.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm
+
+    flat = " ".join(ClaudePhronixArm.REFINE_IDEA_PROMPT.split())
+
+    # A scout owns ONE step and is told which steps are not its own, so two
+    # scouts cannot produce two ways of the same thing.
+    assert "You own one idea" in flat
+    assert "which are NOT yours" in flat
+    # Ways attach to their step, or they cannot be attributed on failure.
+    assert 'aspect="{step}"' in ClaudePhronixArm.REFINE_IDEA_PROMPT
+    # Different means "fails differently", not "worded differently".
+    assert "SEQUENCE OF STEPS your idea takes" in flat
+    # Finding only one workable way is a real answer, not a shortfall to pad.
+    assert "makes the idea refutable" in flat
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # The method is recorded before any ways scout starts — they read it.
+    assert (source.index('recording_stage("plan", still_failing + self.PLAN_PROMPT')
+            < source.index("def ways(job)"))
+    # The angle scouts remain only for the case where no method was recorded.
+    assert "if not method:" in source
+
+
+def test_a_stage_rescue_can_only_record_never_continue_the_stage():
+    """Every rescue runs as the filer, whatever the stage it is rescuing was.
+
+    `FINALIZE_PROMPT` has always said "you are not continuing the stage; do not
+    read files, run commands or search", and asking has never been enough.
+    Measured on django-13551: a ways-scout rescue ran `git diff`, announced
+    "the fix is complete and correct", verified the tests, and recorded no
+    approach at all — confirming the very patch that had scored 1/2 and lost
+    the task.
+
+    Inheriting the stage's own agent was the previous fix and was not enough:
+    most stages run unrestricted, so most rescues did too.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as _Arm
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    start = source.index('stage(f"{name}-finalize"')
+    # The whole call, not up to the first ")" — the prompt's own .format(...)
+    # closes a paren long before the argument list does.
+    call = source[start:source.index("except Exception", start)]
+    assert "agent=self.filer_agent_name" in call, (
+        "a rescue must run restricted, or it continues the stage instead of "
+        "filing it")
+
+
+def test_exploration_starts_as_ideas_are_kept_not_after_the_plan_finishes():
+    """The plan emits; exploration consumes. No barrier between them.
+
+    The plan used to have to finish before any idea was explored — rounds of
+    proposing and judging, then a barrier, then the fan-out — so the first
+    idea, often the good one recorded in the first minute, sat idle for as long
+    as the planner spent looking for its third. Measured on scikit-learn-25570:
+    four steps recorded at 20:48, still in `plan-more-1` at 21:13, none of them
+    explored.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+
+    # The consumer exists before the plan loop, and the loop feeds it.
+    assert source.index("def drain_ideas()") < source.index("while tries_at_plan <")
+    loop = source[source.index("while tries_at_plan <"):source.index("# The plan's OTHER two outputs")]
+    assert "drain_ideas()" in loop, "the plan loop must hand ideas over as it keeps them"
+
+    # Submitted exactly once, keyed by name: the validator rewrites the record
+    # each round, and re-submitting would explore an idea twice and pay twice.
+    assert "if not name or name in submitted:" in source
+    # And still bounded — streaming is not a licence to explore everything.
+    assert "if len(submitted) >= self.max_parallel_aspects:" in source
+
+
+def test_research_can_test_a_candidate_while_it_is_still_generating():
+    """The seam between research and evaluation, and what it is for.
+
+    Research and evaluation used to be strictly sequential: research ran to
+    completion, the runner then raced every candidate, and only then did anyone
+    learn whether any of them worked. So a pass kept generating and combining
+    ideas long after one had already solved the task, and the idea recorded in
+    the first minute was tested last.
+    """
+    import inspect
+
+    from tests.benchmark.arms import Arm, ClaudePhronixArm
+    from tests.benchmark.runner import Runner
+
+    # Every arm accepts the seam; arms that do no research ignore it.
+    assert "trial" in inspect.signature(Arm.research).parameters
+    assert "trial" in inspect.signature(ClaudePhronixArm.research).parameters
+    assert hasattr(Runner, "trial_runner")
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+
+    # A candidate is tested as it is written, not after the whole set is.
+    assert "def write_and_try(job)" in source
+    # A pass that succeeds stops generating — that is the point of the seam.
+    assert "stop_generating.set()" in source
+    plan_loop = source[source.index("while tries_at_plan <"):]
+    assert "if stop_generating.is_set():" in plan_loop[:900]
+    # And the combination is skipped, being a bet that is pointless once one
+    # idea fixes the whole task on its own.
+    assert "skipping the combination" in source
+
+    runner_source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    # The runner uses what research measured rather than racing it again: a
+    # second race costs a container and an agent per plan to re-derive a
+    # verdict already on file.
+    assert 'measured = (research or {}).get("trials") or []' in runner_source
+    # A trial never raises — one candidate lost is not the pass lost.
+    trial_body = runner_source[runner_source.index("def trial_runner"):
+                               runner_source.index("def _race_plans")]
+    assert "except Exception as exc:" in trial_body
+
+
+def test_a_restricted_agent_cannot_delegate_its_way_out_of_the_restriction():
+    """Denying Bash means nothing if the agent can spawn one that has it.
+
+    A sub-agent is a fresh session with the DEFAULT tool set, so delegation
+    hands back everything the parent was denied. Measured on django-13551:
+    `plan-record` runs as the validator, denied Bash precisely so the re-ask
+    files its ideas rather than going off to fix the code — and the trace shows
+    it running the Django token tests anyway, via "Background agent is running.
+    I'll continue when it completes".
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    arm = Arm.__new__(Arm)
+    denied = set(" ".join(arm._denial_flags("phronix-validator")).split()[-1].split(","))
+
+    # The tools the restriction is about.
+    assert {"Bash", "Edit", "Write"} <= denied
+    # And every way to obtain them second-hand.
+    assert {"Agent", "Task"} <= denied
+
+    # The agent can still do its job: read, and record what it found.
+    spec = Arm._agent_spec("phronix-validator")
+    tools = set(spec.get("tools") or [])
+    assert "mcp__phronix__research_add_aspects" in tools, (
+        "the re-ask runs as this agent — without the recording tool it is "
+        "denied every way to act, which is worse than not restricting it")
+    assert {"Read", "Grep", "Glob"} <= tools
+    assert not tools & denied
+
+
+def test_retry_prompts_say_the_tree_holds_the_failed_attempt():
+    """A revision pass reads a patched tree, and nothing used to say so.
+
+    The checkout handed to a retry still holds the edits of the attempt that
+    just FAILED, so the fix often looks as though it is already there — because
+    it is, and it did not work. Measured on django-13551 under Haiku: `plan`
+    read `tokens.py`, concluded "the implementation is complete and correct",
+    and recorded no steps; its re-ask read the same file and agreed. Two full
+    stages spent confirming a patch that had scored 1/2 and lost the task.
+
+    The agent was not being lazy. It was handed a workspace that argues there
+    is nothing to do, and believed it.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    note = " ".join(Arm.PATCHED_TREE_NOTE.split())
+    # It has to say what the tree IS, not merely "check exchange.md".
+    assert "The working tree is NOT the original code" in note
+    # And name the trap in the words the model actually used.
+    assert "implementation is complete" in note
+    assert "exchange.md" in note
+
+    # Every stage that reads the retry checkout carries it.
+    for name in ("PLAN_PROMPT", "PLAN_SCOUT_PROMPT", "REFINE_IDEA_PROMPT",
+                 "RECORD_ASPECTS_PROMPT"):
+        assert "working tree is NOT the original code" in getattr(Arm, name), name
+
+
+def test_each_idea_is_carried_to_a_verdict_on_its_own_thread():
+    """An idea is a way of solving the WHOLE problem, and it finishes alone.
+
+    Building every solution and then racing them made the first workable idea
+    wait for the slowest one to finish being explored — and exploring the
+    others is exactly the work a success makes unnecessary. Measured on
+    django-13551: 64 minutes in the plan phase, 300 validator calls, zero
+    trials, because nothing reached a verdict until everything had.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+
+    # Explored -> written up -> put in front of the tests, in one thread.
+    assert "def finish_idea(idea" in source
+    assert source.count("return finish_idea(idea)") == 2   # both exits
+    assert "def build_and_try(plan" in source
+
+    # Two tried ideas are combined immediately, not after the last one lands.
+    assert "def combine_if_ready()" in source
+    assert "if len(have) < 2:" in source
+
+    # A pass stops the plan and lets the rest file what they have.
+    assert "stop_generating.set()" in source
+    assert "the ones in flight will file what they" in source
+    # Nothing is built or tried twice, however many ideas name the same plan.
+    assert 'if name in built:' in source
+    # And an idea that lands while a solve is in flight does not start a build.
+    assert "if trial is None or stop_generating.is_set():" in source
+
+
+def test_the_remaining_failure_is_the_subject_of_the_next_research_pass():
+    """A partial pass leaves data; research must build on it, not restart.
+
+    Measured on django-13551 at 1 of 2: `exchange.md` carried the verdict at
+    line 299 of a 403-line file, under the whole transcript and above eighty
+    `Destroying test database for alias 'other'...` lines. The pass recorded a
+    single step — "Email included in token hash" — which is the half that
+    ALREADY PASSES, and never touched `test_token_with_different_secret`, the
+    one that does not.
+    """
+    from tests.benchmark.arms import (ClaudePhronixArm as Arm,
+                                      _useful_test_output)
+
+    note = " ".join(Arm.STILL_FAILING_NOTE.split())
+    assert "{failing}" in Arm.STILL_FAILING_NOTE
+    # It has to say the fixed half is DONE, or the pass re-derives it.
+    # It names what already WORKS as well as what is broken. A partial pass is
+    # evidence in both directions, and only one was being carried.
+    assert "{working}" in Arm.STILL_FAILING_NOTE
+    assert "already got RIGHT, confirmed by the tests" in note
+    assert "re-derives them costs this pass and changes no verdict" in note
+    # And says why abandoning the working half is not neutral.
+    assert "regresses a target test the run has already banked" in note
+    assert "Decompose against the failing tests" in note
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # Injected into every stage that plans against the failure — an attachment
+    # is not an instruction, and the stage told to "summarise the problem from
+    # exchange.md" summarised the ISSUE.
+    assert source.count("still_failing + self.") >= 3
+    # Read from the measured verdict, not from a summary of it.
+    assert 'seen.get("fail_to_pass_failing")' in source
+
+    # And the teardown noise no longer occupies the end of the captured output,
+    # which is the position a skimming reader weights most.
+    cleaned = _useful_test_output(
+        "FAIL: test_x\nAssertionError: 1 != 2\n"
+        + "Destroying test database for alias 'other'...\n" * 80)
+    assert cleaned.startswith("FAIL: test_x")
+    assert "Destroying test database" not in cleaned
+    assert "80 test-database setup/teardown line(s) removed" in cleaned
+
+
+def test_a_solved_task_leaves_a_skill_the_next_run_can_look_up():
+    """A pass must leave something findable, not only something recorded.
+
+    `best_skill_for` does not search — it LOOKS UP `solution-<topic>` before
+    the attempt starts. Measured on django-13551: the attempt passed 2 of 2,
+    the learner wrote a memory holding the correct fix and the corner case that
+    broke the earlier version, and no skill. The store held the answer and the
+    one mechanism that asks for it saw nothing.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    # The writer is told the exact name the reader will use, so the two cannot
+    # disagree about it.
+    assert 'skill_write(name="{solution}"' in Arm.LEARN_PROMPT
+    assert 'skill_write(name="{solution}"' in Arm.SOLUTION_SKILL_FROM_PASS_PROMPT
+    learn = " ".join(Arm.LEARN_PROMPT.split())
+    # The prompt points at the rule; the rule itself lives in the skill, where
+    # the pointer-length guard keeps it.
+    assert "Memory is THIS session; a skill is what survives it" in learn
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # Checked rather than trusted, and only on a pass — a failed attempt has no
+    # solution to file and demanding one would invent it.
+    assert 'if (verdict or {}).get("resolved") and not self.best_skill_for(' in source
+    # The fallback writer runs restricted: the task is already solved, so there
+    # is nothing left to do but file what solved it.
+    assert "agent=self.filer_agent_name)" in source[source.index("_write_solution_skill"):]
+
+    # And the filer can write a skill without gaining any way to change code.
+    tools = set(Arm._agent_spec(Arm.filer_agent_name).get("tools") or [])
+    assert "mcp__phronix__skill_write" in tools
+    assert not tools & {"Bash", "Edit", "Write", "Agent", "Task"}
+
+
+def test_a_partial_pass_is_reported_as_partial_success_not_as_failure():
+    """1 of 2 says one half is CORRECT. Only the other half was being carried.
+
+    Measured on django-13551: the attempt had correctly added the user's email
+    to the token hash and that target test passed. The feedback opened "your
+    previous attempt did NOT succeed ... do not repeat the same approach" and
+    named only the test still failing — advice that, followed literally, points
+    the next attempt away from the one part the tests had confirmed.
+    """
+    from tests.benchmark.runner import _feedback_note
+
+    partial = _feedback_note(2, {
+        "fail_to_pass_passing": ["Updating the user email invalidates the token."],
+        "fail_to_pass_failing": ["test_token_with_different_secret"],
+        "failure_detail": "ERROR: x\nTypeError: boom"})
+    assert "got PART of this task right" in partial
+    assert "do not repeat the same approach" not in partial
+    assert "ALREADY fixed — keep it" in partial
+    # The banked half comes BEFORE the missing half: it is the constraint on
+    # everything the next attempt does.
+    assert partial.index("ALREADY fixed") < partial.index("still do not")
+
+    # A change that achieved nothing keeps the blunt instruction, because there
+    # it is correct.
+    nothing = _feedback_note(2, {
+        "fail_to_pass_passing": [],
+        "fail_to_pass_failing": ["test_a", "test_b"],
+        "failure_detail": "ERROR: x"})
+    assert "do not repeat the same approach" in nothing
+    assert "ALREADY fixed" not in nothing
+
+
+def test_the_learner_is_told_which_store_a_finding_belongs_in():
+    """Lifetime decides the store, not importance.
+
+    Measured on django-13551: the attempt passed 2 of 2 and the fix — with the
+    corner case that had broken three earlier runs — was written as a memory.
+    It was correct, well written, and died with the run, because the
+    pre-attempt lookup reads skills.
+    """
+    from pathlib import Path
+
+    from tests.benchmark.arms import PhronixArm as Arm
+
+    assert "`I9`" in Arm.LEARN_PROMPT
+
+    skill = (Path("src/phronix/.phronix/skills/phronix-learn-from-attempt")
+             / "SKILL.md").read_text(encoding="utf-8")
+    rule = skill[skill.index("### I9"):]
+    # The discriminator is a question about the NEXT run, not about value.
+    assert "would a run that never saw this session want it?" in rule
+    # Both directions are named, or the rule only ever moves things one way.
+    assert "the exchange, the transcript, the diff of this attempt | memory" in rule
+    assert "the change that made the target tests pass | **skill**" in rule
+    # And why getting it backwards is not symmetric.
+    assert "A durable finding written as a memory is gone" in " ".join(rule.split())
+
+
+def test_judging_has_one_budget_across_every_path_that_asks_for_it():
+    """The corrector is unbudgeted per call, so the PASS has to bound it.
+
+    Measured on django-13551 with `MAX_JUDGEMENTS` already in place:
+    `validate-ideas` ran 300 times on one task and its finalize 303, for 64
+    minutes in the plan phase and no steps recorded. Almost none of it was a
+    stage running out of time — fifteen budget events in the whole hour. It was
+    the NUMBER of calls, and the loop that counted them was not the loop making
+    most of them: the scouts call the validator too, pipelined, so each scout's
+    ideas are judged as they land.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+
+    # Exactly one place runs the corrector, and it counts.
+    assert source.count('stage("validate-ideas", self.VALIDATE_IDEAS_PROMPT') == 1
+    assert "def judge():" in source
+    assert "if judgements[0] >= self.MAX_JUDGEMENTS:" in source
+    # Both callers go through it — the plan loop and the scouts.
+    assert source.count("judge()") >= 3
+
+    # And a corrector's overrun does not earn a rescue: it judges a list
+    # someone else wrote, so a truncated verdict is the next round's job, not
+    # findings that need filing.
+    assert 'corrector = name.startswith(("validate-ideas"' in source
+    assert "not finalizing and not corrector:" in source
+
+
+def test_the_ways_fan_out_runs_on_whatever_produced_the_steps():
+    """Evaluation is unreachable if the ways scouts are gated on the first read.
+
+    `method` was read once, straight after the plan stage, and the ways fan-out
+    was gated on that reading. A pass whose planner recorded nothing — which is
+    every pass measured so far — skipped the ways scouts, recorded no approach,
+    built no candidate, and therefore never evaluated anything. The fallback
+    scouts did their job and the work they produced had nowhere to go.
+
+    Measured on django-13551: 64 minutes in the plan phase, 300 validator
+    calls, zero trials.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+
+    fallback = source.index("if not method:")
+    fan_out = source.index("if method:\n            if on_call:")
+    # The fallback runs FIRST, so the fan-out has something either way.
+    assert fallback < fan_out
+    # And the method is re-read after it, or the fan-out is gated on a reading
+    # taken before the work that produced the steps.
+    between = source[fallback:fan_out]
+    assert "method = self._in_store(store_root, self._load_aspects, topic)" in between
+
+
+def test_a_run_cannot_write_into_the_frameworks_own_layer(tmp_path, monkeypatch):
+    """`--fresh` means nothing if a run can edit the skeleton later runs seed from.
+
+    Redirecting the project and user layers is not enough. phronix is installed
+    editable from a clone in development, which leaves the BUNDLED layer
+    writable inside a git worktree — so anything resolving a write to it edits
+    the repository. Measured: a `--fresh --no-carry` run working on a django
+    task wrote `sympy-itermonomials-degree-filter` into
+    `src/phronix/.phronix/skills/`, and the six near-duplicate `column-domain`
+    skills that reached later runs arrived in the bundle the same way. Every
+    from-scratch comparison after that measured a skeleton earlier runs had
+    edited.
+    """
+    from phronix.layers import bundled_layer, resolve_write_layer
+    from tests.benchmark.isolation import isolated_env
+
+    # The benchmark closes the boundary for every process it launches — agents,
+    # sub-agents and the always-on learner resolve layers for themselves, so
+    # this cannot be done at one call site.
+    env = isolated_env(tmp_path / "store", tmp_path / "cache")
+    assert env["PHRONIX_BUNDLED_READONLY"] == "1"
+
+    project = tmp_path / "proj"
+    (project / ".git").mkdir(parents=True)
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(project))
+    monkeypatch.setenv("PHRONIX_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PHRONIX_BUNDLED_READONLY", "1")
+
+    assert bundled_layer().writable is False
+    # Writes fall through to the run's own store, not into the framework.
+    assert resolve_write_layer().root == project / ".phronix"
+    # And asking for it by name is refused rather than silently redirected —
+    # a silent downgrade is how this stayed invisible.
+    with pytest.raises(PermissionError):
+        resolve_write_layer("bundled")
+
+    # Without the guard the framework's layer is writable from a checkout,
+    # which is the condition that made the leak possible.
+    monkeypatch.delenv("PHRONIX_BUNDLED_READONLY")
+    assert bundled_layer().writable is True
+
+
+def test_the_planner_is_given_the_evidence_and_not_the_repository():
+    """Remove what produces the wrong conclusion, rather than arguing with it.
+
+    A revision pass runs against a checkout holding the failed attempt's edits,
+    and the planner reads them as proof there is nothing to plan. Measured
+    across five runs and five successive gates — a prompt instruction, a
+    restricted agent, a dedicated filer with no editing tools, an explicit
+    re-ask, and a standing note saying the tree is patched — it still answered
+    "the implementation is correct" and recorded no ideas: 67 plan rounds on
+    one task, 68 re-asks, zero ideas.
+
+    Every one of those gates argued with the conclusion. None removed what
+    produces it. The planner does not need the source to name the ideas worth
+    exploring; it needs the failure, the verdict and the test still red.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+
+    # A directory holding the evidence files and nothing else.
+    assert 'evidence = workdir / "evidence"' in source
+    assert "shutil.copy2(source, evidence / Path(source).name)" in source
+    # The plan stage and its scouts run there, not in the checkout.
+    assert 'recording_stage("plan", still_failing + self.PLAN_PROMPT,\n' \
+           '                        budgets["plan"], evidence)' in source
+    assert 'budgets["plan"], evidence)' in source
+
+
+def test_the_refined_unit_is_an_idea_not_a_step_of_one():
+    """An idea solves the whole problem; the steps live inside it.
+
+    The per-STEP fan-out asked several agents for rival ways of doing one step
+    of one method — a finer grain than anything downstream could use, since the
+    thing built, tried and combined is an idea.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    assert not hasattr(Arm, "WAYS_SCOUT_PROMPT")
+    flat = " ".join(Arm.REFINE_IDEA_PROMPT.split())
+    assert "You own one idea" in flat
+    assert "SEQUENCE OF STEPS your idea takes" in flat
+    # The result is attributable to the idea that produced it.
+    assert 'aspect="{step}"' in Arm.REFINE_IDEA_PROMPT
+    # And it still knows the tree is patched.
+    assert "working tree is NOT the original code" in Arm.REFINE_IDEA_PROMPT

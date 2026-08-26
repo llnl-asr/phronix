@@ -1,5 +1,19 @@
 # llama.cpp inference cluster on Tuolumne (MI300A)
 
+> **There is a second fleet.** `corona-llm/` runs the same scripts on corona's
+> MI50 (gfx906) nodes — every file there except `env.sh`, `setup.sh` and its
+> README is a symlink back to this directory, and each script resolves `env.sh`
+> next to *itself*, so a fix here reaches both. corona is worth knowing about
+> because its queue is usually free where Tuolumne's is the binding constraint
+> on how many benchmark groups run in a day. See `corona-llm/README.md`.
+>
+> Anything cluster-specific belongs in an `env.sh`, not in a script: fleet
+> shape (`FLEET_GPUS_PER_NODE`, `FLEET_GPUS_PER_SERVER`, `FLEET_CORES_PER_SERVER`,
+> `FLEET_GATEWAY_CORES`), profile and key (`FLEET_PROFILE`, `FLEET_KEY`), and
+> build knobs (`GPU_TARGET`, `HIP_MMQ_MFMA`, `HIP_GRAPHS`, `HIP_MIN_VERSION`,
+> `HOST_CC`/`HOST_CXX`, `EXTRA_LINKER_FLAGS`). Every one of those defaults to
+> what Tuolumne always did.
+
 Scripts live here in the repo; everything large — the llama.cpp clone, the venv,
 the GGUF models, logs — lives on `/p/lustre5/haridev/llm-tuolumne`.
 

@@ -7,11 +7,14 @@ test here pins one of them.
 from __future__ import annotations
 
 from phronix import skill_schema as schema
+from tests.skill_paths import skill_home_under
 from phronix import skills
 
 
 def _write(store, name, skill_md, lessons_md=None):
-    directory = store / "skills" / name
+    from tests.skill_paths import skill_home_under
+
+    directory = skill_home_under(store, name)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "SKILL.md").write_text(skill_md)
     if lessons_md is not None:
@@ -219,7 +222,7 @@ class TestLoad:
                _skill("s", body="## Rules\n\n### R1 — A rule\n\nbody\n"))
         # The generated files carry a real index; a hand-written one may not, so
         # refresh before asserting on it.
-        path = isolated_layers["store"] / "skills" / "s" / "SKILL.md"
+        path = skill_home_under(isolated_layers["store"], "s") / "SKILL.md"
         path.write_text(schema.refresh_index(path.read_text()))
         result = skills.index_of("s")
         assert result["status"] == "ok"
@@ -235,7 +238,10 @@ class TestAuthoring:
         result = skills.create("new-subject", "A description long enough to be useful.",
                                subject="the new subject")
         assert result["status"] == "ok"
-        parsed = schema.parse_skill(isolated_layers["store"] / "skills" / "new-subject")
+        # Answers are grouped by SUBJECT, so several skills about one problem
+        # share a directory and a from-scratch run can drop the whole subject.
+        parsed = schema.parse_skill(skill_home_under(
+            isolated_layers["store"], "new-subject", subject="the new subject"))
         assert parsed["subject"] == "the new subject"
         assert "Index" in parsed["sections"]
 
@@ -247,7 +253,7 @@ class TestAuthoring:
     def test_association_records_its_pair(self, isolated_layers):
         skills.create("a-on-b", "A description long enough to be useful.",
                       kind="association", subjects=["a", "b"])
-        parsed = schema.parse_skill(isolated_layers["store"] / "skills" / "a-on-b")
+        parsed = schema.parse_skill(skill_home_under(isolated_layers["store"], "a-on-b"))
         assert parsed["type"] == "association"
         assert parsed["subjects"] == ["a", "b"]
 
@@ -258,7 +264,7 @@ class TestAuthoring:
         assert (first["label"], second["label"]) == ("R1", "R2")
         assert first["reference"] == "[[s#R1]]"
 
-        parsed = schema.parse_skill(isolated_layers["store"] / "skills" / "s")
+        parsed = schema.parse_skill(skill_home_under(isolated_layers["store"], "s"))
         assert {row["label"] for row in parsed["index"]} == {"R1", "R2"}
 
     def test_instructions_and_rules_number_independently(self, isolated_layers):
@@ -278,7 +284,7 @@ class TestAuthoring:
         result = skills.write_block("s", "lesson", "Title", "Body of the lesson.")
         assert result["status"] != "error", result
         assert result["routed_to"] == "LESSONS.md"
-        lessons = isolated_layers["store"] / "skills" / "s" / "LESSONS.md"
+        lessons = skill_home_under(isolated_layers["store"], "s") / "LESSONS.md"
         assert "Body of the lesson." in lessons.read_text()
 
     def test_write_block_still_rejects_an_unknown_kind(self, isolated_layers):
@@ -289,7 +295,7 @@ class TestAuthoring:
     def test_write_block_redacts(self, isolated_layers):
         skills.create("s", "A description long enough to be useful.")
         skills.write_block("s", "rule", "Config path", "config lives at /home/someone/cfg")
-        text = (isolated_layers["store"] / "skills" / "s" / "SKILL.md").read_text()
+        text = (skill_home_under(isolated_layers["store"], "s") / "SKILL.md").read_text()
         assert "/home/someone" not in text and "$HOME/cfg" in text
 
     def test_duplicate_title_is_not_added_twice(self, isolated_layers):
@@ -311,7 +317,7 @@ class TestLessons:
                                      description="A description long enough.")
         assert result["label"] == "L1"
         assert result["file"].endswith("LESSONS.md")
-        skill_md = (isolated_layers["store"] / "skills" / "s" / "SKILL.md").read_text()
+        skill_md = (skill_home_under(isolated_layers["store"], "s") / "SKILL.md").read_text()
         assert "symptom -> cause -> fix" not in skill_md
 
     def test_pitfall_and_lesson_number_independently(self, isolated_layers):
@@ -322,21 +328,21 @@ class TestLessons:
     def test_a_lesson_creates_the_skill_file_too(self, isolated_layers):
         """A LESSONS.md orphaned from any subject is unreachable by retrieval."""
         skills.write_lesson("brand-new", "a lesson", description="A description long enough.")
-        directory = isolated_layers["store"] / "skills" / "brand-new"
+        directory = skill_home_under(isolated_layers["store"], "brand-new")
         assert (directory / "SKILL.md").is_file()
         assert (directory / "LESSONS.md").is_file()
 
     def test_lesson_is_dated(self, isolated_layers):
         skills.write_lesson("s", "the thing broke", description="d long enough here",
                             when="2026-01-15")
-        text = (isolated_layers["store"] / "skills" / "s" / "LESSONS.md").read_text()
+        text = (skill_home_under(isolated_layers["store"], "s") / "LESSONS.md").read_text()
         assert "**2026-01-15**" in text
 
     def test_lesson_is_redacted(self, isolated_layers):
         result = skills.write_lesson("s", "broke at /home/someone/x",
                                      description="d long enough here")
         assert result["redacted"]
-        text = (isolated_layers["store"] / "skills" / "s" / "LESSONS.md").read_text()
+        text = (skill_home_under(isolated_layers["store"], "s") / "LESSONS.md").read_text()
         assert "/home/someone" not in text
 
     def test_duplicate_lesson_is_not_appended(self, isolated_layers):
@@ -348,7 +354,7 @@ class TestLessons:
         result = skills.write_lesson("phronix-privacy", "a project-specific note")
         assert result["action"] == "forked"
         assert result["layer"] == "project"
-        skill_md = (isolated_layers["store"] / "skills" / "phronix-privacy" / "SKILL.md").read_text()
+        skill_md = (skill_home_under(isolated_layers["store"], "phronix-privacy") / "SKILL.md").read_text()
         assert "Keep the lesson, drop the provenance" in skill_md
 
 

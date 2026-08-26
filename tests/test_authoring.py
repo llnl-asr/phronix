@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from phronix import agents, skills
+from tests.skill_paths import skill_home_under
 
 SPEC = dict(
     name="deploy-service",
@@ -23,7 +24,7 @@ SPEC = dict(
 
 
 def _skill_path(store, name="deploy-service"):
-    return store / "skills" / name / "SKILL.md"
+    return skill_home_under(store, name) / "SKILL.md"
 
 
 class TestSkillDefineIdempotency:
@@ -53,7 +54,7 @@ class TestSkillDefineIdempotency:
 
         import shutil
 
-        shutil.rmtree(isolated_layers["store"] / "skills" / "deploy-service")
+        shutil.rmtree(skill_home_under(isolated_layers["store"], "deploy-service"))
         assert skills.define(**SPEC)["labels"]["R1"] == "Never deploy on Friday"
 
     def test_pinned_labels_make_it_history_independent(self, isolated_layers):
@@ -66,7 +67,7 @@ class TestSkillDefineIdempotency:
 
         import shutil
 
-        shutil.rmtree(isolated_layers["store"] / "skills" / "deploy-service")
+        shutil.rmtree(skill_home_under(isolated_layers["store"], "deploy-service"))
         skills.define(**pinned)
         assert _skill_path(isolated_layers["store"]).read_text() == over_existing
 
@@ -160,7 +161,7 @@ class TestReferenceProtection:
         skills.define(**{**SPEC, "pitfalls": [{"title": "A trap", "body": "avoid it"}]})
         result = skills.define(**SPEC)
         assert result["status"] == "ok"
-        lessons = isolated_layers["store"] / "skills" / "deploy-service" / "LESSONS.md"
+        lessons = skill_home_under(isolated_layers["store"], "deploy-service") / "LESSONS.md"
         assert "A trap" in lessons.read_text()
 
 

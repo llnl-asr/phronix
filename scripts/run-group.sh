@@ -6,6 +6,10 @@
 #   scripts/run-group.sh 4 <alloc> --size 50          # group 4 of 6, 50 tasks
 #   scripts/run-group.sh 2 f3TkgpQVfpEb --spend 60    # a different ceiling
 #   scripts/run-group.sh 3 f3TkgpQVfpEb --local       # the local GPU fleet
+#   scripts/run-group.sh 1 <alloc> --subscription     # hosted Sonnet 5, one task
+#                                                     # at a time, on the account
+#   scripts/run-group.sh 1 <alloc> --research-first   # exercise the research
+#                                                     # loop on EVERY task
 #
 # Ten groups of 30, from `lite-300.txt`. Hosted Claude Sonnet by default, five
 # tasks at a time, with a $100 ceiling per group — enforced by the runner, which
@@ -33,9 +37,21 @@
 set -uo pipefail
 
 PROJECT=/usr/WS2/haridev/phronix
+# Which fleet directory to read cluster.json from. Two exist — tuolumne-llm/
+# and corona-llm/ — and they are separate clusters with separate gateways, so
+# a run has to name one. PHRONIX_FLEET=corona-llm switches every default here.
+FLEET=${PHRONIX_FLEET:-tuolumne-llm}
+
 # `BENCH` collides with something in the login profile — it comes back
 # as a session id, so paths built from it land in the wrong place.
-PBENCH=/p/lustre5/haridev/phronix-bench
+# The benchmark's own workspace: venv, task lists, run outputs. NOT the repo.
+#
+# Configurable because it is on a PARALLEL FILESYSTEM, and the two clusters do
+# not share one — /p/lustre5 is Tuolumne's and is not mounted on corona, so a
+# corona run needs its own root (/p/lustre3/haridev/phronix-bench) with its own
+# venv and task lists. Unset, this is exactly the path it always was.
+source "$PROJECT/scripts/bench-root.sh"
+PBENCH=$(bench_root)
 # NOT `GROUPS`: that is a bash builtin holding the user's group ids,
 # and assigning to it is silently ignored — the path came out as the
 # numeric gid, so every lookup missed.
@@ -60,21 +76,44 @@ PARALLEL=5
 SIZE=30
 NODES=""
 CLUSTER=""
+SUBSCRIPTION=""
+PARALLEL_SET=""
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --spend)    SPEND="$2"; shift 2;;
-    --parallel) PARALLEL="$2"; shift 2;;
+    --parallel) PARALLEL="$2"; PARALLEL_SET=1; shift 2;;
+    # Hosted Claude on the account's own subscription.
+    #
+    # One task at a time, because the constraint here is not dollars and not
+    # GPUs but the account's usage allowance, and the way to keep that bounded
+    # is to have one task's worth of agents in flight rather than five. Both
+    # arms still run together, so a task is compared against its own baseline.
+    #
+    # The dollar figure stays on and stays useful, but read it as an ESTIMATE
+    # OF API-EQUIVALENT USAGE rather than a bill: a subscription is not charged
+    # per token, so the ceiling is a proxy for how much of the allowance a
+    # group has eaten. Set `--spend 0` to remove it.
+    --subscription) SUBSCRIPTION=1; shift;;
     --size)     SIZE="$2"; shift 2;;
     --nodes)    NODES="$2"; shift 2;;
-    --cluster)  CLUSTER="${2:-$PROJECT/tuolumne-llm/cluster.json}"; shift 2;;
-    --local)    CLUSTER=$PROJECT/tuolumne-llm/cluster.json; shift;;
+    # Passed through rather than interpreted: the default is `auto`, which
+    # measures the fleet, and a group has no better information than that.
+    --budget-scale) EXTRA+=(--budget-scale "$2"); shift 2;;
+    --cluster)  CLUSTER="${2:-$PROJECT/$FLEET/cluster.json}"; shift 2;;
+    --local)    CLUSTER=$PROJECT/$FLEET/cluster.json; shift;;
     *)          EXTRA+=("$1"); shift;;
   esac
 done
 # A local fleet bills nothing, so a dollar ceiling there would stop a run over a
 # number that means nothing.
 [ -n "$CLUSTER" ] && SPEND=0
+
+# `--subscription` sets the shape unless the shape was asked for explicitly.
+if [ -n "$SUBSCRIPTION" ]; then
+  [ -n "$CLUSTER" ] && { echo "--subscription is a HOSTED run; drop --local/--cluster"; exit 2; }
+  [ -z "$PARALLEL_SET" ] && PARALLEL=1
+fi
 
 # An allocation that is not RUNNING cannot host anything.
 #
@@ -136,11 +175,20 @@ echo "alloc   : ${ALLOC:-<none — containers run here>}"
 # `${X:-b}` falls back to X, not to b.
 if [ -n "$CLUSTER" ]; then
   echo "model   : local cluster ($CLUSTER)"
+elif [ -n "$SUBSCRIPTION" ]; then
+  # Does not name a model: `--subscription` chooses the ACCOUNT, not the
+  # model, and `--model` passes straight through to the harness. Naming Sonnet
+  # here printed "hosted Claude Sonnet 5" for a run on Haiku.
+  echo "model   : hosted Claude, on this account's subscription"
 else
   echo "model   : hosted (Anthropic)"
 fi
 echo "shape   : $PARALLEL task(s) at once, every researched plan attempted"
-[ -z "$CLUSTER" ] && echo "note    : hosted — this spends real money; ceiling below"
+if [ -n "$SUBSCRIPTION" ]; then
+  echo "note    : subscription — the dollar figure is API-EQUIVALENT usage, not a bill"
+elif [ -z "$CLUSTER" ]; then
+  echo "note    : hosted — this spends real money; ceiling below"
+fi
 [ "${SPEND:-0}" != "0" ] && echo "budget  : \$$SPEND ceiling"
 echo "store   : fresh, not carried — this group learns nothing from the others"
 echo

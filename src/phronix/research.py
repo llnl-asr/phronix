@@ -1030,6 +1030,42 @@ def add_approach(topic: str, name: str, summary: str,
     result = {"status": "ok", "topic": topic, "approach": name,
               "key": entry["key"],
               "approaches": len(record["approaches"]), "file": str(path)}
+
+    # An approach that names no step is a way with nothing to be a way OF.
+    #
+    # Said here rather than enforced, because approaches also arrive from the
+    # benchmark's own ledger, which has no steps to cite. But once a method
+    # exists, a way that floats free of it cannot be attributed when it fails —
+    # which is the entire point of decomposing: "failed at step 3" says which
+    # step to redo, where "the approach failed" says only to start again.
+    steps = [str(a.get("name") or "") for a in (record.get("aspects") or [])]
+    given = str(aspect).strip()
+    if not steps and str(source).strip() != "benchmark attempt":
+        # No method at all, and a way was recorded anyway.
+        #
+        # Observed live on django-13551: the planner never called
+        # `research_set_aspects`, went straight to `research_add_approach`, and
+        # the record ended with ways and no steps. The steps gate cannot catch
+        # this — there is nothing to reject — so it has to be said on the way
+        # in, at the moment the first way is recorded.
+        result["next"] = (
+            "no method has been recorded for this topic yet. Decompose the "
+            "problem into STEPS first with `research_set_aspects` — the "
+            "ordered things that must become true — then re-record this as a "
+            "way of one of them with `aspect=`. Ways without steps cannot be "
+            "composed into a solution or attributed when a try fails. See "
+            "`I5b` in phronix-research-plan.")
+    elif steps and not given:
+        result["next"] = (
+            f"attach this to the step it is a way of: re-record it with "
+            f"`aspect=` one of {steps}. Ways that name no step cannot be "
+            f"attributed when a try fails.")
+    elif steps and given not in steps:
+        result["next"] = (
+            f"aspect {given!r} is not one of the planned steps ({steps}). "
+            f"Either use the step's exact name, or add the step first — a way "
+            f"pointing at a step nobody planned is not a position in the "
+            f"method.")
     if rejected_metrics:
         result["ignored_metrics"] = rejected_metrics
         result["note"] = (
@@ -1707,6 +1743,98 @@ def backups(topic: str) -> List[Dict[str, Any]]:
     return out
 
 
+#: Names that give an alternative away: enumerated candidates, not method steps.
+#:
+#: `A1: Direct email with getattr() fallback` / `A2: Model method factoring` is
+#: a list of WAYS TO FIX THE WHOLE THING. That is the shape the plan skill's
+#: `I5b` exists to replace, and it fails silently: the aspects slot is where the
+#: STEPS go, so filling it with alternatives leaves the method undecomposed
+#: while every count in the record looks healthy. `record_step_reached` then has
+#: no real position to report, and `research_add_approach(..., aspect=...)`
+#: attaches ways to something that was already a way.
+_ALTERNATIVE_NAME = re.compile(
+    r"^\s*(?:"
+    r"[A-Z]\d+\s*[:.\)-]"                 # A1:  B2)  C3.
+    r"|(?:option|approach|alternative|candidate|way|variant|idea)\s*\d+\b"
+    r"|\d+\s*[:.\)]\s*(?:option|approach|alternative|candidate|way)\b"
+    r")", re.I)
+
+
+def _where_key(where: str) -> str:
+    """The PLACE a `where` names, with the prose stripped off.
+
+    Compared literally, three ways of doing one thing escape the same-place
+    rule by describing that place differently. Measured on django-13551:
+
+        django/contrib/auth/tokens.py _make_hash_value() method
+        django/contrib/auth/tokens.py _make_hash_value() implementation
+        django/contrib/auth/tokens.py:_make_hash_value()
+
+    Three strings, one function. So the key is what was actually named — the
+    source files and the identifiers — and the words around them are dropped.
+    A `where` that names no file and no identifier reduces to "" and is not
+    compared at all, because two vague `where`s being equal says nothing about
+    whether the steps collide.
+    """
+    text = str(where or "")
+    files = {name.lower() for name in re.findall(r"[\w./-]+\.pyi?\b", text)}
+    files = {name.rsplit("/", 1)[-1] for name in files}
+    # Identifiers worth comparing: dunder/private names, and anything called
+    # like a function. Bare English words are not identifiers.
+    symbols = {name.lower() for name in re.findall(r"\b(\w+)\s*\(", text)}
+    symbols |= {name.lower() for name in re.findall(r"\b(_\w+)\b", text)}
+    symbols |= {name.lower() for name in re.findall(r":\s*(\w+)", text)}
+    symbols -= {"self", "def", "class"}
+    if not files and not symbols:
+        return ""
+    return "|".join(sorted(files)) + "::" + "|".join(sorted(symbols))
+
+
+def _looks_like_alternatives(cleaned: List[Dict[str, str]]) -> str:
+    """Why this list is ways rather than steps, or "" if it reads as a method.
+
+    Two tells, both taken from the plan skill:
+
+    * enumerated candidate names (`A1:`, `Option 2`) — see `_ALTERNATIVE_NAME`;
+    * every aspect pointing at the SAME place. `I6` already says two steps
+      carried out in the same place are one step, so N aspects sharing one
+      `where` are N ways of doing that one step.
+
+    Deliberately narrow. A planner that has genuinely decomposed the problem
+    names steps after what must happen ("locate the hash inputs", "include the
+    email", "keep tokens stable for users without one"), and none of those trip
+    either test.
+    """
+    enumerated = [a["name"] for a in cleaned if _ALTERNATIVE_NAME.match(a["name"])]
+    if enumerated:
+        return (f"{len(enumerated)} of {len(cleaned)} are numbered candidates "
+                f"({', '.join(enumerated[:3])})")
+    # `I6`, enforced: every step's `where` must be DIFFERENT.
+    #
+    # Stated in the skill from the start and checked nowhere, which let the
+    # subtler shape through. Measured on django-13551 after the naming rule
+    # went in: the planner stopped writing `A1:`/`A2:` and wrote
+    # `safe-email-field-access-with-classmethod`, `try-except-email-field-access`
+    # and `factor-token-data-to-model-method` instead — still three rival
+    # implementations, two of them in the same method, and the "all in one
+    # place" test did not fire because the third was elsewhere.
+    #
+    # Any REPEATED `where` is the tell, not a unanimous one: two aspects
+    # carried out in the same place are one step with two ways, whatever the
+    # third is doing.
+    seen: Dict[str, str] = {}
+    for aspect in cleaned:
+        place = _where_key(aspect.get("where", ""))
+        if not place:
+            continue
+        if place in seen:
+            return (f"{aspect['name']!r} and {seen[place]!r} are both carried "
+                    f"out in {aspect['where']!r} — two steps in the same place "
+                    f"are ONE step with two ways of doing it")
+        seen[place] = aspect["name"]
+    return ""
+
+
 def set_aspects(topic: str, aspects: List[Dict[str, str]]) -> Dict[str, Any]:
     """Record the research plan: the aspects to investigate, before investigating.
 
@@ -1755,6 +1883,29 @@ def set_aspects(topic: str, aspects: List[Dict[str, str]]) -> Dict[str, Any]:
                         "where": str(aspect.get("where", "")).strip()})
     if not cleaned:
         return {"status": "error", "error": "a research plan needs at least one aspect"}
+
+    # The aspects are the STEPS OF A METHOD, not a shortlist of fixes.
+    #
+    # Rejected rather than accepted-and-warned because accepting is what made
+    # this invisible: the record filled with plausible-looking aspects, the
+    # counts all read healthy, and the decomposition the whole pipeline is
+    # built on had simply not happened. An error is the only signal the planner
+    # actually acts on — the plan loop already retries on one.
+    why = _looks_like_alternatives(cleaned)
+    if why:
+        return {"status": "error",
+                "error": (
+                    f"these are WAYS of solving the problem, not STEPS of a "
+                    f"method: {why}. Decompose the problem first — what has to "
+                    f"be TRUE for it to be solved, in order — and record those "
+                    f"as the aspects, each with its own `where`. Then attach "
+                    f"the ways to a step with "
+                    f"`research_add_approach(..., aspect=\"<step name>\")`, "
+                    f"several per step where they differ. Steps compose into a "
+                    f"solution and can be attributed when one fails; a list of "
+                    f"whole-fix guesses does neither. See `I5b` in "
+                    f"phronix-research-plan."),
+                "rejected": [a["name"] for a in cleaned]}
 
     topic = resolve_topic(topic)
     record = load(topic)
@@ -2011,6 +2162,55 @@ def best_score(topic: str) -> Dict[str, Any]:
             "meets_target": _meets(float(value), fom),
             "measured_approaches": len(scored),
             "target": fom.get("target")}
+
+
+def record_step_reached(topic: str, step: str, detail: str = "") -> Dict[str, Any]:
+    """Record how far through the METHOD an attempt got before it failed.
+
+    The method is an ordered list of steps (see the plan skill's `I5b`), so a
+    failure has a position: which step's expectation was not met. That position
+    is the only progress signal a failing task has — "0 target tests passing" is
+    the same number on try 1 and try 3, while "failed at step 2" then "failed at
+    step 4" is a task getting closer.
+
+    Kept as a history rather than a single value, because the question asked of
+    it is whether this try got FURTHER than the last.
+    """
+    topic = resolve_topic(topic)
+    record = load(topic)
+    steps = [str(a.get("name") or "") for a in (record.get("aspects") or [])]
+    try:
+        index = steps.index(str(step))
+    except ValueError:
+        # A step nobody planned is not a position in the method. Recorded so the
+        # attribution can be reviewed, but it cannot count as progress.
+        index = -1
+    history = list(record.get("steps_reached") or [])
+    history.append({"step": str(step), "index": index, "detail": detail[:400]})
+    record["steps_reached"] = history
+    _save(record)
+    return {"status": "ok", "topic": topic, "step": str(step), "index": index,
+            "of": len(steps), "history": len(history)}
+
+
+def furthest_step(topic: str) -> Dict[str, Any]:
+    """How far the best attempt got, and whether the last one improved on it.
+
+    `advanced` is what earns another try: a task failing later in the method
+    than it did before is making progress, and stopping it at a fixed ceiling
+    throws that away.
+    """
+    record = load(resolve_topic(topic))
+    history = [h for h in (record.get("steps_reached") or [])
+               if isinstance(h, dict)]
+    indexes = [int(h.get("index", -1)) for h in history]
+    reached = [i for i in indexes if i >= 0]
+    best = max(reached) if reached else -1
+    # Advanced when the LAST recorded position beats everything before it.
+    advanced = bool(len(reached) >= 2 and indexes[-1] >= 0
+                    and indexes[-1] > max(indexes[:-1]))
+    return {"status": "ok", "furthest": best, "advanced": advanced,
+            "of": len(record.get("aspects") or []), "tries": len(history)}
 
 
 def record_pass_score(topic: str) -> Dict[str, Any]:

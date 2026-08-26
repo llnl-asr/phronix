@@ -584,6 +584,31 @@ def register(mcp: Any) -> None:
         return json.dumps(research.prior_work(question, limit), indent=2)
 
     @mcp.tool()
+    def research_record_step_reached(topic: str, step: str,
+                                     detail: str = "") -> str:
+        """Record which STEP of the method an attempt failed at.
+
+        The plan is an ordered method, so a failure has a position. Call this
+        from the reconcile stage with the first step whose expectation did not
+        hold, and what the output showed.
+
+        This is the progress signal a failing task otherwise lacks: "0 target
+        tests passing" reads the same on try 1 and try 3, while failing at step 2
+        and then at step 4 is a task closing in — and one that shows it is
+        granted another try instead of being cut off.
+
+        Name a step from the plan. A step nobody planned is recorded but cannot
+        count as progress, because a wrong attribution would reward noise and
+        aim the next pass away from the problem.
+
+        Returns JSON: {status, topic, step, index, of, history}.
+        """
+        from phronix import research
+
+        return json.dumps(research.record_step_reached(topic, step, detail),
+                          indent=2)
+
+    @mcp.tool()
     def research_playbook(topic: str, skill: str = "") -> str:
         """Write the execution plan as the skill that solves this task. Final stage.
 

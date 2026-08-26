@@ -21,6 +21,7 @@ Three good ideas is the target. Fewer means the plan runs again.
 | `I1` | Instructions | What makes an idea good |
 | `I2` | Instructions | What to do with a bad one |
 | `I2b` | Instructions | Judge the SET, not only each idea |
+| `I2c` | Instructions | Judge the decomposition: do these steps solve it? |
 | `I3` | Instructions | Three, and say the number |
 | `X1` | References | Judge from what you were given, and stop |
 | `X2` | References | Do not explore, and do not solve |
@@ -75,6 +76,26 @@ defensible alone; the SET was one idea.
 
 An idea with no `where` cannot be checked. Ask for one rather than guessing —
 that is a cheap question and this is what it buys.
+
+### I2c — Judge the decomposition: do these STEPS solve the problem?
+
+The plan should hand you an ordered method, not a bag of rival guesses — see
+[[phronix-research-plan]] `I5b`. Judge it as a method:
+
+* **Jointly sufficient.** If every step were done correctly, would the problem be
+  solved? Name what is missing rather than approving a plan with a hole in it.
+* **Ordered.** Does step 3 depend on step 2 having happened? A step that could go
+  anywhere is usually not a step.
+* **Separately checkable.** Could you tell whether step 2 was done right without
+  doing step 4? If not, they are one step.
+* **Includes not breaking things.** The last step is usually "the cases that
+  already work still work". A plan without it invites a fix that passes the
+  target test and breaks five others.
+
+A step is not judged on whether it is a good idea — it is judged on whether it
+belongs in the method. "Change how modules resolve" is a wish; "decide whether
+`a` is a package or a namespace package" is a step, because you can tell when it
+is done.
 
 ### I3 — Three, and say the number
 

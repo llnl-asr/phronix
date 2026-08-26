@@ -17,6 +17,7 @@ Structure, and why:
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -510,6 +511,34 @@ def _missing_literals(detail: str) -> List[str]:
     return found
 
 
+def _failure_only(text: str) -> str:
+    """The failing part of a test run, with the passing part dropped.
+
+    Keeps whatever follows the first `FAIL:`/`ERROR:` banner — which is where
+    unittest puts the traceback and the assertion — and drops the per-test
+    `... ok` roll-call and the database setup/teardown lines around it. Those
+    are the bulk of the output and none of them is in question.
+
+    Falls back to the whole text when no banner is found, because a run that
+    failed in a way this does not recognise is exactly when the raw output is
+    worth reading.
+    """
+    from .arms import _useful_test_output
+
+    cleaned = _useful_test_output(text)
+    lines = cleaned.splitlines()
+    start = next((i for i, line in enumerate(lines)
+                  if line.startswith(("FAIL:", "ERROR:"))
+                  or line.strip().startswith(("FAIL:", "ERROR:"))), None)
+    if start is None:
+        return cleaned.strip()
+    # Back up over the ==== rule unittest prints above the banner.
+    if start and set(lines[start - 1].strip()) == {"="}:
+        start -= 1
+    kept = [line for line in lines[start:] if not line.strip().endswith("... ok")]
+    return "\n".join(kept).strip()
+
+
 def _feedback_note(attempt_index: int, previous: Dict[str, Any]) -> str:
     """What the last attempt got wrong, written for the next one to read.
 
@@ -519,9 +548,40 @@ def _feedback_note(attempt_index: int, previous: Dict[str, Any]) -> str:
     re-roll of the same dice: the agent starts over with no more information than
     it had the first time, and the most likely outcome is the same patch again.
     """
-    lines = [f"# Feedback from attempt {attempt_index - 1}", "",
-             "Your previous attempt at this task did NOT succeed. Here is exactly "
-             "how it was judged. Use it — do not repeat the same approach.", ""]
+    # The header depends on whether anything worked.
+    #
+    # "Do not repeat the same approach" is right when a change achieved
+    # nothing, and wrong when it achieved half the task: at 1 of 2 on
+    # django-13551 the email WAS correctly added to the token hash, and an
+    # agent told not to repeat its approach has been pointed away from the one
+    # part the tests confirmed.
+    kept = previous.get("fail_to_pass_passing") or []
+    if kept:
+        opening = ("Your previous attempt got PART of this task right. Here is "
+                   "exactly how it was judged: keep what worked, and change "
+                   "only what did not.")
+    else:
+        opening = ("Your previous attempt at this task did NOT succeed. Here is "
+                   "exactly how it was judged. Use it — do not repeat the same "
+                   "approach.")
+    lines = [f"# Feedback from attempt {attempt_index - 1}", "", opening, ""]
+
+    # What the change ALREADY achieved, before what it missed.
+    #
+    # A partial pass is a partial SUCCESS, and the note used to describe it as
+    # a failure and nothing else. Measured on django-13551 at 1 of 2: the
+    # attempt had correctly added the email to the token hash — the target test
+    # for it passed — and the feedback opened "your previous attempt did NOT
+    # succeed ... do not repeat the same approach", naming only the test that
+    # still failed. An agent that follows that instruction rewrites the half
+    # that worked.
+    if kept:
+        lines += ["## What your change ALREADY fixed — keep it", "",
+                  "These target tests were failing before your change and pass "
+                  "because of it. Whatever you do next must keep them passing; "
+                  "do not rewrite the part of the change that produced them.", ""]
+        lines += [f"- `{name}`" for name in kept[:15]]
+        lines.append("")
 
     missed = previous.get("fail_to_pass_failing") or []
     if missed:
@@ -540,9 +600,23 @@ def _feedback_note(attempt_index: int, previous: Dict[str, Any]) -> str:
     if previous.get("error"):
         lines += ["## Harness error", "", f"```\n{str(previous['error'])[:800]}\n```", ""]
 
-    detail = (previous.get("failure_detail") or "").strip()
+    # The failure, not the whole run.
+    #
+    # This was a raw tail-slice of the captured output, and on a Django suite
+    # the tail is passing tests. Measured on django-13551: the traceback that
+    # explains the failure exactly —
+    #
+    #   File ".../tokens.py", line 99, in _make_hash_value
+    #     return str(user.pk) + user.password + ... + email + str(timestamp)
+    #   TypeError: must be str, not NoneType
+    #
+    # — sat at line 39 of a 97-line note, under 21 lines of `... ok` from tests
+    # that were never in question, in a block that began mid-word because the
+    # slice cut one. Everything the next attempt needed was present and put
+    # where a reader skims past it.
+    detail = _failure_only(previous.get("failure_detail") or "")
     if detail:
-        lines += ["## Test output", "", "```", detail[:6000], "```", ""]
+        lines += ["## Why it failed", "", "```", detail[:6000], "```", ""]
 
     # The exact strings the tests want and did not find.
     #
@@ -664,6 +738,149 @@ def _passed_node_ids(output: str) -> List[str]:
     return ids
 
 
+#: Repos whose test suite cannot be driven by bare pytest.
+#:
+#: Django's tests import `django.contrib.*` at module scope, which touches
+#: `settings.INSTALLED_APPS` — so under plain pytest every file dies at
+#: COLLECTION with `ImproperlyConfigured: Requested setting INSTALLED_APPS`,
+#: before a single test runs. The damage is silent and total: measured on
+#: django__django-13551, the agent produced the upstream fix byte for byte and
+#: scored 0/2 target and 0/56 pass-to-pass, which reads as a catastrophic patch
+#: rather than as a suite that never started. Every Django instance in the list
+#: was unresolvable by any patch, including the official one.
+DJANGO_REPOS = ("django/django",)
+
+
+def _needs_django_runner(instance: Dict[str, Any]) -> bool:
+    return str(instance.get("repo") or "") in DJANGO_REPOS
+
+
+#: Bump when the way tests are INVOKED or PARSED changes.
+#:
+#: Cached baselines carry this, and one that does not match is re-measured
+#: rather than trusted. Without it a runner fix silently inherits the verdicts
+#: of the runner it replaced.
+RUNNER_REVISION = "2"
+
+
+def _runner_signature(instance: Dict[str, Any]) -> str:
+    """Which runner would score this instance, as a cache key."""
+    kind = "django-runtests" if _needs_django_runner(instance) else "pytest"
+    return f"{kind}-v{RUNNER_REVISION}"
+
+
+def _django_labels(ids: Iterable[str], files: Iterable[str]) -> List[str]:
+    """Dotted test labels for `runtests.py`, which does not take file paths.
+
+    Two sources, because SWE-bench stores Django ids in two shapes: the unittest
+    id `test_x (auth_tests.test_tokens.TokenGeneratorTest)`, and — when the test
+    has a docstring — the DOCSTRING instead, e.g. "Updating the user email
+    address invalidates the token." The second carries no module at all, so the
+    file list has to cover it.
+    """
+    labels: List[str] = []
+    for raw in ids:
+        match = re.search(r"\(([\w.]+)\)", str(raw))
+        if not match:
+            continue
+        parts = match.group(1).split(".")
+        # Drop the class, keep the module: running the module is cheap and
+        # cannot miss a sibling test the stored id truncated.
+        module = ".".join(parts[:-1]) if len(parts) > 1 else parts[0]
+        if module and module not in labels:
+            labels.append(module)
+    # Fixture modules are not test modules.
+    #
+    # `_test_files` returns everything the test patch touched, which for Django
+    # includes things like `tests/auth_tests/models/__init__.py` and
+    # `models/with_custom_email_field.py` — model definitions the tests import.
+    # As labels those are at best empty runs and at worst an error that takes
+    # the whole invocation down with them, so they are only used when nothing
+    # test-shaped was found at all.
+    fixtures: List[str] = []
+    for path in files:
+        text = str(path)
+        if not text.endswith(".py"):
+            continue
+        if text.endswith("__init__.py"):
+            continue
+        stem = text[:-3]
+        for prefix in ("tests/", "./tests/"):
+            if stem.startswith(prefix):
+                stem = stem[len(prefix):]
+                break
+        else:
+            continue
+        module = stem.replace("/", ".")
+        if not module:
+            continue
+        if not module.rsplit(".", 1)[-1].startswith("test"):
+            if module not in fixtures:
+                fixtures.append(module)
+            continue
+        if module not in labels:
+            labels.append(module)
+    return labels or fixtures
+
+
+#: `test_x (a.b.C)` — the unittest id as `--verbosity 2` prints it.
+_DJANGO_ID = re.compile(r"^(test\w*)\s+\(([\w.]+)\)\s*(.*)$")
+_DJANGO_OUTCOMES = ("ok", "FAIL", "ERROR", "skipped", "expected failure",
+                    "unexpected success")
+
+
+def _django_passed_ids(output: str) -> List[str]:
+    """Tests `runtests.py` reported as passing, in BOTH shapes SWE-bench stores.
+
+    unittest at verbosity 2 prints either
+
+        test_x (a.b.C) ... ok
+
+    or, when the test has a docstring, the docstring on the following line
+
+        test_x (a.b.C)
+        Updating the user email address invalidates the token. ... ok
+
+    and SWE-bench may store either form as the id to match. So a passing test
+    contributes its node id AND its docstring; matching then works whichever
+    form the instance recorded, instead of scoring a passing test as failed
+    because the dataset happened to name it by its prose.
+    """
+    passed: List[str] = []
+    pending = ""
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _DJANGO_ID.match(stripped)
+        if match:
+            node = f"{match.group(1)} ({match.group(2)})"
+            rest = match.group(3).strip()
+            if rest.startswith("..."):
+                if rest[3:].strip().startswith("ok"):
+                    passed.append(node)
+                pending = ""
+            else:
+                pending = node        # docstring and outcome are on the next line
+            continue
+        if pending and "..." in stripped:
+            head, _, tail = stripped.rpartition("...")
+            if tail.strip().startswith("ok"):
+                passed.append(pending)
+                doc = head.strip()
+                if doc:
+                    passed.append(doc)
+            pending = ""
+    return passed
+
+
+def _django_any_test_ran(output: str) -> bool:
+    """unittest's own summary, which says nothing about pytest's keywords."""
+    if re.search(r"^Ran \d+ tests?", output, re.M):
+        return True
+    return any(f"... {word}" in output for word in _DJANGO_OUTCOMES)
+
+
 def _any_test_ran(output: str) -> bool:
     """Did the runner produce ANY per-test outcome, pass or fail?
 
@@ -707,11 +924,27 @@ def baseline_failures(container: Any, instance: Dict[str, Any],
     """
     instance_id = str(instance.get("instance_id", "unknown"))
     cache_file = (Path(cache_dir) / f"{instance_id}.json") if cache_dir else None
+    runner = _runner_signature(instance)
     if cache_file and cache_file.is_file():
         try:
-            return json.loads(cache_file.read_text())
+            cached = json.loads(cache_file.read_text())
         except (OSError, json.JSONDecodeError):
-            pass
+            cached = None
+        # A baseline is only meaningful for the RUNNER that measured it.
+        #
+        # Nothing recorded how a cached baseline was produced, so when the
+        # Django path moved from bare pytest to `runtests.py` every stored
+        # entry stayed authoritative — and those were measured while the suite
+        # could not start at all, so they claimed 56 pass-to-pass tests were
+        # already broken when in fact all of them pass. A stale discount does
+        # not fail a task loudly; it quietly forgives a real regression, which
+        # is the direction a benchmark must never err in.
+        if isinstance(cached, dict) and cached.get("runner") == runner:
+            return cached
+        if cached is not None and on_event:
+            on_event(f"baseline for {instance_id} was measured by "
+                     f"{cached.get('runner', 'an unrecorded runner')!r}, not "
+                     f"{runner!r} — re-measuring rather than trusting it")
 
     if on_event:
         on_event(f"measuring pre-existing failures for {instance_id}")
@@ -739,6 +972,7 @@ def baseline_failures(container: Any, instance: Dict[str, Any],
             name for name in _as_list(instance.get("FAIL_TO_PASS"))
             if name not in (verdict.get("fail_to_pass_failing") or [])],
         "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "runner": runner,
     }
     if cache_file:
         try:
@@ -802,7 +1036,12 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
     # Installed into the CONTAINER's env, never the host's: the instance pins
     # the dependency versions its tests are written against, and running them
     # anywhere else measures a different library.
-    present, why = _pytest_probe(container)
+    #
+    # Skipped entirely for Django, which uses `runtests.py` — a unittest runner
+    # already in the checkout. Probing for a runner it will not use cost 20s a
+    # task and, on an image whose pip predates `--root-user-action`, failed the
+    # instance outright.
+    present, why = (True, "") if _needs_django_runner(instance) else _pytest_probe(container)
     if not present and "did not answer" in why:
         # A probe that timed out says nothing about the environment, so asking
         # again is the cheapest way to tell a loaded node from a broken image —
@@ -822,9 +1061,23 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
         # afternoon. The wheels are pure-python and several pytest versions are
         # staged, so pip picks whichever suits the testbed's interpreter.
         install = container.exec(
+            # No --root-user-action on the network fallback.
+            #
+            # It only silences pip's "running as root" warning, and it did not
+            # exist before pip 22.1 (2022). Several SWE-bench testbeds ship an
+            # older pip, which does not ignore the unknown flag — it refuses
+            # the whole command:
+            #
+            #   no such option: --root-user-action
+            #
+            # So a cosmetic argument turned "install pytest" into "this task
+            # cannot be graded" on exactly the images that needed the install
+            # most. Measured on django__django-13551: both arms lost every
+            # evaluation, and the run recorded it as a failed task rather than
+            # as a broken environment.
             "cd /testbed && (python -m pip install --quiet --no-index "
             "--find-links=/wheels pytest 2>&1 || python -m pip install --quiet "
-            "--disable-pip-version-check --root-user-action=ignore pytest 2>&1)",
+            "--disable-pip-version-check pytest 2>&1)",
             timeout=300)
         present, why = _pytest_probe(container, timeout=600)
         if not present:
@@ -868,13 +1121,35 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
             instance, fail_to_pass, pass_to_pass,
             "could not work out which test files to run: the test patch names "
             "none and the stored ids carry no path", on_event)
-    targets = " ".join(shlex.quote(path) for path in files)
-    if on_event:
-        on_event(f"running {len(files)} test file(s): {', '.join(files[:3])}")
+    # Django gets its own runner, because bare pytest cannot start its suite.
+    #
+    # `runtests.py` is what Django's own contributing docs use and what the
+    # upstream SWE-bench harness uses: it calls `django.setup()`, points
+    # DJANGO_SETTINGS_MODULE at the test settings and builds the test database,
+    # none of which pytest does on its own. It also takes dotted LABELS rather
+    # than file paths, and prints unittest output rather than pytest's, so the
+    # command and the parser have to change together.
+    django = _needs_django_runner(instance)
+    if django:
+        labels = _django_labels(list(fail_to_pass) + list(pass_to_pass), files)
+        if not labels:
+            return _runner_failure(
+                instance, fail_to_pass, pass_to_pass,
+                "could not work out which Django test labels to run", on_event)
+        targets = " ".join(shlex.quote(label) for label in labels)
+        command = (instance.get("test_cmd")
+                   or "python tests/runtests.py --verbosity 2 --noinput")
+        if on_event:
+            on_event(f"running {len(labels)} Django test label(s) via "
+                     f"runtests.py: {', '.join(labels[:3])}")
+    else:
+        targets = " ".join(shlex.quote(path) for path in files)
+        if on_event:
+            on_event(f"running {len(files)} test file(s): {', '.join(files[:3])}")
     result = container.exec(f"cd /testbed && {command} {targets}", timeout=timeout_s)
     output = result.stdout + result.stderr
 
-    passed_ids = _passed_node_ids(output)
+    passed_ids = _django_passed_ids(output) if django else _passed_node_ids(output)
 
     # Nothing ran at all is a runner fault, not a verdict.
     #
@@ -882,7 +1157,8 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
     # that breaks everything still makes the tests RUN. Scoring it as "all
     # tests failed" is what let a missing pytest read as a catastrophic patch,
     # three times over, and get cached as pre-existing breakage.
-    if not passed_ids and not _any_test_ran(output):
+    ran = _django_any_test_ran(output) if django else _any_test_ran(output)
+    if not passed_ids and not ran:
         return _runner_failure(
             instance, fail_to_pass, pass_to_pass,
             f"no test produced a result; the runner did not start: "
@@ -932,6 +1208,13 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
         # missed: a target test that never started passing is a different problem
         # from a regression it introduced.
         "fail_to_pass_failing": sorted(n for n, ok in f2p.items() if not ok),
+        # And which of them it MET. A partial pass is evidence in both
+        # directions, and only one of them was being recorded: at 1 of 2 the
+        # next attempt was told what it missed and nothing about what it got
+        # right, under a heading saying "do not repeat the same approach" —
+        # advice that, taken literally, throws away the half the tests had just
+        # confirmed.
+        "fail_to_pass_passing": sorted(n for n, ok in f2p.items() if ok),
         "regressions": regressions,
         "pre_existing_failures": pre_existing,
         "failure_detail": _failure_detail(output),
@@ -1067,11 +1350,28 @@ class Runner:
     def manifest(self) -> Dict[str, Any]:
         from phronix import __version__
 
-        return {
+        # The RESOLVED budget scale, not the request.
+        #
+        # `auto` is a measurement, so recording the word "auto" would leave the
+        # manifest unable to answer the one question it exists for: how long
+        # the research stages were actually allowed to run. A run whose stages
+        # were cut off mid-investigation and one whose stages finished are not
+        # comparable, and the difference is this number.
+        from .arms import budget_scale, measured_decode_rate
+
+        record = {
             "phronix_version": __version__,
             "runtime": (self.runtime.name if self.runtime else self.config.isolation),
             **self.config.to_dict(),
         }
+        try:
+            record["budget_scale"] = round(budget_scale(), 2)
+            rate = measured_decode_rate()
+            if rate:
+                record["measured_decode_tok_s"] = round(rate, 1)
+        except Exception:
+            pass
+        return record
 
     def preflight(self) -> str:
         """Check the container host is usable. Returns an error string, or "".
@@ -1584,6 +1884,15 @@ class Runner:
         # frozen control — keep the full budget, so learning is compared against
         # the same number of attempts rather than against fewer.
         ceiling = self.config.max_tries if arm.full_retry_budget else 1
+        #: Extra tries earned by getting FURTHER through the method.
+        #
+        # A fixed ceiling treats "failed at step 1 three times" and "failed at
+        # step 1, then 3, then 5" as the same task, and stops both. The second is
+        # converging, and one more try is the cheapest thing that could finish
+        # it. Bounded, because a method with many steps could otherwise earn a
+        # try per step forever.
+        earned = 0
+        MAX_EARNED = int(os.environ.get("PHRONIX_MAX_EARNED_TRIES", "2"))
         # Research budget is per TASK but spent inside attempts, so it lives on
         # the arm rather than as a local of either. One arm object per arm, and
         # tasks run in order within an arm, so this is safe with arms concurrent.
@@ -1598,7 +1907,9 @@ class Runner:
         signatures: List[str] = []
         previous_verdict: Optional[Dict[str, Any]] = None
 
-        for attempt_index in range(1, ceiling + 1):
+        attempt_index = 0
+        while attempt_index < ceiling + earned:
+            attempt_index += 1
             attempt = Attempt(index=attempt_index)
             started = time.time()
             skills_before = set(store_inventory(store_root).get("skills", []))
@@ -1925,6 +2236,31 @@ class Runner:
                 # nothing, which is exactly when its findings matter most. It
                 # also lets task N+1 of a reusing run start from task N's work
                 # through the common folder rather than only through the session.
+                # Did this try get FURTHER through the method than any before?
+                #
+                # That is the progress signal a failing task otherwise has none
+                # of: "0 target tests passing" reads the same on try 1 and try 3,
+                # while failing at step 2 and then at step 4 is a task closing in.
+                if arm.uses_phronix and not result.resolved and earned < MAX_EARNED:
+                    try:
+                        from phronix import research as _research
+
+                        # Through the ARM's store helper: the record lives in
+                        # the run's own layer, and reading it from anywhere else
+                        # finds the project layer instead.
+                        got = arm._in_store(store_root, _research.furthest_step,
+                                            arm.research_topic(instance))
+                        if (got or {}).get("advanced"):
+                            earned += 1
+                            if tracer:
+                                tracer.event(
+                                    "earned-try",
+                                    f"reached step {got.get('furthest', 0) + 1} "
+                                    f"of {got.get('of', 0)} — further than any "
+                                    f"earlier try, so this task gets another")
+                    except Exception:
+                        pass    # a progress bonus must never break the task
+
                 self._sync_research_session(quiet=True, store_root=store_root)
                 try:
                     promoted = promote_store(store_root,
@@ -1938,6 +2274,61 @@ class Runner:
                     if tracer:
                         tracer.event("promote-failed", str(exc)[:200])
         return result
+
+    def trial_runner(self, arm, instance, store_root, attempt_dir,
+                     baseline_for, tracer=None, narrate=None):
+        """A callable research can use to put ONE candidate in front of the tests.
+
+        This is the seam between research and evaluation, and it exists because
+        the two used to be strictly sequential: research ran to completion, the
+        runner then raced every candidate it had produced, and only then did
+        anyone learn whether any of them worked. So a pass kept generating and
+        combining ideas long after one of them had already solved the task, and
+        an idea recorded in the first minute was not tested for another hour.
+
+        Handing research a way to trial a candidate lets it act on the only
+        judge that counts — the task's own target tests — while it is still
+        working: test each idea as its solution is written, combine the ones
+        that are in, and stop generating once something passes.
+
+        Returns ``{"plan", "resolved", "target_tests_passed", "outcome",
+        "verdict", "error"}``. It never raises: a trial that cannot run is one
+        candidate lost, not the pass.
+        """
+        counter = itertools.count(1)
+
+        def trial(plan: Dict[str, Any]) -> Dict[str, Any]:
+            index = next(counter)
+            name = str(plan.get("name") or f"candidate-{index}")
+            work = attempt_dir / f"trial-{index}-{_slug(name)}"
+            work.mkdir(parents=True, exist_ok=True)
+            say = ((lambda text: narrate(f"[{name}] {text}"))
+                   if narrate else None)
+            try:
+                with baseline_for(arm.mounts(store_root)) as container:
+                    got = arm.generate(instance, store_root, work, container,
+                                       on_call=say, plan=plan)
+                    (work / "patch.diff").write_text(got.patch or "")
+                    base = baseline_failures(container, instance,
+                                             timeout_s=self.config.timeout_s)
+                    verdict = evaluate(
+                        container, instance, got.patch,
+                        known_failures=base.get("pre_existing_failures"))
+            except Exception as exc:            # one candidate, not the pass
+                return {"plan": name, "resolved": False,
+                        "target_tests_passed": 0, "outcome": None,
+                        "verdict": {}, "error": str(exc)[:200]}
+            passed = int(verdict.get("fail_to_pass_passed") or 0)
+            resolved = bool(verdict.get("resolved"))
+            if tracer:
+                tracer.event("trial",
+                             f"{name}: {'SOLVED' if resolved else 'failed'} "
+                             f"({passed} target test(s) passing)")
+            return {"plan": name, "resolved": resolved,
+                    "target_tests_passed": passed, "outcome": got,
+                    "verdict": verdict, "error": ""}
+
+        return trial
 
     def _race_plans(self, arm, instance, store_root, attempt_dir, plans,
                     baseline_for, tracer=None, narrate=None):
@@ -2177,10 +2568,23 @@ class Runner:
                                  getattr(arm, "research_timeout_s", None))
                 narrate = ((lambda text: _say("research", text))
                            if tracer else None)
+                # Research gets a way to TEST what it produces, while it is
+                # still producing. See `trial_runner`: without it a pass keeps
+                # generating and combining ideas long after one of them has
+                # already solved the task, because nothing tells it.
+                #
+                # Only when candidates are being raced. With a single merged
+                # attempt (`attempt_candidates == 1`) there is no per-idea
+                # candidate to trial and the old sequence is exactly right.
+                trial = None
+                if int(getattr(self.config, "attempt_candidates", 1) or 0) != 1:
+                    trial = self.trial_runner(
+                        arm, instance, store_root, attempt_dir,
+                        baseline_for=session, tracer=tracer, narrate=narrate)
                 research = (None if skip else
                             arm.research(instance, store_root, attempt_dir,
                                          attempt_index=attempt_index, notes=notes,
-                                         on_call=narrate))
+                                         on_call=narrate, trial=trial))
                 # Research that did nothing at all is catastrophic, not a bad
                 # result. Zero tool calls means the agent never started: a bad
                 # command, a dead endpoint, a missing binary. A research pass
@@ -2306,7 +2710,32 @@ class Runner:
                     plans = arm.candidate_plans(
                         store_root, arm.research_topic(instance), wanted)
 
-                if len(plans) > 1:
+                # Research already put these in front of the tests.
+                #
+                # When the trial seam is in play a candidate has been measured
+                # the moment it was executable, so racing the same set again
+                # costs a container and an agent per plan to re-derive a verdict
+                # already on file — and would re-run the winner that made
+                # research stop early in the first place.
+                measured = (research or {}).get("trials") or []
+                if measured and (research or {}).get("best_outcome") is not None:
+                    outcome = research["best_outcome"]
+                    attempt.trials = measured
+                    solved = (research or {}).get("solved_by") or []
+                    if tracer:
+                        tracer.event(
+                            "trials",
+                            f"{len(measured)} candidate(s) already tried during "
+                            f"research: "
+                            + ", ".join(f"{r['plan']}={r['target_tests_passed']}"
+                                        for r in measured)
+                            + (f" — SOLVED by {', '.join(solved)}" if solved
+                               else " — none solved it; taking the furthest"))
+                    arm.reconcile_trials(instance, store_root, attempt_dir,
+                                         measured, on_call=narrate_attempt)
+                    attempt.solution_skill = arm.solution_skill_path(
+                        store_root, arm.research_topic(instance))
+                elif len(plans) > 1:
                     # Try every ranked plan against the REAL tests, at once.
                     #
                     # Research ranks approaches against a figure of merit

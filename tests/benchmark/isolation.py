@@ -660,6 +660,18 @@ def isolated_env(store_root: Path, cache_root: Path,
         "PHRONIX_HOME": str(Path(cache_root) / "user-layer-empty"),
         "PHRONIX_CACHE": str(cache_root),
         "PHRONIX_CONTEXT_STATE_DIR": str(Path(cache_root) / "context-state"),
+        # The framework's OWN layer is off limits for the whole run.
+        #
+        # Redirecting the project and user layers is not enough. phronix is
+        # installed editable from a clone here, which leaves the bundled layer
+        # writable inside a git worktree — so anything that resolves a write to
+        # it edits the repository, and the repository is what every later run
+        # seeds from. Measured: a `--fresh --no-carry` run on a django task
+        # wrote a sympy skill into `src/phronix/.phronix/skills/`, and the six
+        # near-duplicate `column-domain` skills that reached later runs came
+        # the same way. A from-scratch run was inheriting the edits of the runs
+        # before it while reporting that it started clean.
+        "PHRONIX_BUNDLED_READONLY": "1",
     })
     Path(env["PHRONIX_HOME"]).mkdir(parents=True, exist_ok=True)
     env.update(extra or {})

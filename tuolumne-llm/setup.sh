@@ -1,7 +1,10 @@
 #!/bin/bash
 # One-time setup on lustre5: venv, llama.cpp clone, model downloads.
 set -euo pipefail
-source "${LLM_SCRIPTS:-/usr/WS2/haridev/phronix/tuolumne-llm}/env.sh"
+# Resolve env.sh NEXT TO THIS SCRIPT, not from a hardcoded path: corona-llm/
+# symlinks these scripts and carries its own env.sh, and a hardcoded default
+# would have every corona invocation silently load Tuolumne's paths and arch.
+source "${LLM_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/env.sh"
 
 mkdir -p "$LLM_ROOT"/{src,models,logs}
 

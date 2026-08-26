@@ -24,6 +24,7 @@ and neither needs a stage of its own.
 | `I3` | Instructions | At least twenty instances, genuinely diverse |
 | `I4` | Instructions | Add the instances in the same breath as the axes |
 | `I5` | Instructions | Plan around what is already known |
+| `I5b` | Instructions | Decompose into STEPS, then find ways to do each step |
 | `I6` | Instructions | Ideas must be INDEPENDENT, from the first list onward |
 | `X1` | References | No approaches yet |
 | `R1` | Rules | Why the metric comes first |
@@ -108,6 +109,86 @@ re-investigated, which is cheap — so it costs nothing to list it, and listing 
 is how the re-check happens. But do not spend a NEW aspect on covered ground:
 aspects are the expensive stage, only a few run, and one spent re-deriving a
 known answer is one not spent on the part nobody has looked at.
+
+### I5b — Decompose the problem into STEPS, then find ways to do each step
+
+**An idea is not a guess at the whole fix. It is one step of a method, and the
+ways of doing that step are what you explore.**
+
+Work out what would have to be true for the problem to be solved — the ordered
+things that must happen — and record THOSE as the aspects. Each becomes a step
+with its own `where`, and `research_add_approach(..., aspect="<step>")` attaches
+the ways of doing it.
+
+For `pylint a` failing when `a/a.py` sits in `a/` with no `__init__.py`:
+
+```
+WHOLE-FIX GUESSES (what this used to produce)
+  module_resolution      "change how modules resolve"
+  import_behavior        "change the import system"
+  expand_modules         "change expand_modules.py"
+  module-search-order    "change the search order"
+        -> four names for one edit; each attempt all-or-nothing
+
+STEPS (what the method should produce)
+  1. decide whether `a` is a package, a namespace package, or a module
+     where: pylint/lint/expand_modules.py
+  2. compute the module name to report for a/a.py given that decision
+     where: astroid modutils.modpath_from_file
+  3. choose the sys.path root so the name resolves
+     where: pylint/lint/expand_modules.py get_python_path
+  4. keep the existing cases passing — a/ with __init__.py, a bare a.py
+     where: tests/lint/unittest_lint.py
+        -> each step is checkable on its own, and a wrong way at step 3 leaves
+           steps 1, 2 and 4 standing
+```
+
+Why this is more robust, and it is the reason the change is worth the trouble:
+
+* **A failure localises.** "The fix is in expand_modules.py" failing tells you
+  nothing. "Step 3 chose the wrong root" tells you which step to redo and leaves
+  the rest.
+* **Steps compose; guesses do not.** One way per step assembles into a complete
+  solution, and a second way for step 3 gives a second complete solution that
+  differs in exactly one place. That is a real alternative — four rewrites of one
+  function are not.
+* **Coverage becomes checkable.** You can ask whether the steps together solve
+  the problem. You cannot ask that of a bag of rival guesses.
+* **The last step is usually "do not break what works".** Naming it stops a fix
+  that passes the target test and breaks five others.
+
+Three to six steps. Fewer means a step is really several; more means you are
+writing the patch rather than the method. Each step needs a `where` — see `I6`,
+which applies to steps exactly as it applied to ideas: two steps that would be
+carried out in the same place are one step.
+
+**`research_set_aspects` enforces this and will reject the list.** Two shapes
+come back as an error rather than being recorded:
+
+* **Numbered candidates.** `A1: Direct email with getattr() fallback`,
+  `A2: Model method factoring`, `Option 2`, `Approach 3`. These are ways, and
+  they belong on a step via `research_add_approach(..., aspect="<step>")`.
+  Watch for this one specifically: `research_add_approach` hands back keys
+  named `A1`, `A2`, `A3`, and it is easy to echo that shape into the step names
+  by reflex. Measured on django-13551 — the record filled with `A1:`/`A2:`
+  aspects, every count read healthy, and the method had never been decomposed.
+* **Every step in the same place.** N aspects sharing one `where` are N ways of
+  doing one step, by `I6`.
+
+A step is named after **what has to become true**, not after how you would make
+it true:
+
+```
+REJECTED (ways)                          ACCEPTED (steps)
+  A1: direct email with getattr()          locate the inputs the token hashes
+  A2: model method factoring               include the user's current email
+  A3: conditional field introspection      keep tokens valid for users with none
+                                           leave existing tokens' shape intact
+```
+
+Both lists are about the same bug. The left one is four rival edits to one
+function; the right one is a method whose steps compose, and whose failures say
+which step to redo.
 
 ### I6 — Ideas must be INDEPENDENT, from the first list onward
 

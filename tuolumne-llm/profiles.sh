@@ -107,7 +107,7 @@ profile_args() {
                   --batch-size 4096 --ubatch-size 4096
                   --cache-ram 24576 --cache-reuse 1024
                   --ctx-checkpoints 8 --checkpoint-min-step 16384
-                  -t 22 -tb 22" ;;
+                  -t ${LLAMA_THREADS:-22} -tb ${LLAMA_THREADS:-22}" ;;
         agent)
             # For agent workloads on a large-weights model.
             #
@@ -130,7 +130,7 @@ profile_args() {
                   --batch-size 4096 --ubatch-size 4096
                   --cache-ram 4096 --cache-reuse 256
                   --ctx-checkpoints 8 --checkpoint-min-step 16384
-                  -t 22 -tb 22" ;;
+                  -t ${LLAMA_THREADS:-22} -tb ${LLAMA_THREADS:-22}" ;;
         wide)
             # 1M tokens per REQUEST, four requests at a time, per GPU.
             #
@@ -152,34 +152,64 @@ profile_args() {
                   --batch-size 4096 --ubatch-size 4096
                   --cache-ram 4096 --cache-reuse 256
                   --ctx-checkpoints 8 --checkpoint-min-step 16384
-                  -t 22 -tb 22" ;;
+                  -t ${LLAMA_THREADS:-22} -tb ${LLAMA_THREADS:-22}" ;;
         balanced)
             echo "--parallel 16 -c ${LLAMA_CTX:-524288}
                   --cache-type-k turbo4 --cache-type-v turbo3 --kv-unified
                   --batch-size 4096 --ubatch-size 4096
                   --cache-ram 4096 --cache-reuse 256
                   --ctx-checkpoints 8 --checkpoint-min-step 16384
-                  -t 22 -tb 22" ;;
+                  -t ${LLAMA_THREADS:-22} -tb ${LLAMA_THREADS:-22}" ;;
         throughput)
             echo "--parallel 32 -c ${LLAMA_CTX:-262144}
                   --cache-type-k turbo4 --cache-type-v turbo2 --kv-unified
                   --batch-size 4096 --ubatch-size 4096
                   --cache-ram 4096 --cache-reuse 256
                   --ctx-checkpoints 8 --checkpoint-min-step 16384
-                  -t 22 -tb 22" ;;
+                  -t ${LLAMA_THREADS:-22} -tb ${LLAMA_THREADS:-22}" ;;
         context)
             echo "--parallel 8 -c ${LLAMA_CTX:-2048000}
                   --cache-type-k turbo4 --cache-type-v turbo2 --kv-unified
                   --batch-size 2048 --ubatch-size 4096
                   --cache-ram 2048 --cache-reuse 256
                   --ctx-checkpoints 8 --checkpoint-min-step 16384
-                  -t 22 -tb 22" ;;
+                  -t ${LLAMA_THREADS:-22} -tb ${LLAMA_THREADS:-22}" ;;
         accuracy)
             echo "--parallel 8 -c ${LLAMA_CTX:-131072}
                   --cache-type-k f16 --cache-type-v f16 --kv-unified
                   --batch-size 2048 --ubatch-size 2048
                   --cache-ram 1024
-                  -t 22 -tb 22" ;;
-        *) echo "unknown PROFILE '$PROFILE' (solo|agent|wide|balanced|throughput|context|accuracy)" >&2; return 1 ;;
+                  -t ${LLAMA_THREADS:-22} -tb ${LLAMA_THREADS:-22}" ;;
+        corona)
+            # corona: 8 x MI50/MI60 (gfx906), 32 GB DISCRETE HBM per card.
+            #
+            # A separate profile because every other one here was sized against
+            # Tuolumne's 128 GB unified APU memory, where a 63 GB model and a
+            # half-million-token KV pool sit on one device. On a 32 GB card the
+            # same numbers do not fit, and llama.cpp does not fail politely: it
+            # allocates until the device is out and dies mid-load.
+            #
+            # One slot, as `solo`, and for the same reason — the prompt cache
+            # is per slot, and an agent that loses its prefix pays full prefill
+            # again. That argument is about eviction, not about memory, so it
+            # transfers unchanged.
+            #
+            # f16 KV rather than turboquant: gfx906 is a 2018 part and the
+            # turbo* cache types are the least-exercised path on it. At one
+            # slot and the trained 131,072 window the KV is single-digit GB
+            # either way, so there is nothing to buy by quantising it.
+            #
+            # Batches are half Tuolumne's: 4096-token ubatches are sized for
+            # HBM bandwidth this card does not have (1.0 TB/s against 5.3),
+            # and the compute buffer for them is charged against the same
+            # 32 GB the weights are in.
+            echo "--parallel ${LLAMA_SLOTS:-1}
+                  -c ${LLAMA_CTX:-$(( ${LLAMA_SLOTS:-1} * 131072 ))}
+                  --cache-type-k f16 --cache-type-v f16 --kv-unified
+                  --batch-size 2048 --ubatch-size 2048
+                  --cache-ram 8192 --cache-reuse 1024
+                  --ctx-checkpoints 8 --checkpoint-min-step 16384
+                  -t ${LLAMA_THREADS:-6} -tb ${LLAMA_THREADS:-6}" ;;
+        *) echo "unknown PROFILE '$PROFILE' (solo|agent|wide|balanced|throughput|context|accuracy|corona)" >&2; return 1 ;;
     esac
 }

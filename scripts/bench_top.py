@@ -34,7 +34,31 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-BENCH = Path(os.environ.get("PHRONIX_BENCH", "/p/lustre5/haridev/phronix-bench"))
+def _bench_root() -> Path:
+    """The workspace on THIS machine — see scripts/bench-root.sh for the why.
+
+    top.sh exports PHRONIX_BENCH before exec'ing this, so the probe below is
+    for the case where bench_top.py is run directly: the clusters do not share
+    a parallel filesystem, and defaulting to Tuolumne's on corona reports "no
+    runs" for a run that is going fine on a mount this host cannot see.
+    """
+    override = os.environ.get("PHRONIX_BENCH")
+    if override:
+        return Path(override)
+    user = os.environ.get("USER") or "haridev"
+    first = None
+    for base in ("/p/lustre5", "/p/lustre4", "/p/lustre3", "/p/lustre2", "/p/lustre1"):
+        root = Path(base) / user / "phronix-bench"
+        if not root.is_dir():
+            continue
+        if first is None:
+            first = root
+        if any((root / "runs").glob("*")):
+            return root
+    return first or Path("/p/lustre5") / user / "phronix-bench"
+
+
+BENCH = _bench_root()
 RUNS = BENCH / "runs"
 
 #: How often the screen is rebuilt. Two seconds is the same fuse `top` uses and
@@ -518,7 +542,8 @@ PANEL_REFRESH_S = float(os.environ.get("PHRONIX_TOP_PANEL_REFRESH", "20"))
 
 CLUSTER_JSON = Path(os.environ.get(
     "PHRONIX_CLUSTER",
-    "/usr/workspace/haridev/phronix/tuolumne-llm/cluster.json"))
+    "/usr/workspace/haridev/phronix/%s/cluster.json"
+    % os.environ.get("PHRONIX_FLEET", "tuolumne-llm")))
 
 
 def agent_stats(root: Path):
@@ -827,9 +852,28 @@ class Top:
         # "which one am I looking at" — and the answer has to be something they
         # can paste into a `tail -f` or a `status.sh`, not a name they then
         # have to go and resolve.
+        # The gateway HOST, not the provider key, when there is one.
+        #
+        # `provider` is a protocol identifier the arms pass to opencode as
+        # `--model <provider>/<alias>`; it reads "tuolumne" for every local
+        # fleet including corona's, so as a label it names the wrong machine.
+        # The base_url is the fleet that is actually answering.
+        base = run.manifest.get("base_url") or ""
+        provider = str(run.manifest.get("provider", "") or "")
+        where = provider or "?"
+        # base_url is only where the traffic went for a LOCAL fleet.
+        #
+        # With provider `anthropic` the arms deliberately leave the endpoint
+        # alone so Claude Code uses the account's own credentials, and the
+        # base_url in the manifest is an unused default — it read
+        # "livai-api.llnl.gov" for a run going to Anthropic on a subscription.
+        # Naming the wrong endpoint is worse than naming none.
+        if base and provider.lower() not in ("anthropic", "claude", ""):
+            host = base.split("//", 1)[-1].split("/", 1)[0]
+            where = host.split(":", 1)[0] or where
         head = (f"{run.path}  {run.state}   "
                 f"{run.manifest.get('model', '?')} "
-                f"({run.manifest.get('provider', '?')})   "
+                f"({where})   "
                 f"{'fresh' if run.manifest.get('fresh') else 'reuse'}   "
                 f"tries<={run.manifest.get('max_tries', '?')}   "
                 f"wall {human(run.wall)}")

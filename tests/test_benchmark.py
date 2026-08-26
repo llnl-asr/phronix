@@ -511,3 +511,120 @@ class TestCli:
         from tests.benchmark.cli import main
 
         assert main(["run", "--arms", "nonsense", "--tasks", "/nonexistent"]) == 1
+
+
+def test_django_instances_use_runtests_not_bare_pytest():
+    """Django's suite cannot be started by pytest, so it must not be.
+
+    Every Django test file imports `django.contrib.*` at module scope, which
+    reads `settings.INSTALLED_APPS` — so under plain pytest each file dies at
+    COLLECTION with `ImproperlyConfigured`, before one test runs. Measured on
+    django__django-13551: the agent produced the upstream fix byte for byte and
+    the run scored it 0/2 target and 0/56 pass-to-pass, which is indexed as a
+    catastrophically wrong patch rather than as a suite that never started.
+    """
+    from tests.benchmark.runner import _needs_django_runner, _django_labels
+
+    assert _needs_django_runner({"repo": "django/django"})
+    assert not _needs_django_runner({"repo": "sympy/sympy"})
+
+    # runtests.py takes dotted labels, never file paths.
+    labels = _django_labels(
+        ["test_token_with_different_secret (auth_tests.test_tokens.TokenGeneratorTest)"],
+        ["tests/auth_tests/test_models.py"])
+    assert labels == ["auth_tests.test_tokens", "auth_tests.test_models"]
+
+    # Fixture modules the test patch happens to touch are not test labels, and
+    # handing them to runtests.py risks taking the whole invocation down.
+    assert _django_labels([], ["tests/auth_tests/test_tokens.py",
+                               "tests/auth_tests/models/__init__.py",
+                               "tests/auth_tests/models/with_custom_email_field.py"]) \
+        == ["auth_tests.test_tokens"]
+
+
+def test_django_results_are_read_in_both_shapes_swe_bench_stores():
+    """A passing test contributes its node id AND its docstring.
+
+    unittest at verbosity 2 prints the docstring instead of the id when a test
+    has one, and SWE-bench stores whichever form it saw — django-13551 lists
+    one target as `test_token_with_different_secret (...)` and the other as
+    "Updating the user email address invalidates the token." Matching only one
+    shape scores a passing test as failed because of how the dataset happened
+    to name it.
+    """
+    from tests.benchmark.runner import _django_any_test_ran, _django_passed_ids
+
+    output = (
+        "test_make_token (auth_tests.test_tokens.TokenGeneratorTest) ... ok\n"
+        "test_check (auth_tests.test_tokens.TokenGeneratorTest)\n"
+        "Updating the user email address invalidates the token. ... ok\n"
+        "test_timeout (auth_tests.test_tokens.TokenGeneratorTest)\n"
+        "The token is valid after n seconds, but no greater. ... FAIL\n"
+        "test_broken (auth_tests.test_models.UserTest) ... ERROR\n"
+        "----------------------------------------------------------------------\n"
+        "Ran 4 tests in 0.1s\n")
+
+    passed = _django_passed_ids(output)
+    assert "test_make_token (auth_tests.test_tokens.TokenGeneratorTest)" in passed
+    assert "Updating the user email address invalidates the token." in passed
+    # A failure contributes neither shape — not its id and not its docstring.
+    assert "test_timeout (auth_tests.test_tokens.TokenGeneratorTest)" not in passed
+    assert "The token is valid after n seconds, but no greater." not in passed
+    assert "test_broken (auth_tests.test_models.UserTest)" not in passed
+
+    assert _django_any_test_ran(output)
+    # The failure this whole path exists to catch: a suite that never started
+    # must read as a runner fault, not as every test failing.
+    assert not _django_any_test_ran(
+        "ImproperlyConfigured: Requested setting INSTALLED_APPS, but settings "
+        "are not configured.")
+
+
+def test_baseline_cache_is_ignored_when_the_runner_changed(tmp_path, monkeypatch):
+    """A baseline is only valid for the runner that measured it.
+
+    Nothing recorded how a cached baseline was produced, so when Django moved
+    from bare pytest to `runtests.py` the stored entries stayed authoritative —
+    and they had been measured while the suite could not start, claiming 56
+    pass-to-pass tests were already broken when every one of them passes. A
+    stale discount does not fail a task loudly; it quietly forgives a real
+    regression, which is the direction a benchmark must never err in.
+    """
+    import json as _json
+
+    from tests.benchmark import runner as runner_mod
+
+    instance = {"instance_id": "django__django-13551", "repo": "django/django",
+                "FAIL_TO_PASS": ["t1"], "PASS_TO_PASS": ["t2"]}
+    cache = tmp_path / "baselines"
+    cache.mkdir()
+    stale = {"instance_id": "django__django-13551",
+             "pre_existing_failures": ["t2"] * 56,
+             "target_already_passing": [], "measured_at": "2026-01-01T00:00:00"}
+    (cache / "django__django-13551.json").write_text(_json.dumps(stale))
+
+    measured = {}
+
+    def fake_evaluate(container, inst, patch, timeout_s=900, known_failures=None,
+                      on_event=None):
+        measured["ran"] = True
+        return {"regressions": [], "fail_to_pass_failing": []}
+
+    monkeypatch.setattr(runner_mod, "evaluate", fake_evaluate)
+
+    said = []
+    result = runner_mod.baseline_failures(object(), instance, cache_dir=cache,
+                                          on_event=said.append)
+
+    # The stale entry is discarded, the baseline re-measured, and the reason
+    # said out loud rather than swallowed.
+    assert measured.get("ran") is True
+    assert result["pre_existing_failures"] == []
+    assert any("re-measuring" in text for text in said)
+
+    # The fresh entry records its runner, so the NEXT read is a cache hit.
+    measured.clear()
+    again = runner_mod.baseline_failures(object(), instance, cache_dir=cache,
+                                         on_event=said.append)
+    assert measured.get("ran") is None
+    assert again["runner"] == runner_mod._runner_signature(instance)

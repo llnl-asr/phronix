@@ -24,7 +24,8 @@
 set -uo pipefail
 
 SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-BENCH=${PHRONIX_BENCH:-/p/lustre5/haridev/phronix-bench}
+source "$SCRIPTS/bench-root.sh"
+BENCH=$(bench_root)
 RUNS="$BENCH/runs"
 
 # The benchmark's own venv when there is one: this reads only the standard

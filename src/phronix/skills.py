@@ -144,8 +144,11 @@ def _is_learned(name: str) -> bool:
         from phronix.layers import layers
 
         for layer in layers():
-            if (Path(layer.root) / "skills" / name / "SKILL.md").is_file():
-                return layer.name != "bundled"
+            homes = [Path(layer.root) / "skills" / name]
+            homes += (Path(layer.root) / "capabilities" / "tasks").glob(f"*/{name}")
+            for home in homes:
+                if (home / "SKILL.md").is_file():
+                    return layer.name != "bundled"
     except Exception:
         pass
     return False
@@ -573,7 +576,7 @@ def create(name: str, description: str, subject: str = "",
                 "hint": "add a block with skill_write instead of recreating the skill"}
 
     target = resolve_write_layer(layer)
-    directory = target.dir("skills") / slug
+    directory = skill_home(slug, target, subject or "")
     directory.mkdir(parents=True, exist_ok=True)
     users = current_users()
     (directory / SKILL_FILE).write_text(anonymize(scaffold_skill(
@@ -684,7 +687,12 @@ def define(
         }
 
     target = resolve_write_layer(layer)
-    directory = target.dir("skills") / slug
+    # An existing skill is updated where it already lives; only a new one is
+    # placed by the rule. Moving a skill on update would strand every path
+    # already recorded against it.
+    here = existing_home(slug)
+    directory = (here if here is not None and str(here).startswith(str(target.root))
+                 else skill_home(slug, target, subject or ""))
     directory.mkdir(parents=True, exist_ok=True)
 
     skill_text = render_skill(slug, anonymize(description, extra_users=users).strip(),
@@ -766,7 +774,9 @@ def _writable_copy(skill_name: str, filename: str, scaffold: str,
 
     target = resolve_write_layer(layer)
     existing = skill_dirs().get(skill_name)
-    dest_dir = target.dir("skills") / skill_name
+    dest_dir = (existing if existing is not None
+                and str(existing).startswith(str(target.root))
+                else skill_home(skill_name, target))
 
     if existing is not None and str(existing).startswith(str(target.root)):
         action = "updated"
@@ -821,6 +831,58 @@ def _exclusive(path: Path):
         except OSError:
             pass
         handle.close()
+
+
+#: Skills that are the framework's own METHOD, and stay in `skills/`.
+#:
+#: Everything else a run writes down is an ANSWER to one problem — a fix, a
+#: subject's findings, a solution — and answers belong under `capabilities/`,
+#: filed by topic, where `--fresh` filters them by provenance and an MCP lookup
+#: finds them by subject.
+#:
+#: The two have different audiences. `skills/` is read by every task on every
+#: repository: how to plan, how to explore, how to judge. A fix for one bug in
+#: one project is not method, and mixing them means a from-scratch run inherits
+#: another task's answer while believing it started clean — measured: six
+#: near-duplicate `column-domain` skills reached a fresh run through the
+#: bundled skeleton, none of them written by it.
+CORE_SKILL_PREFIX = "phronix-"
+
+
+def is_core_skill(name: str) -> bool:
+    """Is this the framework's own method, rather than one problem's answer?"""
+    return str(name).startswith(CORE_SKILL_PREFIX)
+
+
+def skill_home(slug: str, target: Any, subject: str = "") -> Path:
+    """The directory a skill's files live in, for the layer *target*.
+
+    THE one place that decides. Every writer goes through this — the scaffold,
+    the renderer, the lesson file, the association — because a second opinion
+    about where a skill lives is a skill written to one place and read from
+    another.
+
+    Keyed on the SLUG, never on the subject. The subject is free text and the
+    same skill is legitimately re-declared with a different one — "deploying
+    the service" today, "something else" tomorrow — and a home derived from it
+    moves when the prose does, stranding every path already recorded against
+    the skill. `subject` is accepted and ignored so callers that have one need
+    no special case.
+    """
+    del subject                       # deliberately not part of the location
+    if is_core_skill(slug):
+        return target.dir("skills") / slug
+    from phronix.capabilities import TASK_CAPABILITY_DIR, task_slug
+
+    return (target.dir("capabilities") / TASK_CAPABILITY_DIR
+            / task_slug(slug) / slug)
+
+
+def existing_home(slug: str) -> Optional[Path]:
+    """Where this skill already is, whichever store holds it."""
+    from phronix.layers import skill_dirs
+
+    return skill_dirs().get(slug)
 
 
 def write_block(skill: str, kind: str, title: str, body: str,

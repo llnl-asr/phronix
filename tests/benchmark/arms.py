@@ -25,8 +25,10 @@ import contextlib
 import hashlib
 import json
 import os
+import urllib.request
 import re
 import shlex
+import shutil
 import sys
 import threading
 import time
@@ -928,9 +930,186 @@ def _bundled_skill_names() -> set:
         return set()
 
 
+#: Decode rate the stage budgets in STAGE_BUDGETS were measured against.
+#:
+#: Every budget in this file is a number of SECONDS, but what a stage actually
+#: needs is a number of TOKENS — so a budget is only meaningful paired with the
+#: rate that produced it. These were measured against a model decoding about
+#: this fast; on anything slower the same seconds buy proportionally fewer tool
+#: calls, and stages are cut off mid-investigation while the run is scored as
+#: though the research happened.
+CALIBRATION_TOKENS_PER_S = 1000.0
+
+#: Bounds on the derived scale.
+#:
+#: The floor is below 1.0 on purpose. The calibration is a LOCAL model at
+#: ~1000 tok/s, and a hosted endpoint is not merely as fast — a Claude cloud
+#: model answers a stage's turns in seconds where the calibrated model took
+#: tens of them, so the same seconds buy several times the tool calls. Holding
+#: hosted runs at 1.0 spends minutes per stage on agents that finished
+#: thinking long before the clock did.
+#:
+#: The ceiling stops one bad reading — a fleet that answered once, slowly,
+#: while still loading — turning a ten-minute stage into a five-hour one.
+BUDGET_SCALE_BOUNDS = (0.2, 50.0)
+
+_BUDGET_SCALE_CACHE: Dict[str, Any] = {"value": None}
+
+
+def measured_decode_rate() -> Optional[float]:
+    """Tokens/second the fleet is actually decoding, or None if unknowable.
+
+    Read from the replicas' own `/metrics`, which llama-server exports and
+    which is already how status.sh reports throughput — so this costs a couple
+    of HTTP gets rather than a generation of our own. `predicted_tokens_seconds`
+    is the rate of finished requests, so it reads 0 on a fleet that has not
+    served anything yet; those are skipped rather than averaged in, because a
+    zero here would scale the budgets to the ceiling for no reason.
+    """
+    try:
+        from .cluster import DEFAULT_CONFIG
+
+        config = Path(os.environ.get("PHRONIX_CLUSTER") or DEFAULT_CONFIG)
+        servers = json.loads(config.read_text(encoding="utf-8")).get("servers") or []
+    except Exception:
+        return None
+    if not servers:
+        return None
+
+    def rate(server: Dict[str, Any]) -> Optional[float]:
+        url = f"http://{server.get('host')}:{server.get('port')}/metrics"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                body = response.read().decode("utf-8", "replace")
+        except Exception:
+            return None
+        for line in body.splitlines():
+            if line.startswith("llamacpp:predicted_tokens_seconds"):
+                try:
+                    value = float(line.rsplit(" ", 1)[-1])
+                except ValueError:
+                    return None
+                return value if value > 0 else None
+        return None
+
+    with ThreadPoolExecutor(max_workers=min(8, len(servers))) as pool:
+        seen = [r for r in pool.map(rate, servers[:8]) if r]
+    if not seen:
+        return None
+    seen.sort()
+    return seen[len(seen) // 2]          # median: one slow replica is not the fleet
+
+
+def budget_scale() -> float:
+    """Multiplier on every research stage budget, for THIS system.
+
+    Three sources, most explicit first:
+
+      PHRONIX_BUDGET_SCALE=<number>   use exactly this
+      PHRONIX_BUDGET_SCALE=auto       measure the fleet and derive it
+      unset                           `research.budget_scale` from tuning.yaml
+
+    `auto` exists because the right value is a property of the hardware, not of
+    the experiment, and getting it wrong is silent in the direction that
+    matters. Measured on corona (MI50): the fleet decodes ~34 tok/s against a
+    calibration of 1000, so every planning agent was killed at its 450s ceiling
+    still reading source files, and the task recorded zero research steps while
+    the run reported it as a normal failure.
+    """
+    raw = (os.environ.get("PHRONIX_BUDGET_SCALE") or "").strip().lower()
+    if raw and raw != "auto":
+        try:
+            return max(BUDGET_SCALE_BOUNDS[0],
+                       min(BUDGET_SCALE_BOUNDS[1], float(raw)))
+        except ValueError:
+            pass
+    if raw == "auto":
+        if _BUDGET_SCALE_CACHE["value"] is None:
+            rate = measured_decode_rate()
+            # No fleet to measure means a HOSTED endpoint, and hosted is not
+            # the calibration — it is faster than it.
+            #
+            # The budgets were measured against a local model at ~1000 tok/s.
+            # A Claude cloud model turns a stage's tool calls around in
+            # seconds, so the same budget buys several times the work and the
+            # clock stops being the binding constraint: measured on the Haiku
+            # run, `plan` spent its full five minutes and its re-ask a further
+            # five, on a task whose attempt stage had finished in three.
+            #
+            # So hosted gets its own scale, below 1.0, rather than inheriting a
+            # number derived for hardware it has nothing to do with.
+            scale = (float(_tuned("research.hosted_budget_scale", 0.5))
+                     if not rate else CALIBRATION_TOKENS_PER_S / rate)
+            _BUDGET_SCALE_CACHE["value"] = max(
+                BUDGET_SCALE_BOUNDS[0], min(BUDGET_SCALE_BOUNDS[1], scale))
+        return float(_BUDGET_SCALE_CACHE["value"])
+    return float(_tuned("research.budget_scale", 1.0))
+
+
+def _useful_test_output(text: str) -> str:
+    """Test output with the teardown noise dropped.
+
+    Django's runner prints one `Destroying test database for alias ...` line
+    per database per parallel worker, and on this suite that is eighty
+    identical lines — which land at the END of the captured output, the part a
+    skimming reader weights most. The signal (the assertion that failed) is
+    above them and gets pushed out of view.
+
+    Dropped rather than truncated: these lines carry no information at any
+    length, and keeping the first of each kind would still spend the position
+    that matters.
+    """
+    noise = ("Destroying test database for alias",
+             "Creating test database for alias",
+             "Cloning test database for alias",
+             "Operations to perform:",
+             "Synchronizing apps without migrations:")
+    kept: List[str] = []
+    dropped = 0
+    for line in str(text).splitlines():
+        if line.strip().startswith(noise):
+            dropped += 1
+            continue
+        kept.append(line)
+    if dropped:
+        kept.append(f"[{dropped} test-database setup/teardown line(s) removed]")
+    return "\n".join(kept).strip()
+
+
 #: How long a queue reading is trusted before it is taken again.
 _DEFERRED_CACHE: Dict[str, Any] = {"at": 0.0, "value": 0.0}
 _DEFERRED_TTL = 5.0
+
+
+def _fleet_samples_path() -> Path:
+    """The live fleet session's sampler file.
+
+    LLM_ROOT names it directly when the fleet's env.sh has been sourced. It
+    usually has not been — the benchmark runs in its own process tree — and the
+    old default pointed at Tuolumne's lustre unconditionally. On corona that
+    path does not exist, so this returned 0.0 forever and the budget silently
+    lost its queue-time correction: stages were charged for time spent waiting
+    in a queue rather than being served, which is the exact thing
+    `deferred_fraction` exists to prevent. A missing file is indistinguishable
+    from an idle fleet, so nothing reported the mistake.
+
+    cluster.json is the fallback because it is written by whichever deploy
+    brought the fleet up, and its `run_dir` is inside that cluster's own
+    LLM_ROOT — so the sessions directory beside it is the right one by
+    construction, whichever machine this is.
+    """
+    root = os.environ.get("LLM_ROOT")
+    if root:
+        return Path(root) / "logs" / "sessions" / "current" / "samples.jsonl"
+    try:
+        from .cluster import DEFAULT_CONFIG
+        config = Path(os.environ.get("PHRONIX_CLUSTER") or DEFAULT_CONFIG)
+        run_dir = json.loads(config.read_text(encoding="utf-8")).get("run_dir")
+        if run_dir:
+            return Path(run_dir).parent / "sessions" / "current" / "samples.jsonl"
+    except Exception:
+        pass
+    return Path("/p/lustre5/haridev/llm-tuolumne/logs/sessions/current/samples.jsonl")
 
 
 def deferred_fraction() -> float:
@@ -948,8 +1127,7 @@ def deferred_fraction() -> float:
         return float(_DEFERRED_CACHE["value"])
     _DEFERRED_CACHE["at"] = now
     _DEFERRED_CACHE["value"] = 0.0
-    root = os.environ.get("LLM_ROOT", "/p/lustre5/haridev/llm-tuolumne")
-    path = Path(root) / "logs" / "sessions" / "current" / "samples.jsonl"
+    path = _fleet_samples_path()
     try:
         lines = tail_text(path, 4096).splitlines()
         while lines:
@@ -1701,8 +1879,14 @@ class Arm:
 
     def research(self, instance: Dict[str, Any], store_root: Path,
                  workdir: Path, attempt_index: int = 1,
-                 notes: Optional[Path] = None, on_call=None) -> Dict[str, Any]:
-        """Establish how the task should be approached. No-op without a researcher."""
+                 notes: Optional[Path] = None, on_call=None,
+                 trial=None) -> Dict[str, Any]:
+        """Establish how the task should be approached. No-op without a researcher.
+
+        ``trial`` is the runner's seam (see ``Runner.trial_runner``): a callable
+        that puts one candidate in front of the task's own tests and reports
+        back. Arms that do no research ignore it.
+        """
         return {}
 
     def record_attempt(self, instance: Dict[str, Any], store_root: Path,
@@ -2105,6 +2289,44 @@ class Arm:
                  "it did, what it changed, and how that was judged. Summarise "
                  "it — do not quote it back."]
 
+        # The verdict goes FIRST, before the transcript it explains.
+        #
+        # It used to sit at line 299 of a 403-line file, under the agent's whole
+        # transcript and above eighty lines of `Destroying test database for
+        # alias 'other'...`. The one fact the next pass needs — which target
+        # test is still failing — was in the least-read position in the file.
+        #
+        # The consequence was not that research ignored the failure; it is that
+        # research refined the wrong half of it. Measured on django-13551 at
+        # 1 of 2: the pass recorded a single step, "Email included in token
+        # hash", which is the half that ALREADY PASSES, and never touched
+        # `test_token_with_different_secret`, which is the one that does not.
+        if verdict:
+            passed = verdict.get("fail_to_pass_passed")
+            total = verdict.get("fail_to_pass_total")
+            failing = verdict.get("fail_to_pass_failing") or []
+            parts += ["", "## START HERE: what is still broken", ""]
+            if failing:
+                parts += [
+                    f"The last attempt passed {passed} of {total} target "
+                    f"test(s). **These are still failing, and they are what "
+                    f"this pass is for:**", "",
+                    "\n".join(f"- `{name}`" for name in failing[:20]), "",
+                    "Plan against THESE, not against the issue text. The part "
+                    "of the issue the last attempt already fixed is done — "
+                    "re-deriving it costs a pass and changes no verdict. What "
+                    "is left is whatever makes the tests above fail.",
+                ]
+            else:
+                parts += [f"The last attempt passed {passed} of {total} target "
+                          f"test(s) and left none of them failing by name; the "
+                          f"failure is in the regressions or the run itself."]
+            regressed = verdict.get("regressions") or []
+            if regressed:
+                parts += ["", f"It also BROKE {len(regressed)} test(s) that "
+                          f"passed before:", "",
+                          "\n".join(f"- `{name}`" for name in regressed[:10])]
+
         asked = workdir / "prompt.md"
         if asked.is_file():
             parts += ["", "## What the agent was asked", "",
@@ -2145,7 +2367,7 @@ class Arm:
             if failing:
                 parts += ["", "Still failing:", "```",
                           "\n".join(failing[:20]), "```"]
-            detail = (verdict.get("failure_detail") or "").strip()
+            detail = _useful_test_output(verdict.get("failure_detail") or "")
             if detail:
                 parts += ["", "### What the tests actually printed", "",
                           "```", detail[:20000], "```"]
@@ -2254,6 +2476,30 @@ class MiniArm(Arm):
             "--yolo", "--cost-limit", str(self.cost_limit),
             "-o", str(trajectory),
         ]
+        # The planner gets the EVIDENCE, not the repository.
+        #
+        # A revision pass runs against a checkout holding the failed attempt's
+        # edits, and the planner reads them as proof there is nothing to plan.
+        # Measured across five runs and five successive gates — a prompt
+        # instruction, a restricted agent, a dedicated filer with no editing
+        # tools, an explicit re-ask, and a standing note saying the tree is
+        # patched — it still answered "the implementation is correct" and
+        # recorded no ideas: 67 plan rounds on one task, 68 re-asks, zero
+        # ideas.
+        #
+        # Every one of those gates argued with the conclusion. None removed
+        # what produces it. The planner does not need the source to name the
+        # ideas worth exploring — it needs the failure, the verdict and the
+        # test that is still red, all of which are files — so it is given a
+        # directory containing exactly those and nothing else.
+        evidence = workdir / "evidence"
+        evidence.mkdir(parents=True, exist_ok=True)
+        for source in context_paths:
+            try:
+                shutil.copy2(source, evidence / Path(source).name)
+            except OSError:
+                pass
+
         started = time.time()
         try:
             result = subprocess.run(command, capture_output=True, text=True,
@@ -3004,10 +3250,18 @@ exchange including **what the tests actually printed**. The assertion and the
 traceback are where the reason lives — "it did not pass" is a verdict, "it did
 not fire for the path the test uses" is a lesson.
 
-**If the attempt PASSED, the main thing to write is the solution**: the skill
-for this subject, holding the pipeline that worked and the problem it solved.
-Update the subject's existing skill rather than founding a second one. If it
-failed, record what failed — the implementation, not the idea.
+**If the attempt PASSED, write the solution skill, and it has a NAME:**
+
+    skill_write(name="{solution}", ...)
+
+That exact name — a later run looks it up rather than searching, and the skill
+covers why the form that worked beat the obvious one.
+
+Memory is THIS session; a skill is what survives it — `I9` has the test.
+
+**A PARTIAL pass is evidence too** — record the half the tests confirmed as
+established, not only the half that failed. If the attempt achieved nothing,
+record what failed: the implementation, not the idea.
 """ + OBSERVE_NOTE
 
     # ---------------------------------------------------------------------
@@ -3276,18 +3530,102 @@ describing it, reaching for a `probe_` tool before deriving anything by hand,
 and what a finding has to contain — including when the idea did not work, which
 is a result and not a wasted stage.
 
-Idea: **{name}**
+Step: **{name}**
 Question: {question}
 {where}
+
+This is ONE STEP of a method, not the whole fix. The skill's `I0` says what that
+means for what you record and why more than one way is worth having.
 
 You have {budget} seconds and a worktree of your own at `{workspace}`; nothing
 you do there reaches the patch. Write your finding to `{dump}` as well as
 recording it.
 
-Two other agents are exploring the other ideas right now. Do not build the
-solution — that stage sees all three findings and yours alone cannot tell which
-is best.
+Other agents are working the other steps right now. Do not build the whole
+solution — the stage that assembles the steps sees every finding, and yours
+alone cannot tell how they compose.
 """ + OBSERVE_NOTE
+
+    #: Asked when a task is solved and left no skill the next run can find.
+    SOLUTION_SKILL_FROM_PASS_PROMPT = """\
+This task is SOLVED. The change that solved it is attached as
+`attempt-diff.patch`, and `exchange.md` holds what the tests printed.
+
+Write it down as a skill the next run can execute:
+
+    skill_write(name="{solution}", ...)
+
+That exact name. A later run does not search for the solution — it looks this
+name up before the attempt starts, and a skill filed anywhere else is invisible
+to it however good it is.
+
+What belongs in it:
+
+* the change that worked, precisely enough to apply — the file, the function,
+  and what the line became;
+* WHY that form and not the obvious one. If an earlier attempt failed first,
+  the difference between the two is the most valuable thing you can write:
+  "use `get_email_field_name()` rather than `user.email`, because a custom user
+  model has no `email` attribute and the naive form raises `TypeError: must be
+  str, not NoneType`" is worth more than any description of the bug;
+* what the tests checked, so the next run knows when it is done.
+
+Do not describe the issue. The next run has the issue; what it does not have is
+the answer. You cannot edit or run anything here — the task is already solved,
+and the only thing left is to file what solved it.
+"""
+
+    #: The remaining failure, injected into every stage that plans against it.
+    #:
+    #: `exchange.md` carries the verdict, and an attachment is not the same as
+    #: an instruction: a stage told to "summarise the problem from exchange.md"
+    #: summarised the ISSUE, planned a step for the half that already passed,
+    #: and never opened the section naming the test that did not. Putting the
+    #: failing tests in the prompt makes them the subject rather than something
+    #: the agent has to go and find.
+    STILL_FAILING_NOTE = """
+**What the last attempt already got RIGHT, confirmed by the tests:**
+
+{working}
+
+Those are established. A step that re-derives them costs this pass and changes
+no verdict, and a solution that abandons them regresses a target test the run
+has already banked.
+
+**What is still broken, from the same test run:**
+
+{failing}
+
+The last attempt passed {passed} of {total} target test(s). Decompose against
+the failing tests: what has to become true for THOSE to pass, on top of what
+already works.
+"""
+
+    #: What the working tree actually contains on a retry, said out loud.
+    #:
+    #: The checkout handed to a revision pass still holds the edits of the
+    #: attempt that just FAILED. Nothing said so, and the consequence is not
+    #: subtle: measured on django-13551 under Haiku, `plan` read `tokens.py`,
+    #: found the fix already present, concluded "the implementation is complete
+    #: and correct", and recorded no steps at all. Its re-ask read the same
+    #: file and reached the same conclusion. Two full stages spent confirming a
+    #: patch that had scored 1/2 and lost the task.
+    #:
+    #: The agent was not being lazy. It was handed a workspace that argues
+    #: there is nothing to do, and believed it.
+    PATCHED_TREE_NOTE = """
+**The working tree is NOT the original code.** It holds the edits made by the
+attempt that just failed, so the fix will often look as though it is already
+there — because it is, and it did not work.
+
+Source that reads correctly is NOT evidence on a retry. The evidence is in
+`exchange.md`: which target tests still failed, and what they printed. An
+attempt that scores 1 of 2 leaves code that looks finished and is not.
+
+If you find yourself concluding that the implementation is complete, you have
+read the tree instead of the verdict. Go back to `exchange.md`, find the test
+that is still failing, and plan from THAT.
+"""
 
     #: The pointer, not the method. The method is `phronix-research-plan`.
     PLAN_PROMPT = """\
@@ -3302,6 +3640,7 @@ method; this message is only the input.
 asked, what it said, what it changed, what the tests printed. Everything you
 plan afterwards depends on that reading, so make it before the metric, the
 corpus or any idea.
+""" + PATCHED_TREE_NOTE + """
 
 The skill covers what to record and in what order — `research_define_fom`, then `research_declare_corpus` with
 `research_add_instances` and `research_split`, then `research_set_aspects` — and
@@ -3359,12 +3698,111 @@ are writing to this plan at once and `research_set_aspects` would erase theirs.
 Each idea is a `{{name, question, where}}` — the question is what exploring it
 would answer, phrased so a negative answer is as useful as a positive one.
 
+**The tool call is the only thing that records an idea.** Writing JSON to a
+file, echoing it, or listing your ideas in your reply does not record anything:
+the next stage reads the research record and nothing else. A scout that
+investigates well and then files its ideas anywhere but the tool has produced
+nothing, and the exploration phase it was feeding is skipped in silence. The
+scratch space below is for your own notes, never for the ideas themselves.
+""" + PATCHED_TREE_NOTE + """
+
 Ideas that repeat one already recorded are dropped and named back to you. That
 is not a rejection of the count, it is a request for a different axis: propose
 as many distinct ideas as your angle supports.
 
 Scratch space: `{workspace}`
 """ + OBSERVE_NOTE
+    #: One agent, one IDEA, refined into the sequence of steps that carries it out.
+    #:
+    #: An idea is a way of solving the WHOLE problem, and it is not executable
+    #: until someone has said what it actually does — in order, in named
+    #: places. That refinement is what the solution is written from and what
+    #: the trial then puts in front of the tests, so it happens per idea and in
+    #: parallel: one idea being refined does not wait on another.
+    #:
+    #: This replaced a per-STEP fan-out. That shape asked several agents for
+    #: rival ways of doing one step of one method, which is a finer grain than
+    #: anything downstream could use: the thing built, tried and combined is an
+    #: idea, not a step of one.
+    REFINE_IDEA_PROMPT = """\
+You own one idea for `{topic}`, and your job is to make it executable.
+
+**The idea:** {step}
+
+What it has to establish: {question}
+
+Where it applies: {where}
+
+The other ideas, which are NOT yours — do not work on them, do not propose
+variations of them, and do not re-open whether yours is the right one: {others}
+
+Work out the SEQUENCE OF STEPS your idea takes to solve the problem, then
+record it:
+
+    research_add_approach(
+        name="<the idea, named after what it does>",
+        summary="<step 1, step 2, step 3 — what changes, where, in order>",
+        hypothesis="<what you believe is true, and what would show it false>",
+        aspect="{step}")
+
+`aspect` must be your idea's name exactly as written above, so the result of
+trying it can be attributed to the idea that produced it.
+
+Three to six steps. Fewer means a step is really several; more means you are
+writing the patch rather than the method. Each step names WHERE it happens —
+the file and the function — because a step nobody can locate cannot be carried
+out or checked.
+
+The hypothesis is what makes the idea refutable. "Including the email in the
+hash invalidates the token; false if a user model without an `email` attribute
+raises instead" is worth more than a restatement of the idea.
+
+Read the code before you commit to the steps. An idea that turns out to be
+impossible costs a trial to discover, and you can rule it out here for nothing
+— recording that as the hypothesis of the idea you keep.
+
+Scratch space: `{workspace}`
+""" + PATCHED_TREE_NOTE + OBSERVE_NOTE
+
+    #: Sent to a planning stage that finished having recorded nothing.
+    #:
+    #: The failure it corrects is not laziness and not a refusal — the agent
+    #: does the work and then files it in the wrong place. Measured on
+    #: django-13551 under Haiku: two scouts ran `ToolSearch` for
+    #: `research_add_aspects`, then used Bash to "create JSON with research
+    #: aspects to explore" and "format research aspects as JSON for adding to
+    #: plan". The ideas existed, in a file nobody reads, and the record stayed
+    #: empty while the trace showed the stage completing normally.
+    #:
+    #: So the re-ask assumes the thinking is DONE and asks only for the call.
+    RECORD_ASPECTS_PROMPT = """\
+You finished without recording anything, so nothing you found exists yet.
+
+`research_add_aspects` is the ONLY thing that records an idea. Writing JSON to a
+file, printing it, or describing it in your reply does not — the next stage
+reads the research record and nothing else, so ideas that never went through the
+tool are simply lost, and the pipeline continues as though you had found none.
+
+Do not investigate anything further. You already did the work; this is the
+filing. Take what you just found — including anything you wrote to a file — and
+call `research_add_aspects` with it now.
+
+Each idea is `{{name, question, where}}`:
+
+* `name`  — what must become TRUE for the problem to be solved, not how you
+            would make it true. `A1: use getattr` is a way; `the token hash
+            includes the user's current email` is a step.
+* `question` — what exploring it would answer, phrased so a negative answer is
+            as useful as a positive one.
+* `where` — the file and function. Every idea needs a DIFFERENT one: two ideas
+            carried out in the same place are one idea with two ways of doing
+            it, and the tool will reject the list.
+
+If you genuinely found nothing worth exploring, call it with the one idea you
+would try next. An empty record is the one outcome that helps nobody.
+""" + PATCHED_TREE_NOTE + """
+"""
+
     ASPECT_RECHECK_PROMPT = """\
 Earlier research already settled this aspect. Confirm it still applies. Do not
 re-investigate it, and do not edit any source.
@@ -3558,6 +3996,14 @@ are thin, build what they support and say what is unverified.
     #: generic angles is the last resort, not the second one.
     MAX_PLAN_RETRIES = _tuned("research.max_plan_retries", 5)
 
+    #: How many times the validator may be asked within one plan phase.
+    #:
+    #: It has no budget of its own — judging a list is bounded by the list, so
+    #: a clock there could only cut the cheap half of the loop. That reasoning
+    #: holds per call and not in aggregate: measured on django-13551,
+    #: `validate-ideas` was invoked 83 times on a single task.
+    MAX_JUDGEMENTS = int(_tuned("research.max_judgements", 8))
+
     #: Ideas to ask for per round, whatever the shortfall is.
     #:
     #: Three. The validator rejects filler, so an ask for exactly the missing
@@ -3659,7 +4105,7 @@ from a real one, and will spend its budget pursuing it.
 
 The method is the `phronix-stage-finalize` skill: it says which record each
 phase owes and how to mark a partial measurement as partial.
-"""
+""" + PATCHED_TREE_NOTE
 
     #: Aspects investigated at once in stage 3, approaches evaluated at once in
     #: stage 6. Small, because a parallel stage costs its slowest member.
@@ -3679,6 +4125,8 @@ phase owes and how to mark a partial measurement as partial.
     #: under time pressure, and this stage is unbudgeted, so the cost lands
     #: where nothing reports it. Withholding the tools makes it structural.
     validator_agent_name = "phronix-validator"
+    #: Runs every stage rescue, and every "you recorded nothing" re-ask.
+    filer_agent_name = "phronix-filer"
 
     #: How many surviving ideas are explored at once.
     #:
@@ -3703,7 +4151,8 @@ phase owes and how to mark a partial measurement as partial.
 
     def research(self, instance: Dict[str, Any], store_root: Path,
                  workdir: Path, attempt_index: int = 1,
-                 notes: Optional[Path] = None, on_call=None) -> Dict[str, Any]:
+                 notes: Optional[Path] = None, on_call=None,
+                 trial=None) -> Dict[str, Any]:
         """Run the research flow, returning what it cost and what it concluded.
 
         Plan (three ideas, recorded), explore (every idea at once), then one
@@ -3939,18 +4388,56 @@ phase owes and how to mark a partial measurement as partial.
             # writes only what the transcript already established. It is what
             # makes a tight budget safe: overrunning now costs one filing pass
             # instead of the pipeline.
-            if stats.get("truncated") and not finalizing:
+            # A CORRECTOR's overrun does not earn a rescue.
+            #
+            # A budgeted stage that runs out has findings worth filing, and
+            # that is what the rescue is for. `validate-ideas` produces a
+            # verdict, not findings — it judges a list someone else wrote, and
+            # a truncated verdict is simply the next round's job. Rescuing it
+            # doubled the most-invoked stage in the pass: measured on
+            # django-13551, 300 validator calls and 303 finalizes, an hour in
+            # the plan phase with fifteen budget events in the whole of it.
+            corrector = name.startswith(("validate-ideas", "validate-exploration"))
+            if stats.get("truncated") and not finalizing and not corrector:
                 if on_call:
                     on_call(f"[{name}] out of time at {budget}s — filing what "
                             f"it found, then moving on")
                 try:
+                    # The rescue runs as the FILER, whatever the stage was.
+                    #
+                    # Its prompt has always said "you are not continuing the
+                    # stage; do not read files, run commands or search", and
+                    # asking has never been enough. Measured on django-13551:
+                    # a ways-scout rescue ran `git diff`, announced "the fix is
+                    # complete and correct", verified the tests and recorded no
+                    # approach at all — confirming the very patch that had
+                    # scored 1/2 and lost the task.
+                    #
+                    # The filer cannot edit, run or delegate, so the only
+                    # actions left are the ones this stage is for. Inheriting
+                    # the stage's own agent was the previous fix and was not
+                    # enough: most stages run unrestricted, so most rescues did
+                    # too.
+                    #
+                    # It did not, and the consequence undid the reason some
+                    # stages have restricted agents at all. `validate-ideas`
+                    # runs as the validator, which has no Bash and no Edit
+                    # precisely so that judging cannot quietly become
+                    # investigating — and then its finalize was spawned with
+                    # the default agent and every tool back. Measured on
+                    # scikit-learn-25570: `validate-ideas-finalize` spent its
+                    # rescue reading source and applying a fix to
+                    # `_update_fitted_transformers`. A pass that exists to FILE
+                    # what was found had become the one doing the work, with
+                    # none of the restrictions the stage was given.
                     stage(f"{name}-finalize",
                           self.FINALIZE_PROMPT.format(stage=name,
                                                       topic="{topic}"),
                           self.FINALIZE_BUDGET_S,
                           attachments=attachments,
                           workdir_override=workdir_override,
-                          model=model, finalizing=True)
+                          model=model, finalizing=True,
+                          agent=self.filer_agent_name)
                 except Exception as exc:      # a rescue must not break the run
                     if on_call:
                         on_call(f"[{name}] could not finalise: {exc}")
@@ -4082,7 +4569,7 @@ phase owes and how to mark a partial measurement as partial.
         # An easy task still finishes in ten minutes; only the ones that have
         # earned it get longer.
         stuck = int(getattr(self, "same_failure_count", 0) or 0)
-        scale = (float(_tuned("research.budget_scale", 1.0))
+        scale = (budget_scale()
                  * float(_tuned("research.retry_budget_multiple", 1.5))
                  ** max(0, attempt_index - 1))
         if stuck >= 2:
@@ -4165,6 +4652,99 @@ phase owes and how to mark a partial measurement as partial.
         # Each is validated as it lands rather than at a barrier: the validator
         # judges a list, so it can run against what has arrived while the rest
         # are still looking.
+        def aspect_count() -> int:
+            return len(self._in_store(store_root, self._load_aspects, topic) or [])
+
+        def recording_stage(name: str, prompt: str, budget: int,
+                            tree: Optional[Path] = None) -> None:
+            """Run a planning stage, and make it record before it is allowed to end.
+
+            A stage that recorded nothing is not a stage that found nothing —
+            it is usually one that filed its ideas somewhere the pipeline does
+            not read. Measured on django-13551: scouts selected
+            `research_add_aspects`, then wrote their ideas to JSON files with
+            Bash. The record stayed empty, the trace showed every stage
+            completing, and the whole exploration phase was skipped in silence.
+
+            The round-level retry already re-runs planning when the count is
+            short, but it re-runs the WHOLE cycle — investigation included —
+            and the ideas from this pass are gone by then. Asking here, while
+            the agent still has them in context, costs one short turn and
+            recovers work that has already been paid for.
+            """
+            before = aspect_count()
+            stage(name, prompt, budget, brief_only, tree)
+            if aspect_count() > before:
+                return
+            if on_call:
+                on_call(f"[{name}] recorded nothing — its ideas, if it found "
+                        f"any, are not in the record. Asking it to file them.")
+            # Run as the VALIDATOR, which has no Bash and no Edit.
+            #
+            # Asking more firmly does not work. Measured on django-13551: the
+            # re-ask stage was told "Do not investigate anything further. You
+            # already did the work; this is the filing" — and spent its whole
+            # turn reading the tests, editing tokens.py and diffing the result,
+            # never calling the tool. An agent holding file tools does what
+            # agents do. The only reliable way to make the call unavoidable is
+            # to leave nothing else it CAN do: this agent can read, and it can
+            # record aspects.
+            stage(f"{name}-record", self.RECORD_ASPECTS_PROMPT,
+                  self.FINALIZE_BUDGET_S, brief_only, tree, finalizing=True,
+                  agent=self.filer_agent_name)
+            if aspect_count() == before and on_call:
+                on_call(f"[{name}] ** still nothing recorded after being asked "
+                        f"directly — this stage contributed no ideas at all")
+
+        # What the last attempt left failing, read from its own evaluation.
+        #
+        # The runner already writes `evaluation.json` beside each attempt, so
+        # this is the verdict as measured rather than a summary of it. Empty on
+        # the first try, which is correct: there is no remaining failure yet.
+        still_failing = ""
+        if attempt_index > 1:
+            previous_dir = workdir.parent / f"attempt-{attempt_index - 1}"
+            try:
+                seen = json.loads(
+                    (previous_dir / "evaluation.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                seen = {}
+            names = seen.get("fail_to_pass_failing") or []
+            working = seen.get("fail_to_pass_passing") or []
+            if names:
+                still_failing = self.STILL_FAILING_NOTE.format(
+                    failing="\n".join(f"- `{name}`" for name in names[:20]),
+                    working=("\n".join(f"- `{name}`" for name in working[:20])
+                             if working else
+                             "- nothing yet: no target test passes because of "
+                             "the last change"),
+                    passed=seen.get("fail_to_pass_passed", "?"),
+                    total=seen.get("fail_to_pass_total", "?"))
+                if on_call:
+                    on_call(f"[research] planning against {len(names)} test(s) "
+                            f"still failing: {', '.join(names[:3])}")
+
+        # ONE budget for judging, across every path that asks for it.
+        #
+        # `MAX_JUDGEMENTS` counted only the plan loop, and the scouts call the
+        # validator too — pipelined, so each scout's ideas are judged as they
+        # land. Measured on django-13551 with the cap already in place:
+        # `validate-ideas` ran 300 times on one task and its finalize 303, for
+        # 64 minutes in the plan phase and no steps recorded. Almost none of
+        # that was a stage running out of time; fifteen budget events in the
+        # whole hour. It was the NUMBER of calls, and the loop that counted
+        # them was not the loop making most of them.
+        judgements = [0]
+
+        def judge():
+            """Run the corrector, or None when the pass has judged enough."""
+            if judgements[0] >= self.MAX_JUDGEMENTS:
+                return None
+            judgements[0] += 1
+            stage("validate-ideas", self.VALIDATE_IDEAS_PROMPT, 0,
+                  agent=self.validator_agent_name)
+            return judgements[0]
+
         def scout(job) -> None:
             position, angle = job
             tree, unavailable = private_tree(f"plan-{position}")
@@ -4172,27 +4752,183 @@ phase owes and how to mark a partial measurement as partial.
                 on_call(f"[plan:{angle['name']}] worktree unavailable "
                         f"({unavailable}); working in place")
             try:
-                stage(f"plan:{angle['name']}",
-                      self.PLAN_SCOUT_PROMPT.format(
+                recording_stage(f"plan:{angle['name']}",
+                      still_failing + self.PLAN_SCOUT_PROMPT.format(
                           topic="{topic}", angle=angle["look"],
                           workspace=str(tree)),
-                      budgets["plan"], brief_only, tree)
+                      budgets["plan"], evidence)
                 # Pipelined, not barriered: this scout's ideas are judged now,
                 # while the others are still looking.
-                stage("validate-ideas", self.VALIDATE_IDEAS_PROMPT, 0,
-                      agent=self.validator_agent_name)
+                judge()
             finally:
                 drop_tree(tree)
 
-        jobs = [lambda: stage("plan", self.PLAN_PROMPT, budgets["plan"])]
-        jobs += [(lambda job=job: scout(job))
-                 for job in enumerate(self.PLAN_ANGLES, 1)]
-        if on_call:
-            on_call(f"[plan] the plan plus {len(self.PLAN_ANGLES)} scout(s) "
-                    f"looking for ideas at once: "
-                    + ", ".join(a["name"] for a in self.PLAN_ANGLES))
-        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-            list(pool.map(lambda run: run(), jobs))
+        # The METHOD first, then ways for each of its steps.
+        #
+        # This used to be one bag: the planner and every scout proposed ideas
+        # in parallel, the validator filtered, and the count decided when to
+        # stop. That structure cannot produce a method, because nobody is ever
+        # asked for one — four agents each answering "what could fix this?"
+        # produce four rival fixes however the prompt is worded, and the gates
+        # downstream can only reject the shape, never create the missing one.
+        # Measured across four successive tightenings on django-13551: numbered
+        # candidates, then hyphenated implementation names, then three
+        # phrasings of one function. Each gate caught its evasion and the next
+        # round produced the same wrong shape in new clothes.
+        #
+        # So the decomposition gets a single writer with nothing else to do,
+        # and the parallelism moves to where it was always wanted: several ways
+        # for each step, found independently, no two scouts on the same step.
+        recording_stage("plan", still_failing + self.PLAN_PROMPT,
+                        budgets["plan"], evidence)
+        method = self._in_store(store_root, self._load_aspects, topic) or []
+
+        def approach_count() -> int:
+            """Ways on record. The thing `candidate_plans` builds from."""
+            return len(self._in_store(store_root, research_mod.load, topic)
+                       .get("approaches") or [])
+
+        # Candidates already built and tried, so nothing is tried twice.
+        # Set the moment any candidate passes the task's own tests. Every other
+        # stage checks it, so a success stops the plan asking for more ideas and
+        # the ideas in flight file what they have instead of running on.
+        stop_generating = threading.Event()
+        solved: List[Dict[str, Any]] = []
+        tried: List[Dict[str, Any]] = []
+        tried_lock = threading.Lock()
+        built: Dict[str, Dict[str, Any]] = {}
+        built_lock = threading.Lock()
+
+        def build_and_try(plan: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """Write one candidate up and put it in front of the task's tests."""
+            if trial is None or stop_generating.is_set():
+                return None
+            name = str(plan.get("name") or "")
+            with built_lock:
+                if name in built:
+                    return None
+                built[name] = plan
+            tree, unavailable = private_tree(
+                "solution-" + re.sub(r"[^a-z0-9]+", "-", name.lower())[:24])
+            if unavailable and on_call:
+                on_call(f"[build-solution:{name}] worktree unavailable "
+                        f"({unavailable}); working in place")
+            try:
+                stage(f"build-solution:{name}",
+                      self.SOLUTION_SKILL_PROMPT.format(
+                          topic="{topic}", name=name,
+                          skill=self.candidate_skill_name(topic, name),
+                          summary=plan.get("summary", "")),
+                      0, brief_only, tree)
+            finally:
+                drop_tree(tree)
+            if stop_generating.is_set():
+                return None
+            result = trial(plan)
+            with tried_lock:
+                tried.append(result)
+                if result.get("resolved"):
+                    solved.append(result)
+            if result.get("resolved"):
+                stop_generating.set()
+                if on_call:
+                    on_call(f"[trial:{name}] SOLVED the task — no more ideas "
+                            f"needed; the ones in flight will file what they "
+                            f"have and the pass finalises")
+            return result
+
+        def combine_if_ready() -> None:
+            """Once two ideas have been tried, try what they are TOGETHER.
+
+            A task is often not one bug: an idea can put the right check in the
+            right place and still fail because two more sites needed changing.
+            Each idea holds a piece and none holds the task, so the combination
+            is a real candidate rather than a tie-breaker — and it is built as
+            soon as there are two to combine, not after the last idea lands,
+            because waiting for the slowest is what the whole pass is avoiding.
+            """
+            if trial is None or stop_generating.is_set():
+                return
+            with finished_lock:
+                have = [n for n, r in finished.items() if r]
+            if len(have) < 2:
+                return
+            super_name = "super-" + "-".join(
+                re.sub(r"[^a-z0-9]+", "-", n.lower())[:12] for n in sorted(have)[:3])
+            with built_lock:
+                if super_name in built:
+                    return
+            build_and_try({
+                "name": super_name,
+                "summary": "the combination of " + ", ".join(sorted(have)),
+                "aspect": ""})
+
+        def ways(job) -> None:
+            position, step = job
+            label = str(step.get("name") or f"step-{position}")[:32]
+            tree, unavailable = private_tree(f"refine-{position}")
+            if unavailable and on_call:
+                on_call(f"[refine:{label}] worktree unavailable "
+                        f"({unavailable}); working in place")
+            try:
+                before = approach_count()
+                stage(f"refine:{label}",
+                      still_failing + self.REFINE_IDEA_PROMPT.format(
+                          topic="{topic}", step=step.get("name", ""),
+                          question=step.get("question", ""),
+                          where=step.get("where", "") or "not stated",
+                          others="; ".join(
+                              str(other.get("name") or "") for other in method
+                              if other is not step) or "none",
+                          workspace=str(tree)),
+                      budgets["plan"], brief_only, tree)
+                # A step with no ways attached produces no candidate, so
+                # nothing is built and nothing is tried. Same enforcement as
+                # the planning stages, one stage later and mattering more.
+                if approach_count() == before:
+                    if on_call:
+                        on_call(f"[refine:{label}] recorded nothing — asking it to "
+                                f"file the steps it worked out")
+                    stage(f"refine:{label}-record",
+                          self.RECORD_WAYS_PROMPT.format(
+                              step=step.get("name", "")),
+                          self.FINALIZE_BUDGET_S, brief_only, tree,
+                          finalizing=True, agent=self.filer_agent_name)
+                    if approach_count() == before and on_call:
+                        on_call(f"[refine:{label}] ** still nothing recorded — "
+                                f"this idea has nothing to try")
+            finally:
+                drop_tree(tree)
+
+        # The angle scouts are the FALLBACK, and they run first when the
+        # planner gave nothing — so that the ways fan-out below has something
+        # to work on either way.
+        if not method:
+            if on_call:
+                on_call(f"[plan] no method recorded — falling back to "
+                        f"{len(self.PLAN_ANGLES)} scout(s) looking for ideas at "
+                        f"once: " + ", ".join(a["name"] for a in self.PLAN_ANGLES))
+            jobs = [(lambda job=job: scout(job))
+                    for job in enumerate(self.PLAN_ANGLES, 1)]
+            with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+                list(pool.map(lambda run: run(), jobs))
+            # Re-read: whatever the fallback recorded IS the method now.
+            #
+            # This was read once, straight after the plan stage, and the ways
+            # fan-out was gated on that one reading. So a pass whose planner
+            # recorded nothing — which is every pass measured so far — skipped
+            # the ways scouts, recorded no approach, built no candidate, and
+            # therefore never evaluated anything. The fallback did its job and
+            # the work it produced had nowhere to go.
+            method = self._in_store(store_root, self._load_aspects, topic) or []
+
+        if method:
+            if on_call:
+                on_call(f"[plan] method of {len(method)} step(s); finding ways "
+                        f"for each, in parallel: "
+                        + ", ".join(str(s.get("name") or "?") for s in method))
+            with ThreadPoolExecutor(max_workers=max(1, len(method))) as pool:
+                list(pool.map(ways, enumerate(method, 1)))
 
         ideas = self._in_store(store_root, self._load_aspects, topic) or []
 
@@ -4218,17 +4954,219 @@ phase owes and how to mark a partial measurement as partial.
         # agent will read the whole repository looking for one — so it gets a
         # clock. Judging a list of three is bounded by the list, so it gets
         # none: a ceiling there could only ever cut the cheap half of the loop.
+        # Exploration is a CONSUMER, started before the plan is finished.
+        #
+        # The plan used to have to finish before any idea was explored: rounds
+        # of proposing and judging, then a barrier, then the fan-out. So the
+        # first idea — often the good one, recorded in the first minute — sat
+        # idle for as long as the planner spent looking for its third. Measured
+        # on scikit-learn-25570: four steps recorded at 20:48 and the pass was
+        # still in `plan-more-1` at 21:13, having explored none of them.
+        #
+        # Now the planner emits and the exploration consumes: an idea is picked
+        # up as soon as the validator has kept it, and later ideas join a pool
+        # that is already working. `max_parallel_aspects` still bounds how many
+        # run at once, and each is submitted exactly once.
+        roster = list(getattr(self, "models", None) or [])
+        if len(roster) <= 1:
+            spread = self.fanout_models(instance, self.max_parallel_aspects)
+            if spread:
+                roster = spread
+
+        # Each idea explored and judged in its own thread, to its own end.
+        #
+        # Explore and validate used to be phases with a barrier between them:
+        # every idea explored, then everything stopped while one validator read
+        # all of them, then whichever came back thin was explored again. The
+        # barrier cost the difference between the slowest idea and the fastest,
+        # twice — and it cost it to ideas that were finished and had nothing to
+        # wait for.
+        #
+        # Now one idea's second pass starts while another is still on its
+        # first. The validator judges a list and there is no reason it has to
+        # be the whole list: an idea that answered its question is complete on
+        # its own, and one that ran out has a gap of its own to close.
+        #
+        # The clock still bounds it. Two minutes is a PREDICTION that a
+        # question fits in two minutes, and MAX_EXPLORE_ROUNDS is how many
+        # times that prediction may be wrong before the pass moves on with
+        # what it has.
+        # One idea, carried from explored to JUDGED BY THE TESTS.
+        #
+        # An idea is a way of solving the whole problem — a sequence of steps —
+        # and it is complete when the task's own tests have seen it. Building
+        # every solution, then racing them, made the first workable idea wait
+        # for the slowest one to finish being explored, and the exploring of
+        # the others is exactly the work a success makes unnecessary.
+        #
+        # So each idea finishes on its own thread: write it up, put it in front
+        # of the tests, and if it passes, say so — `stop_generating` is what
+        # every other stage checks, so the plan stops asking for more and the
+        # ideas still in flight file what they have instead of running on.
+        finished: Dict[str, Dict[str, Any]] = {}
+        finished_lock = threading.Lock()
+
+        def finish_idea(idea: Dict[str, Any]) -> None:
+            name = str(idea.get("name") or "")
+            if not name or trial is None or stop_generating.is_set():
+                return
+            with finished_lock:
+                if name in finished:
+                    return
+                finished[name] = {}
+            plan = next(
+                (p for p in (self.candidate_plans(
+                    store_root, topic, int(self.attempt_candidates)) or [])
+                 if str(p.get("name") or "") == name
+                 or str(p.get("aspect") or "") == name), None)
+            if plan is None:
+                plan = {"name": name, "summary": str(idea.get("question") or "")}
+            result = build_and_try(plan)
+            with finished_lock:
+                finished[name] = result or {}
+            combine_if_ready()
+
+        def pursue(job) -> None:
+            position, idea = job
+            mine = roster[position % len(roster)] if len(roster) > 1 else ""
+            name = idea.get("name", "?")
+            safe = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+            dump = checkout / RESEARCH_SCRATCH / f"idea-{safe}.md"
+            dump.parent.mkdir(parents=True, exist_ok=True)
+            gap = ""
+
+            for round_no in range(1, self.MAX_EXPLORE_ROUNDS + 1):
+                tree, unavailable = private_tree(f"idea-{position}-{round_no}")
+                if unavailable and on_call:
+                    on_call(f"[explore:{name}] worktree unavailable "
+                            f"({unavailable}); working in place")
+                # A second pass is not a repeat: it is told what was missing
+                # and given longer, because closing a named gap is worth more
+                # than the first open-ended look and the question is now
+                # narrower.
+                budget = int(budgets["explore"]
+                             * (float(_tuned("research.round_budget_multiple", 1.5))
+                                ** (round_no - 1)))
+                try:
+                    if gap:
+                        stage(f"explore:{name}",
+                              self.EXPLORE_MORE_PROMPT.format(
+                                  topic="{topic}", name=name, gap=gap[:800],
+                                  budget=budget, dump=dump, workspace=str(tree)),
+                              budget, brief_only, tree, model=mine)
+                    else:
+                        stage(f"explore:{name}",
+                              self.EXPLORE_PROMPT.format(
+                                  topic="{topic}", name=name,
+                                  question=idea.get("question", name),
+                                  where=(f"Where to look: {idea['where']}"
+                                         if idea.get("where") else ""),
+                                  budget=budget, dump=dump,
+                                  workspace=str(tree)),
+                              budget, brief_only, tree, model=mine)
+                finally:
+                    drop_tree(tree)
+
+                if round_no >= self.MAX_EXPLORE_ROUNDS:
+                    return finish_idea(idea)
+                # This idea judged now, on its own, while the others are still
+                # being explored. The validator has no budget and sends back
+                # only what would change the solution; a negative result is
+                # complete and stays complete.
+                stage(f"validate-exploration:{name}",
+                      self.VALIDATE_ONE_EXPLORATION_PROMPT.format(
+                          topic="{topic}", name=name,
+                          question=idea.get("question", name)),
+                      0, agent=self.validator_agent_name)
+                gap = (self._in_store(store_root, self._thin_gaps, topic)
+                       or {}).get(name, "")
+                if not gap:
+                    return finish_idea(idea)
+                if on_call:
+                    on_call(f"[explore:{name}] came back thin: {gap[:90]}")
+
+
+        # Set the moment any candidate passes the task's own tests.
+        #
+        # "Stop generating ideas once one works" is the whole point of giving
+        # research a trial seam: everything after a solved task — more rounds
+        # of planning, more explores, more combinations — is spend against a
+        # question that has been answered.
+
+        # --- the consumer, fed by the plan loop below -----------------------
+        explore_pool = ThreadPoolExecutor(max_workers=self.max_parallel_aspects)
+        explore_futures: List[Any] = []
+        submitted: Dict[str, int] = {}
+
+        def drain_ideas() -> int:
+            """Start exploring every idea the validator has kept and we have not.
+
+            Called after each planning round, so an idea recorded in round one
+            is being explored while round two is still being asked for. Names
+            are the key because the record is rewritten each round — the
+            validator writes back the kept list — and re-submitting an idea
+            would explore it twice and pay for it twice.
+            """
+            started = 0
+            for idea in self._in_store(store_root, self._load_aspects, topic) or []:
+                name = str(idea.get("name") or "").strip()
+                if not name or name in submitted:
+                    continue
+                if len(submitted) >= self.max_parallel_aspects:
+                    break
+                position = len(submitted)
+                submitted[name] = position
+                explore_futures.append(
+                    explore_pool.submit(pursue, (position, idea)))
+                started += 1
+            if started and on_call:
+                on_call(f"[explore] started {started} idea(s) as they were kept "
+                        f"— {len(submitted)} exploring, the plan is still going")
+            return started
+
+        # Past the floor, looking for more is on a CLOCK.
+        #
+        # The floor is a floor, not a target: three independent steps is enough
+        # to proceed on, and everything after that is opportunistic. Left
+        # unbounded it does not read as opportunistic — measured on
+        # django-13551, the loop kept eight good steps, asked for three more,
+        # and was still asking twenty-five minutes into a task the bare arm had
+        # already finished twice. Nothing was wrong; it simply had no reason to
+        # stop.
+        #
+        # So once the floor is met the search continues only while this budget
+        # lasts, and when it runs out the pass finalises with what it has and
+        # moves on. A clock rather than a round cap because rounds are not the
+        # cost — an agent reading the repository for one more idea is.
+        extra_search_s = max(0, int(_tuned("research.extra_ideas_seconds", 240)
+                                    * budget_scale()))
+        floor_met_at = 0.0
         tries_at_plan = 0
         report = ""
         last_count, stuck_rounds = -1, 0
+        # The corrector has no clock, so the LOOP has to bound how often it is
+        # asked. Measured on django-13551: `validate-ideas` ran 83 times on one
+        # task — judging far more often than there was anything new to judge,
+        # and it is the unbudgeted half of the loop, so nothing else stopped it.
         while tries_at_plan < self.MAX_PLAN_RETRIES:
-            stage("validate-ideas", self.VALIDATE_IDEAS_PROMPT, 0,
-                  agent=self.validator_agent_name)
+            if judge() is None:
+                if on_call:
+                    on_call(f"[plan] the validator has judged "
+                            f"{judgements[0]} time(s) — taking the "
+                            f"{len(ideas)} idea(s) on record and moving on")
+                break
+            if stop_generating.is_set():
+                if on_call:
+                    on_call("[plan] a candidate already solved the task — "
+                            "stopping the search for more ideas")
+                break
             # The validator writes back only the ideas worth exploring, so the
             # store now holds the KEPT ones — this read is the running total,
             # not a fresh count.
             ideas = self._in_store(store_root, self._load_aspects, topic) or []
             report = last_output.get("validate-ideas", "") or report
+            # Kept ideas go to the consumer NOW, not after the loop ends.
+            drain_ideas()
             # Enough ideas is not the same as enough DIFFERENT ideas.
             #
             # This counted them and stopped. Five ideas all aimed at one
@@ -4237,7 +5175,23 @@ phase owes and how to mark a partial measurement as partial.
             # set is sent back with the overlap named.
             clashes = self.overlapping_ideas(ideas)
             if len(ideas) >= self.MIN_ASPECTS and not clashes:
-                break
+                # The floor is met. Look for more only while the clock allows,
+                # then finalise with what is there.
+                if extra_search_s <= 0:
+                    break
+                if not floor_met_at:
+                    floor_met_at = time.time()
+                    if on_call:
+                        on_call(f"[plan] {len(ideas)} independent step(s) — "
+                                f"enough to proceed. Looking for more for up to "
+                                f"{extra_search_s}s, then finalising with "
+                                f"whatever is found.")
+                elif time.time() - floor_met_at >= extra_search_s:
+                    if on_call:
+                        on_call(f"[plan] out of time looking for more — "
+                                f"finalising with {len(ideas)} step(s) and "
+                                f"moving on")
+                    break
             if clashes and on_call:
                 on_call("[plan] " + "; ".join(
                     f"{', '.join(names)} all look in {place}"
@@ -4338,11 +5292,35 @@ phase owes and how to mark a partial measurement as partial.
         # Salvage before falling back: a planner that named its ideas in prose
         # has done the thinking, and only the recording is missing.
         if len(ideas) < self.MIN_ASPECTS:
-            salvaged = self._aspects_from_text(last_output.get("plan", ""))
+            # Salvage from EVERY planning stage, not just `plan`.
+            #
+            # This read `last_output["plan"]` alone, so a planner that opened
+            # with a summary and named its steps in a LATER round left nothing
+            # to salvage. Measured on `pylint-dev__pylint-7114`: `plan` wrote
+            # "Problem Summary (from exchange.md and issue.md)" and recorded
+            # nothing; `plan-more-1` wrote "Three new research aspects for
+            # pylint-dev__pylint-7114" and also recorded nothing. The steps
+            # existed in prose, in the output this line did not read, while the
+            # validator judged an empty list round after round.
+            #
+            # Later rounds first: they are the planner's most considered answer,
+            # and the ones written after being told what was missing.
+            texts = [text for name, text in sorted(last_output.items(),
+                                                   reverse=True)
+                     if name == "plan" or name.startswith(("plan-more",
+                                                           "plan:"))]
+            salvaged = []
+            seen = set()
+            for text in texts:
+                for idea in self._aspects_from_text(text) or []:
+                    key = str(idea.get("name") or "").strip().lower()
+                    if key and key not in seen:
+                        seen.add(key)
+                        salvaged.append(idea)
             if salvaged:
                 if on_call:
                     on_call(f"[plan] salvaged {len(salvaged)} idea(s) from "
-                            f"what the planner wrote")
+                            f"what the planner wrote but did not record")
                 self._in_store(store_root, research_mod.set_aspects, topic,
                                salvaged)
                 ideas = self._in_store(store_root, self._load_aspects, topic) or []
@@ -4353,9 +5331,23 @@ phase owes and how to mark a partial measurement as partial.
         # with `source-location` and `minimal-repro` throws away the only part
         # of the plan that was worth anything.
         if not ideas:
+            # Loud, because this is the failure that looks like success.
+            #
+            # There is a check for a research pass making ZERO tool calls, which
+            # catches a dead endpoint. There was none for a pass that ran, used
+            # its tools, and recorded nothing — and that one is silent: the
+            # validator judges an empty list, the loop asks for more, and the
+            # trace shows research advancing through its stages.
+            #
+            # Measured: two full planning rounds on `pylint-dev__pylint-7114`,
+            # both narrating their aspects in prose, `set_aspects` never called,
+            # zero steps in the record, twenty minutes spent.
             if on_call:
-                on_call("[plan] no ideas recorded at all; "
-                        "exploring the default angles")
+                on_call("[plan] ** the planner recorded NOTHING — it ran and "
+                        "used tools, but `research_set_aspects` was never "
+                        "called and nothing could be salvaged from its text. "
+                        "Falling back to the default angles, which are generic: "
+                        "this pass is not researching THIS problem.")
             ideas = list(self.DEFAULT_ASPECTS)
         elif len(ideas) < self.MIN_ASPECTS and on_call:
             on_call(f"[plan] {len(ideas)} idea(s) after {tries_at_plan} "
@@ -4363,96 +5355,24 @@ phase owes and how to mark a partial measurement as partial.
                     f"{self.MIN_ASPECTS}")
 
         # Explore every idea at once. Two minutes each, so two minutes in all.
-        chosen = ideas[:self.max_parallel_aspects]
-        roster = list(getattr(self, "models", None) or [])
-        if len(roster) <= 1:
-            spread = self.fanout_models(instance, len(chosen))
-            if spread:
-                roster = spread
-
-        # Each idea explored and judged in its own thread, to its own end.
-        #
-        # Explore and validate used to be phases with a barrier between them:
-        # every idea explored, then everything stopped while one validator read
-        # all of them, then whichever came back thin was explored again. The
-        # barrier cost the difference between the slowest idea and the fastest,
-        # twice — and it cost it to ideas that were finished and had nothing to
-        # wait for.
-        #
-        # Now one idea's second pass starts while another is still on its
-        # first. The validator judges a list and there is no reason it has to
-        # be the whole list: an idea that answered its question is complete on
-        # its own, and one that ran out has a gap of its own to close.
-        #
-        # The clock still bounds it. Two minutes is a PREDICTION that a
-        # question fits in two minutes, and MAX_EXPLORE_ROUNDS is how many
-        # times that prediction may be wrong before the pass moves on with
-        # what it has.
-        def pursue(job) -> None:
-            position, idea = job
-            mine = roster[position % len(roster)] if len(roster) > 1 else ""
-            name = idea.get("name", "?")
-            safe = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-            dump = checkout / RESEARCH_SCRATCH / f"idea-{safe}.md"
-            dump.parent.mkdir(parents=True, exist_ok=True)
-            gap = ""
-
-            for round_no in range(1, self.MAX_EXPLORE_ROUNDS + 1):
-                tree, unavailable = private_tree(f"idea-{position}-{round_no}")
-                if unavailable and on_call:
-                    on_call(f"[explore:{name}] worktree unavailable "
-                            f"({unavailable}); working in place")
-                # A second pass is not a repeat: it is told what was missing
-                # and given longer, because closing a named gap is worth more
-                # than the first open-ended look and the question is now
-                # narrower.
-                budget = int(budgets["explore"]
-                             * (float(_tuned("research.round_budget_multiple", 1.5))
-                                ** (round_no - 1)))
-                try:
-                    if gap:
-                        stage(f"explore:{name}",
-                              self.EXPLORE_MORE_PROMPT.format(
-                                  topic="{topic}", name=name, gap=gap[:800],
-                                  budget=budget, dump=dump, workspace=str(tree)),
-                              budget, brief_only, tree, model=mine)
-                    else:
-                        stage(f"explore:{name}",
-                              self.EXPLORE_PROMPT.format(
-                                  topic="{topic}", name=name,
-                                  question=idea.get("question", name),
-                                  where=(f"Where to look: {idea['where']}"
-                                         if idea.get("where") else ""),
-                                  budget=budget, dump=dump,
-                                  workspace=str(tree)),
-                              budget, brief_only, tree, model=mine)
-                finally:
-                    drop_tree(tree)
-
-                if round_no >= self.MAX_EXPLORE_ROUNDS:
-                    return
-                # This idea judged now, on its own, while the others are still
-                # being explored. The validator has no budget and sends back
-                # only what would change the solution; a negative result is
-                # complete and stays complete.
-                stage(f"validate-exploration:{name}",
-                      self.VALIDATE_ONE_EXPLORATION_PROMPT.format(
-                          topic="{topic}", name=name,
-                          question=idea.get("question", name)),
-                      0, agent=self.validator_agent_name)
-                gap = (self._in_store(store_root, self._thin_gaps, topic)
-                       or {}).get(name, "")
-                if not gap:
-                    return
-                if on_call:
-                    on_call(f"[explore:{name}] came back thin: {gap[:90]}")
-
+        # Whatever the salvage or the fallback added, plus everything the plan
+        # loop already handed over. Then wait for the pool to drain.
+        drain_ideas()
+        chosen = [idea for idea in ideas
+                  if str(idea.get("name") or "") in submitted] or ideas[:1]
         if on_call:
-            on_call(f"[explore] {len(chosen)} idea(s) at once, each judged and "
-                    f"re-explored on its own: "
-                    + ", ".join(i.get("name", "?") for i in chosen))
-        with ThreadPoolExecutor(max_workers=len(chosen)) as pool:
-            list(pool.map(pursue, list(enumerate(chosen))))
+            on_call(f"[explore] {len(submitted)} idea(s) exploring, each judged "
+                    f"and re-explored on its own: "
+                    + ", ".join(sorted(submitted)))
+        try:
+            for future in explore_futures:
+                try:
+                    future.result()
+                except Exception as exc:      # noqa: BLE001 - one idea, not the pass
+                    if on_call:
+                        on_call(f"[explore] an idea failed: {exc}")
+        finally:
+            explore_pool.shutdown(wait=True)
 
         # One solution skill PER candidate, not one merged skill for the pass.
         #
@@ -4501,15 +5421,43 @@ phase owes and how to mark a partial measurement as partial.
                 finally:
                     drop_tree(tree)
 
+            # Each candidate written, then TESTED, without waiting for the rest.
+            #
+            # Writing every skill, then combining, then handing the whole set to
+            # the runner meant nothing met the real tests until research was
+            # over — so a pass went on generating and combining long after one
+            # of its ideas had already solved the task, and the idea recorded
+            # first was tested last. The trial seam removes that wait: a
+            # candidate is judged by the task's own tests the moment it is
+            # executable, which is the only judge that settles anything.
+            def write_and_try(job) -> None:
+                write_candidate(job)
+                if trial is None or stop_generating.is_set():
+                    return
+                _, plan = job
+                result = trial(plan)
+                with tried_lock:
+                    tried.append(result)
+                    if result.get("resolved"):
+                        solved.append(result)
+                if result.get("resolved"):
+                    stop_generating.set()
+                    if on_call:
+                        on_call(f"[trial:{plan['name']}] SOLVED the task — "
+                                f"no more ideas needed; reconciling what is in")
+
             with ThreadPoolExecutor(max_workers=len(plans)) as pool:
-                list(pool.map(write_candidate, list(enumerate(plans, 1))))
+                list(pool.map(write_and_try, list(enumerate(plans, 1))))
 
             # THE SUPER IDEA: one more candidate, combining what every idea found.
             #
-            # The one place a barrier is right. Each idea is written up on its
-            # own above, and none of them waits — but a combination is not a
-            # combination until all of them are in, so it is built here, once,
-            # from the whole set.
+            # Skipped entirely when something has already passed. A combination
+            # is a bet that several partial fixes belong together, and that bet
+            # is pointless once one of them fixes the whole task on its own —
+            # building it there costs an agent and a container to test an idea
+            # nobody needs.
+            # A combination is not a combination until the pieces are in, so it
+            # is built once, from whatever is in when the singles are done.
             #
             # It earns its place because a task is often not one bug: an attempt
             # can put the right check in the right function and still fail
@@ -4520,40 +5468,68 @@ phase owes and how to mark a partial measurement as partial.
             # the pieces belong together, and the singles stay in the race for
             # when they do not — `reconcile_trials` then folds the table of what
             # passed and what did not into one skill.
-            super_name = "super-idea"
-            findings = "\n".join(
-                f"- {plan['name']}: {(plan.get('summary') or '')[:200]}"
-                for plan in plans)
-            tree, unavailable = private_tree("solution-super")
-            if unavailable and on_call:
-                on_call(f"[build-solution:{super_name}] worktree unavailable "
-                        f"({unavailable}); working in place")
-            try:
+            # Skipped when something has already passed. A combination is a
+            # bet that several partial fixes belong together, and that bet is
+            # pointless once one of them fixes the whole task on its own —
+            # building it there costs an agent and a container to test a
+            # candidate nobody needs.
+            if stop_generating.is_set():
                 if on_call:
-                    on_call(f"[build-solution:{super_name}] combining "
-                            f"{len(plans)} idea(s) into one candidate: "
-                            + ", ".join(p["name"] for p in plans))
-                stage(f"build-solution:{super_name}",
-                      self.SUPER_IDEA_PROMPT.format(
-                          topic="{topic}", findings=findings,
-                          skill=self.candidate_skill_name(topic, super_name)),
-                      0, brief_only, tree)
-                # Recorded as an approach, or `candidate_plans` cannot see it and
-                # the skill is built at full cost and never run.
-                self._in_store(
-                    store_root, research_mod.add_approach, topic, super_name,
-                    "the combination of " + ", ".join(p["name"] for p in plans),
-                    "Each idea fixes part of this task; applied together they fix "
-                    "the whole of it. False if the combined change passes no more "
-                    "target tests than the best single idea.")
-            except Exception as exc:          # noqa: BLE001 - reported, not raised
-                if on_call:
-                    on_call(f"[build-solution:{super_name}] could not "
-                            f"combine: {exc}")
-            finally:
-                drop_tree(tree)
+                    on_call(f"[build-solution] skipping the combination — "
+                            f"{solved[0]['plan']} already solved it")
+            else:
+                super_name = "super-idea"
+                findings = "\n".join(
+                    f"- {plan['name']}: {(plan.get('summary') or '')[:200]}"
+                    for plan in plans)
+                tree, unavailable = private_tree("solution-super")
+                if unavailable and on_call:
+                    on_call(f"[build-solution:{super_name}] worktree unavailable "
+                            f"({unavailable}); working in place")
+                try:
+                    if on_call:
+                        on_call(f"[build-solution:{super_name}] combining "
+                                f"{len(plans)} idea(s) into one candidate: "
+                                + ", ".join(p["name"] for p in plans))
+                    stage(f"build-solution:{super_name}",
+                          self.SUPER_IDEA_PROMPT.format(
+                              topic="{topic}", findings=findings,
+                              skill=self.candidate_skill_name(topic, super_name)),
+                          0, brief_only, tree)
+                    # Recorded as an approach, or `candidate_plans` cannot see it and
+                    # the skill is built at full cost and never run.
+                    self._in_store(
+                        store_root, research_mod.add_approach, topic, super_name,
+                        "the combination of " + ", ".join(p["name"] for p in plans),
+                        "Each idea fixes part of this task; applied together they fix "
+                        "the whole of it. False if the combined change passes no more "
+                        "target tests than the best single idea.")
+                except Exception as exc:      # noqa: BLE001 - reported, not raised
+                    if on_call:
+                        on_call(f"[build-solution:{super_name}] could not "
+                                f"combine: {exc}")
+                finally:
+                    drop_tree(tree)
         else:
             stage("build-solution", self.BUILD_SOLUTION_PROMPT, 0)
+
+        # What the trials found, for the runner and for the record.
+        trial_report: Dict[str, Any] = {}
+        if trial is not None and tried:
+            best = max(tried, key=lambda r: int(r.get("target_tests_passed") or 0))
+            trial_report["trials"] = [
+                {"plan": r.get("plan"), "resolved": bool(r.get("resolved")),
+                 "target_tests_passed": int(r.get("target_tests_passed") or 0),
+                 "error": r.get("error", "")}
+                for r in tried]
+            trial_report["solved_by"] = [r["plan"] for r in tried if r.get("resolved")]
+            trial_report["best_outcome"] = best.get("outcome")
+            if on_call:
+                on_call("[trials] " + ", ".join(
+                    f"{r['plan']}={r.get('target_tests_passed', 0)}"
+                    for r in tried)
+                    + (f" — SOLVED by {', '.join(trial_report['solved_by'])}"
+                       if trial_report["solved_by"] else " — none solved it"))
 
         # No `choose`. The pass ends with the candidates, and the tests pick.
         #
@@ -4578,6 +5554,11 @@ phase owes and how to mark a partial measurement as partial.
             "attempt": attempt_index,
             "kind": "initial" if attempt_index <= 1 else "revision",
             "stages": stages,
+            # Empty unless the runner handed this pass a trial seam. When it
+            # did, these are candidates already measured against the task's own
+            # tests — so the runner can use the verdict rather than racing them
+            # a second time.
+            **trial_report,
             "stage_detail": stage_detail,
             # Wall-clock is less than the sum of the stages: the aspect and
             # evaluate stages run concurrently, and reporting the sum as elapsed
@@ -4906,23 +5887,31 @@ The ideas, and what each concluded:
 
 Write one solution skill named `{skill}` describing the combined change.
 
+The ideas above are STEPS of a method, not rival guesses at the whole fix — see
+[[phronix-research-plan]] `I5b`. Each explored step has one or more ways of being
+done. Your job is to ASSEMBLE them: choose the best-supported way for each step
+and write the ordered result as one change.
+
 This exists because a task is often not one bug. An attempt that adds a check in
 one place can be correct and still fail, because the same issue needed two more
-sites changed; each idea holds a piece and no single idea holds the task.
+sites changed; each step holds a piece and no single step holds the task.
 
-How to combine them:
+How to assemble them:
 
-1. Take every idea that found something real. An idea whose finding was "there is
-   nothing here" contributes nothing — leave it out and say so, rather than
-   padding the skill with it.
+1. Take every step that found a way to do it. A step whose finding was "there is
+   nothing to do here" contributes nothing — say so and leave it out, rather than
+   padding the skill with it. A step that found NO way is a hole: name it, because
+   a method with a hole is what an attempt will fall into.
 2. Where two ideas touch the same code, reconcile them into ONE change. Two edits
    to the same function are a conflict to resolve now, not two steps for the
    attempt to discover.
 3. Where they touch different code, order them so the result is coherent: the
    shared helper first, then its callers.
-4. Say what the combination achieves that no single idea does. If you cannot name
-   that, the honest answer is that these ideas do not combine — write the skill
-   for the strongest one alone and say why the others did not join it.
+4. Say what the assembled method achieves that no single step does, and in what
+   ORDER the steps must be carried out. If the steps turn out not to compose —
+   two of them are the same edit, or one contradicts another — say so plainly and
+   write the skill for the strongest one alone, with the reason the others did
+   not join it.
 
 Be specific: files, functions, line numbers, the actual edit, the exact exception
 type or return value. This skill is handed to an agent that will implement it
@@ -5030,10 +6019,17 @@ It is the plan itself, not background reading.
             return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
 
         here = slug(research_mod.resolve_topic(topic))
-        skills = Path(store_root) / "skills"
+        # Two homes: the framework's method in `skills/`, a problem's ANSWER
+        # under `capabilities/tasks/<subject>/`. A solution is an answer, so
+        # this reads both rather than assuming the store it used to live in.
+        roots = [Path(store_root) / "skills"]
+        roots += sorted(
+            d for d in (Path(store_root) / "capabilities" / "tasks").glob("*")
+            if d.is_dir())
 
         def on_disk(name: str) -> bool:
-            return bool(name) and (skills / name / "SKILL.md").is_file()
+            return bool(name) and any((root / name / "SKILL.md").is_file()
+                                      for root in roots)
 
         # 1. The merged solution: the answer plus a link to every candidate.
         merged = f"solution-{here}"
@@ -5060,8 +6056,8 @@ It is the plan itself, not background reading.
         # <plan>` precisely so several writers and a reader can agree. Reading
         # it back is deterministic, not a fuzzy name match.
         candidates = sorted(
-            (d.name for d in skills.glob(f"solution-{here}-*") if d.is_dir()
-             and (d / "SKILL.md").is_file()))
+            {d.name for root in roots for d in root.glob(f"solution-{here}-*")
+             if d.is_dir() and (d / "SKILL.md").is_file()})
         if candidates:
             return candidates[0]
         return here if on_disk(here) else ""
@@ -5112,7 +6108,12 @@ It is the plan itself, not background reading.
         """
         seen: Dict[str, List[str]] = {}
         for idea in ideas:
-            where = str(idea.get("where") or "").strip().lower()
+            # `where` for a step, `summary`/`hypothesis` for a way of doing one:
+            # the same question — would these be carried out in the same place —
+            # asked of both, so one rule covers steps and the ways within a step.
+            where = str(idea.get("where")
+                        or idea.get("summary")
+                        or idea.get("hypothesis") or "").strip().lower()
             if not where:
                 continue
             # The FILE is the unit of overlap, not the whole phrase: "line 40 of
@@ -5614,8 +6615,14 @@ It is the plan itself, not background reading.
         if self.store_readonly:
             env["PHRONIX_BENCH_FROZEN"] = "1"
 
+        # The name the pre-attempt lookup will search for, computed here so the
+        # writer and the reader cannot disagree about it.
+        topic = self.research_topic(instance)
+        solution = "solution-" + re.sub(r"[^a-z0-9]+", "-",
+                                        str(topic).lower()).strip("-")
         command = self.agent_command(
-            self.LEARN_PROMPT, checkout,
+            self.LEARN_PROMPT.format(topic="{topic}", solution=solution),
+            checkout,
             # The evaluation's own output too, not just the harness's digest
             # of it. `exchange.md` carries what the tests actually printed —
             # the assertion, the traceback — which is where the reason a change
@@ -5655,6 +6662,56 @@ It is the plan itself, not background reading.
             "elapsed_s": round(time.time() - started, 1),
             "writes": self._count_write_calls(stdout),
         }
+
+        # A solved task must leave something the NEXT run can look up.
+        #
+        # The prompt has always said "if the attempt passed, the main thing to
+        # write is the solution", and instruction alone has not been enough:
+        # measured on django-13551, the attempt passed 2 of 2, the learner
+        # wrote a memory holding the correct fix and the corner case that broke
+        # the earlier version, and no skill — so `best_skill_for` found nothing
+        # and the store's own record of a solved task was invisible to the one
+        # mechanism that asks for it.
+        #
+        # Checked rather than trusted, and only on a PASS: a failed attempt has
+        # no solution to file, and demanding one would invent it.
+        if (verdict or {}).get("resolved") and not self.best_skill_for(
+                store_root, self.research_topic(instance)):
+            self._write_solution_skill(instance, store_root, workdir,
+                                       solution, outcome, run_env, checkout)
+
+    def _write_solution_skill(self, instance: Dict[str, Any], store_root: Path,
+                              workdir: Path, solution: str,
+                              outcome: AttemptOutcome, run_env: Dict[str, str],
+                              checkout: Path) -> None:
+        """Ask, once, for the skill a solved task owes the next run.
+
+        Runs as the FILER: it can read the evidence and write a skill, and it
+        cannot edit the repository, run anything, or delegate. The task is
+        already solved — there is nothing left for this pass to do except file
+        what solved it, and every earlier attempt to secure that by asking
+        politely was answered by an agent going off to do something else.
+        """
+        prompt = self.SOLUTION_SKILL_FROM_PASS_PROMPT.format(
+            topic="{topic}", solution=solution)
+        command = self.agent_command(
+            prompt, checkout,
+            [str(workdir / name) for name in
+             ("attempt-diff.patch", "attempt-notes.md", "exchange.md")
+             if (workdir / name).is_file()],
+            agent=self.filer_agent_name)
+        try:
+            result = subprocess.run(command, cwd=checkout, env=run_env,
+                                    capture_output=True, text=True,
+                                    timeout=self.FINALIZE_BUDGET_S)
+        except Exception:                 # a missing skill is not a failed task
+            return
+        wrote = self.parse_events(result.stdout, AttemptOutcome())
+        outcome.tokens_learn += wrote.tokens_total
+        outcome.cost_usd += wrote.cost_usd
+        outcome.raw.setdefault("learn", {})["solution_skill"] = (
+            solution if self.best_skill_for(
+                store_root, self.research_topic(instance)) else "")
 
     @staticmethod
     def _attempt_notes(instance: Dict[str, Any], workdir: Path,
@@ -6057,8 +7114,20 @@ class ClaudeArm(OpenCodeArm):
     SCHEMA_BREAKING_TOOLS = ("Artifact", "RemoteTrigger")
 
     #: The built-in tools a restricted agent has to be denied by name.
+    #
+    # `Agent`/`Task` are on this list because delegation defeats every other
+    # entry on it. A restricted agent that can spawn a sub-agent gets an
+    # UNRESTRICTED one — the child is a fresh session with the default tool set,
+    # so denying the parent Bash accomplishes nothing.
+    #
+    # Measured on django-13551: `plan-record` runs as the validator, which is
+    # denied Bash precisely so the re-ask files its ideas instead of going off
+    # to fix the code. The trace shows it running the Django token tests
+    # anyway — "Background agent is running. I'll continue when it completes" —
+    # because it delegated. The restriction was real and it was routed around.
     BUILT_IN_TOOLS = ("Bash", "Edit", "Write", "Read", "Grep", "Glob",
-                      "NotebookEdit", "WebFetch", "WebSearch")
+                      "NotebookEdit", "WebFetch", "WebSearch",
+                      "Agent", "Task", "TaskOutput", "TaskStop")
 
     @staticmethod
     def _agent_spec(agent: str) -> Dict[str, Any]:

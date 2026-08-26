@@ -23,7 +23,15 @@
 set -uo pipefail
 
 PROJECT=/usr/WS2/haridev/phronix
-BENCH=/p/lustre5/haridev/phronix-bench
+# Which fleet directory to read cluster.json from. Two exist — tuolumne-llm/
+# and corona-llm/ — and they are separate clusters with separate gateways, so
+# a run has to name one. PHRONIX_FLEET=corona-llm switches every default here.
+FLEET=${PHRONIX_FLEET:-tuolumne-llm}
+
+# See run-group.sh: the workspace is per-CLUSTER, because the clusters do not
+# share a parallel filesystem.
+source "$PROJECT/scripts/bench-root.sh"
+BENCH=$(bench_root)
 VENV=$BENCH/venv
 SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -72,7 +80,18 @@ while [ $# -gt 0 ]; do
     --no-carry) EXTRA+=(--no-carry); shift;;
     --fresh)   FRESHNESS="--fresh"; shift;;
     --reuse)   FRESHNESS="";        shift;;
+    --budget-scale)      EXTRA+=(--budget-scale "$2"); shift 2;;
     --research-on-retry) EXTRA+=(--research-on-retry); shift;;
+    # Research BEFORE the first attempt, not only after one has failed.
+    #
+    # The default makes research the fallback, which is right for scoring — an
+    # easy task should not pay for an investigation it does not need. It is
+    # wrong for TESTING the research loop: a model that solves most of the list
+    # on try 1 never enters the pipeline at all, so a 30-task run can finish
+    # having exercised it zero times. Measured on django__django-13551 under
+    # Sonnet 5: both arms passed on try 1 in under a minute and no research
+    # stage ran.
+    --research-first)    EXTRA+=(--research-first); shift;;
     --parallel-tasks) PARALLEL_TASKS="$2"; EXTRA+=(--parallel-tasks "$2"); shift 2;;
     --limit)   EXTRA+=(--limit "$2"); shift 2;;
     # Every research idea attempted against the real tests, in parallel.
@@ -277,9 +296,9 @@ fi
 #
 # Only for cluster runs: a hosted-endpoint run has no fleet to measure.
 SESSION=""
-if [ -n "$CLUSTER" ] && [ -x "$PROJECT/tuolumne-llm/session.sh" ]; then
+if [ -n "$CLUSTER" ] && [ -x "$PROJECT/$FLEET/session.sh" ]; then
   SESSION="bench-$(basename "$OUT")"
-  if "$PROJECT/tuolumne-llm/session.sh" start "$SESSION" >/dev/null 2>&1; then
+  if "$PROJECT/$FLEET/session.sh" start "$SESSION" >/dev/null 2>&1; then
     echo "session : $SESSION (fleet stats for this run)"
   else
     SESSION=""
@@ -315,7 +334,7 @@ echo "pid     : $RUNPID"
 if [ -n "$SESSION" ]; then
   setsid bash -c '
     while kill -0 '"$RUNPID"' 2>/dev/null; do sleep 20; done
-    "'"$PROJECT"'/tuolumne-llm/session.sh" stop "'"$SESSION"'" \
+    "'"$PROJECT/$FLEET"'/session.sh" stop "'"$SESSION"'" \
       > "'"$OUT"'/fleet-session.txt" 2>&1
   ' >/dev/null 2>&1 < /dev/null &
 fi
@@ -342,7 +361,7 @@ cat > "$LOGS/$(basename "$OUT").json" <<JSON
 JSON
 
 echo
-[ -n "$SESSION" ] && echo "fleet:  $PROJECT/tuolumne-llm/session.sh report  (stats for this run's window)"
+[ -n "$SESSION" ] && echo "fleet:  $PROJECT/$FLEET/session.sh report  (stats for this run's window)"
 echo "watch:  $SCRIPTS/status.sh"
 echo "spend:  $SCRIPTS/running.sh"
 echo "stop:   $SCRIPTS/kill.sh"

@@ -16,6 +16,7 @@ is built from all three findings together.
 
 | Label | Section | Covers |
 | --- | --- | --- |
+| `I0` | Instructions | You are exploring ONE STEP, not the whole fix |
 | `I1` | Instructions | Try it, do not describe it |
 | `I2` | Instructions | Reach for a tool before deriving by hand |
 | `I3` | Instructions | Record what happened, including that it failed |
@@ -24,6 +25,54 @@ is built from all three findings together.
 | `R1` | Rules | Why the ideas are explored in parallel and not in order |
 
 ## Instructions
+
+### I0 — You are exploring ONE STEP, not the whole fix
+
+The plan decomposes the problem into an ordered method and hands you one step of
+it — see [[phronix-research-plan]] `I5b`. Your job is to find how THIS step is
+done, concretely enough that someone could carry it out: the file, the function,
+the change.
+
+Record each way you find with `research_add_approach(..., aspect="<this step>")`,
+so it is attached to the step it belongs to rather than floating free.
+
+**Find SEVERAL ways to do this step, and make them genuinely different.**
+
+Two ways of doing one step become two complete solutions that differ in exactly
+one place — a real alternative. Two ways that touch the same line are one way
+described twice, and the pipeline will race them as if they were two.
+
+The same independence rule that governs the steps governs the ways within a step
+(see [[phronix-research-plan]] `I6`): if two ways would be carried out in the
+same place, they are the same way. Move along an axis instead — do it earlier or
+later in the flow, do it in the caller rather than the callee, change the input
+rather than the handling of it, configure it rather than code it.
+
+```
+ONE WAY, DESCRIBED TWICE
+  - "return the parent when __init__.py is absent"
+  - "walk up while __init__.py exists, then return"     same line, inverted
+
+GENUINELY DIFFERENT WAYS for "choose the sys.path root"
+  - compute it from the file's own package chain        expand_modules.py
+  - ask astroid for the modpath and derive the root     modutils
+  - let the caller pass the root it already knows       pylinter.py
+```
+
+Record each with `research_add_approach(..., aspect="<this step>")` and a
+hypothesis that says what would show it wrong. They are explored and raced in
+parallel, so a way that costs nothing to add still costs a container to try —
+which is worth it for a real alternative and wasted on a rename.
+
+That distinction is what this pipeline got wrong before it worked in steps: on
+`pylint-dev__pylint-7114`, four differently-named ideas all changed
+`get_python_path`, and the candidate built from them rewrote the same loop.
+Three tries, five containers each, every candidate scoring zero.
+
+**Finding that the step needs NOTHING is also a result.** Say so. A method that
+carries a step which turns out to be unnecessary wastes every attempt that
+implements it, and the next session re-derives the same emptiness.
+
 
 ### I1 — Try it, do not describe it
 

@@ -5,7 +5,8 @@
 # question: is anything spending money right now, and what would I kill.
 set -uo pipefail
 
-BENCH=/p/lustre5/haridev/phronix-bench
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bench-root.sh"
+BENCH=$(bench_root)
 # Scripts live in the project; only DATA lives on the PFS.
 SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 RUNS="$BENCH/runs"

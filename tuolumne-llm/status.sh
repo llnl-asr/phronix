@@ -16,6 +16,7 @@ evenly across replicas.
 """
 import json
 import os
+import re
 import select
 import shutil
 import sys
@@ -24,7 +25,27 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-LLM_ROOT = os.environ.get("LLM_ROOT", "/p/lustre5/haridev/llm-tuolumne")
+def _llm_root():
+    """Where this fleet's data lives — from the env.sh sitting NEXT TO THIS FILE.
+
+    These two scripts are pure python and never source env.sh, so a hardcoded
+    default sent every corona-llm invocation looking for Tuolumne's logs and
+    sessions. The sibling env.sh is the one thing that always identifies which
+    cluster this copy belongs to (corona-llm symlinks the scripts but carries
+    its own env.sh), so read the default out of it.
+    """
+    if os.environ.get("LLM_ROOT"):
+        return os.environ["LLM_ROOT"]
+    env = os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.sh")
+    try:
+        with open(env) as handle:
+            found = re.search(r"^export LLM_ROOT=\$\{LLM_ROOT:-([^}]+)\}", handle.read(), re.M)
+    except OSError:
+        found = None
+    return found.group(1) if found else "/p/lustre5/haridev/llm-tuolumne"
+
+
+LLM_ROOT = _llm_root()
 REPO_CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cluster.json")
 DEFAULT_CFG = REPO_CFG if os.path.exists(REPO_CFG) else os.path.join(LLM_ROOT, "logs", "cluster.json")
 

@@ -88,7 +88,30 @@ research:
   #
   # Scale by the ratio of decode rates. 1000/150 is about 6; 5 leaves the
   # slowest stages bounded rather than open-ended.
+  #
+  # THIS VALUE IS THE FALLBACK, not the usual path. `--budget-scale` defaults
+  # to `auto`, which reads the fleet's own /metrics and derives the ratio, so
+  # the number does not have to be re-derived by hand for every machine — and
+  # is not silently wrong when a run moves to a slower one. Measured: corona's
+  # MI50 fleet decodes ~34 tok/s, giving x30, where this file said x1 and every
+  # planning agent was killed mid-investigation.
+  #
+  # Set it here only to pin a scale for a run whose point is comparability with
+  # an earlier one, where a measurement that drifts would be the wrong input.
   budget_scale: 1.0
+
+  # The scale used when there is no fleet to measure — i.e. a hosted endpoint.
+  #
+  # Below 1.0 because hosted is not the calibration, it is FASTER than it. The
+  # budgets were measured against a local model at ~1000 tok/s; a Claude cloud
+  # model turns a stage's tool calls around in seconds, so the same budget buys
+  # several times the work. Measured on the Haiku run: `plan` spent its full
+  # five minutes and its re-ask another five, on a task whose attempt stage had
+  # finished in three.
+  #
+  # Lower it further for a model faster still; raise it toward 1.0 if stages
+  # start reporting they ran out mid-investigation.
+  hosted_budget_scale: 0.5
 
   # How far past its budget a stage may run before it is killed.
   #
@@ -136,6 +159,27 @@ research:
   # good third idea, exploring two real ones beats three more rounds of asking.
   max_plan_stalls: 3
   max_plan_retries: 5
+
+  # How many times the validator may be asked within one plan phase.
+  #
+  # It has no budget of its own, on the reasoning that judging a list is
+  # bounded by the list. True per call, false in aggregate: measured on
+  # django-13551, `validate-ideas` ran 83 times on a single task, which is
+  # where that task's wall-clock went.
+  max_judgements: 8
+
+  # How long the plan may keep looking for MORE steps once the floor is met.
+  #
+  # `min_aspects` is a floor, not a target, and past it the search is
+  # opportunistic — but unbounded it does not behave that way. Measured on
+  # django-13551: eight good steps kept, three more requested, still asking
+  # twenty-five minutes into a task the bare arm had finished twice. Nothing
+  # was failing; the loop simply had no reason to stop.
+  #
+  # When this runs out the pass finalises with what it has and continues.
+  # Scaled by `budget_scale` like every other research clock, so a slow
+  # endpoint gets proportionally longer rather than being cut off mid-idea.
+  extra_ideas_seconds: 240
 
   # Extra attempts a task may earn by failing DIFFERENTLY each time.
   #

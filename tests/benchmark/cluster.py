@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,7 +43,13 @@ def _tuned(key: str, fallback):
 
 
 #: Where the cluster writes itself, when nobody says otherwise.
-DEFAULT_CONFIG = Path("/usr/workspace/haridev/phronix/tuolumne-llm/cluster.json")
+#:
+#: There is more than one fleet: ``tuolumne-llm/`` (MI300A) and ``corona-llm/``
+#: (MI50), each writing its own ``cluster.json`` next to its own scripts. They
+#: are different machines with different gateways, so the default names one and
+#: ``PHRONIX_FLEET`` switches it.
+DEFAULT_CONFIG = Path("/usr/workspace/haridev/phronix") / os.environ.get(
+    "PHRONIX_FLEET", "tuolumne-llm") / "cluster.json"
 
 
 class ClusterConfig:

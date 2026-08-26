@@ -13,7 +13,8 @@
 # from the terminal. This reads the artifacts on disk instead.
 set -uo pipefail
 
-BENCH=/p/lustre5/haridev/phronix-bench
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bench-root.sh"
+BENCH=$(bench_root)
 RUNS="$BENCH/runs"
 SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -719,6 +720,17 @@ base, run = sys.argv[1].rstrip("/"), sys.argv[2]
 root = base[:-3].rstrip("/") if base.endswith("/v1") else base
 
 
+def _cluster_json():
+    """The fleet config to read the gateway key and server list out of.
+
+    Two fleets exist — tuolumne-llm/ (MI300A) and corona-llm/ (MI50) — each
+    writing its own cluster.json next to its own scripts. PHRONIX_FLEET picks
+    one; without it this reads Tuolumne's, which is where it always read.
+    """
+    fleet = os.environ.get("PHRONIX_FLEET", "tuolumne-llm")
+    return "/usr/workspace/haridev/phronix/%s/cluster.json" % fleet
+
+
 def _key():
     """The credential this endpoint wants, from the deployment that owns it.
 
@@ -727,7 +739,7 @@ def _key():
     "needs OPENAI_API_KEY" for a gateway the user deployed themselves sends them
     looking for a credential that was never involved.
     """
-    for path in ("/usr/workspace/haridev/phronix/tuolumne-llm/cluster.json",):
+    for path in (_cluster_json(),):
         try:
             with open(path) as handle:
                 key = (json.load(handle).get("gateway") or {}).get("key")
@@ -758,7 +770,7 @@ def _fleet():
     idle.
     """
     try:
-        with open("/usr/workspace/haridev/phronix/tuolumne-llm/cluster.json") as h:
+        with open(_cluster_json()) as h:
             cfg = json.load(h)
     except (OSError, ValueError):
         return []
