@@ -1877,6 +1877,481 @@ class Arm:
         """
         raise NotImplementedError
 
+    def track(self, instance: Dict[str, Any], store_root: Path, workdir: Path,
+              phase: str, evidence: Optional[List[Path]] = None,
+              on_call=None, cost: str = "") -> Path:
+        """Fold what just happened into this task's record. Returns its path.
+
+        Its own stage, and that is the point. Everything today that was left to
+        an agent as a side-job went unrecorded — an attempt told to note what it
+        found fixed the code instead, a planner told to file its ideas narrated
+        them. An agent whose only tool is recording, whose only input is what
+        just happened, and whose prompt says "do not attempt the task", has
+        nothing else it can do.
+
+        The record lives beside the task and never leaves it. Two tasks that
+        look alike are still two tasks: an established fact from one is an
+        assumption in the other, and an assumption presented as established is
+        worse than nothing, because the next phase will not re-check it.
+        """
+        topic = self.research_topic(instance)
+        # Beside the TASK, not inside one attempt: the record spans attempts,
+        # which is the whole reason the next one can read what the last found.
+        tracker = Path(workdir).parent / self.TRACKER_FILE
+        files = [Path(p) for p in (evidence or []) if Path(p).is_file()]
+        if tracker.is_file():
+            files.append(tracker)
+        prompt = self.TRACK_PROMPT.format(topic="{topic}", phase=phase,
+                                          tracker=str(tracker),
+                                          cost=cost or "not measured")
+        if on_call:
+            on_call(f"[track:{phase}] folding into {tracker.name}")
+        # Run in the TASK directory, not the checkout.
+        #
+        # The record is about what happened, and the source is not evidence of
+        # that — it is the thing that convinced five earlier stages the task was
+        # already done. An agent that cannot see the tree cannot conclude from
+        # the tree.
+        self.standalone_stage(instance, store_root, workdir, prompt,
+                              attachments=[str(f) for f in files],
+                              timeout_s=self.FINALIZE_BUDGET_S,
+                              agent=self.tracker_agent_name, phase="track",
+                              cwd=tracker.parent, on_call=on_call)
+
+        # The shape is CHECKED, not merely asked for.
+        #
+        # Sent back once, naming what is missing. A second failure is reported
+        # rather than looped on: the content is there either way, and a record
+        # in the wrong shape is worth more than no record.
+        missing = self.missing_sections(tracker)
+        if missing:
+            if on_call:
+                on_call(f"[track:{phase}] the record is missing "
+                        f"{', '.join(missing)} — asking for it in the shape "
+                        f"the next phase reads")
+            self.standalone_stage(
+                instance, store_root, workdir,
+                self.RESHAPE_PROMPT.format(
+                    tracker=str(tracker), missing=", ".join(missing),
+                    sections="\n".join(f"    {s}" for s in self.TRACKER_SECTIONS)),
+                attachments=[str(tracker)], timeout_s=self.FINALIZE_BUDGET_S,
+                agent=self.tracker_agent_name, phase="track",
+                cwd=tracker.parent, on_call=on_call)
+            still = self.missing_sections(tracker)
+            if still and on_call:
+                on_call(f"[track:{phase}] ** still missing {', '.join(still)} "
+                        f"— the record is organised by something other than "
+                        f"what the next phase reads")
+        return tracker
+
+    @classmethod
+    def missing_sections(cls, tracker: Path) -> List[str]:
+        """Which required headings the record does not have."""
+        try:
+            text = Path(tracker).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return list(cls.TRACKER_SECTIONS)
+        return [s for s in cls.TRACKER_SECTIONS if s not in text]
+
+    def standalone_stage(self, instance: Dict[str, Any], store_root: Path,
+                         workdir: Path, prompt: str,
+                         attachments: Optional[List[str]] = None,
+                         timeout_s: int = 300, agent: str = "",
+                         phase: str = "", cwd: Optional[Path] = None,
+                         on_call=None) -> str:
+        """Run one agent outside the research flow, and return what it said.
+
+        `research()` has its own `stage()` closure bound to a pass's budgets and
+        trees. The tracked loop runs stages that are not part of a pass — the
+        tracker after every phase, the research pass between attempts — so they
+        need an invocation of their own rather than a closure lifted out of a
+        function that also owns the plan loop.
+        """
+        checkout = Path(cwd) if cwd is not None else Path(workdir) / "repo"
+        if not checkout.is_dir():
+            checkout = Path(workdir)
+        self.research_topic_binding = self.research_topic(instance)
+        env = self.phronix_env(
+            tool_path_env(isolated_env(store_root, Path(workdir) / "cache")))
+        env.update(model_env(base_url=self.base_url, api_key=self.api_key))
+        env["PHRONIX_WRITE_LAYER"] = "project"
+        if phase:
+            env["PHRONIX_PHASE"] = phase
+        if self.store_readonly:
+            env["PHRONIX_BENCH_FROZEN"] = "1"
+        import subprocess
+
+        command = self.agent_command(prompt, checkout, list(attachments or []),
+                                     agent=agent)
+        try:
+            with private_home(dict(env)) as run_env:
+                # STREAMED, not captured.
+                #
+                # `subprocess.run` returns nothing until the process exits,
+                # which for a five-minute research pass is five minutes in
+                # which a working agent and a dead one look identical. The
+                # trace showed `diagnosing the open failure, 300s` and then
+                # nothing at all — the stage was working and there was no way
+                # to see it, or to see it stop.
+                #
+                # `stream_opencode` reads the event stream line by line and
+                # reports each tool call, which is what every stage in the
+                # research flow already does. It closes stdin for the same
+                # reason `subprocess.run` had to.
+                stdout, code = stream_opencode(
+                    command, checkout, run_env, timeout_s, on_call=on_call)
+        except Exception as exc:
+            # SAID, not swallowed.
+            #
+            # This returned "" on any failure, which made a stage that could
+            # not start indistinguishable from one that ran and produced
+            # nothing. Measured on the tracker's first live run: the stage
+            # announced "folding into tracker.md", the next stage began in the
+            # same second, and no record appeared — a zero-second stage
+            # reported as a completed one.
+            if on_call:
+                on_call(f"[{phase or 'stage'}] could not run: "
+                        f"{type(exc).__name__}: {str(exc)[:160]}")
+            return ""
+        if code and on_call:
+            on_call(f"[{phase or 'stage'}] exited rc={code}: "
+                    f"{(stdout or '').strip()[-300:]}")
+        return stdout or ""
+
+    SNAPSHOT_PROMPT = """\
+This task is finished. Build the skill a later run on this subject will load
+before it starts.
+
+`skill_load("phronix-learn-from-attempt")` is the method — `I7` on naming, `I9`
+on what belongs in a skill rather than a memory.
+
+Task: `{topic}`
+The record: `{tracker}` — the problem, how it was approached, what worked, what
+did not. Everything the task learned is in there; the fix alone is half of it.
+Outcome: **{outcome}**
+
+    skill_write(name="{skill}", ...)
+
+That exact name. A later run looks it up rather than searching.
+
+Five things, in this order:
+
+1. **What problem it solves** — the symptom a later run would recognise, not
+   the issue text. Someone arrives with a failing test; this is how they tell
+   whether this skill is about their problem.
+2. **The key idea** — the one insight the whole fix turns on, in a sentence.
+   For this subject that is a claim like "the email field is not always called
+   `email`", not a description of the diff.
+3. **Instructions to solve it** — the change, precisely enough to apply: file,
+   function, what the line becomes. Numbered, in order.
+4. **Constraints and rules** — what must stay true while solving it. What must
+   keep passing, what must not be touched, the invariant the obvious fix
+   breaks. Take these from **What worked**: those are banked and a later run
+   must not regress them.
+5. **Pitfalls and lessons** — take these from **What did not work**, with the
+   reason each failed. This is the most valuable section and the one only this
+   task can write: a later run gets the ruled-out approaches for free instead
+   of spending an attempt each rediscovering them.
+
+Write it whether the task passed or not. A task that failed after four attempts
+knows more about its subject than one that passed on the first — sections 1, 2,
+4 and 5 are all still true, and section 3 says how far it got and what remains.
+"""
+
+    @staticmethod
+    def assistant_text(stdout: str) -> str:
+        """The agent's own words, with the event envelopes stripped out.
+
+        The stream is JSON lines: tool calls, results, signatures, usage. Only
+        the `text` blocks are what the agent SAID, and only those can carry a
+        report. Reading raw stdout instead put envelope fragments into the
+        trace and into the record — measured live, a base64 thinking signature
+        was parsed and displayed as a finding.
+        """
+        said: List[str] = []
+        for line in (stdout or "").splitlines():
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            blocks = ((event.get("message") or {}).get("content")
+                      or event.get("content") or [])
+            if isinstance(blocks, str):
+                said.append(blocks)
+                continue
+            for block in blocks if isinstance(blocks, list) else []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = (block.get("text") or "").strip()
+                    if text:
+                        said.append(text)
+        return "\n".join(said)
+
+    @staticmethod
+    def task_skill_name(topic: str) -> str:
+        """The one skill this task owns, named after the task.
+
+        Every writer and the reader derive it here, because a name computed in
+        two places is a name they will eventually disagree about — and a skill
+        filed under a name nothing reads is a skill that was never written.
+        """
+        return re.sub(r"[^a-z0-9]+", "-", str(topic).lower()).strip("-")
+
+    RENAME_PROMPT = """\
+The skill for this task has to be filed under one name, and it is not.
+
+Expected: `{skill}`
+Found instead: {found}
+
+A later run does not search for a skill — it looks up `{skill}` and takes what
+is there. A descriptive name is invisible to it however good the content is.
+
+Write the content under the right name now:
+
+    skill_write(name="{skill}", ...)
+
+Take everything from the skill(s) named above; nothing needs re-deriving. If
+there are several, merge them — one task, one skill.
+"""
+
+    def ensure_task_skill(self, instance: Dict[str, Any], store_root: Path,
+                          workdir: Path, on_call=None) -> str:
+        """Make sure this task's skill exists under the name the reader uses.
+
+        Told the exact name and given the tool, agents still invent their own.
+        Measured in one run: `django-django-13551` and
+        `matplotlib-matplotlib-24970` were written correctly, and beside them
+        sat `django-password-reset-token-email-invalidation` and
+        `matplotlib-24970-numpy-deprecation` — good content under names the
+        lookup will never ask for. matplotlib-24970 then opened its next
+        attempt with "no skill covers this task; solving from scratch" while
+        its own diagnosis sat in the store.
+        """
+        topic = self.research_topic(instance)
+        wanted = self.task_skill_name(topic)
+        if self.best_skill_for(store_root, topic) == wanted:
+            return wanted
+        # Anything this task wrote under another name, so the re-ask can merge
+        # rather than re-derive.
+        tasks = Path(store_root) / "capabilities" / "tasks"
+        stem = wanted.split("-")[0]
+        found = sorted(d.name for d in tasks.glob("*")
+                       if d.is_dir() and d.name != wanted and stem in d.name)
+        if not found:
+            return ""
+        if on_call:
+            on_call(f"[skill] this task's skill is filed as "
+                    f"{', '.join(found)} — the lookup asks for `{wanted}`; "
+                    f"re-filing it")
+        self.standalone_stage(
+            instance, store_root, workdir,
+            self.RENAME_PROMPT.format(skill=wanted, found=", ".join(
+                f"`{name}`" for name in found)),
+            timeout_s=self.FINALIZE_BUDGET_S, agent=self.filer_agent_name,
+            phase="learn", on_call=on_call)
+        landed = self.best_skill_for(store_root, topic) == wanted
+        if not landed:
+            if on_call:
+                on_call(f"[skill] ** `{wanted}` still does not exist — the next "
+                        f"run on this subject will start from scratch")
+            return ""
+
+        # Merged, so the copies GO.
+        #
+        # Guaranteeing the canonical name exists does nothing about the names
+        # beside it: measured in one run, four tasks produced fifteen skills —
+        # django alone had `django-django-13551` plus
+        # `django-password-reset-token-fix`, `django-13551-email-hash-fix`,
+        # `django-django-13551-reconciliation` and
+        # `django-13551-reconciliation-summary`. Every one of those is
+        # promoted into the source tree and kept for good, and a later
+        # retrieval that matches one fragment gets that fragment instead of
+        # the whole answer. Two skills for one subject split every read.
+        #
+        # Only after the merge landed, and only what this task wrote.
+        for name in found:
+            stray = tasks / name
+            try:
+                shutil.rmtree(stray)
+                if on_call:
+                    on_call(f"[skill] merged `{name}` into `{wanted}` and "
+                            f"removed the copy")
+            except OSError:
+                continue
+        return wanted
+
+    def snapshot_tracker(self, instance: Dict[str, Any], store_root: Path,
+                         workdir: Path, resolved: bool = False,
+                         on_call=None) -> str:
+        """Write this task's record into a skill, as the task ends.
+
+        The tracker is per task and dies with it. This is the one moment its
+        contents are allowed to cross that boundary, and they cross as a SKILL —
+        named by the convention the pre-attempt lookup reads, so the next run
+        on this subject finds it rather than starting again.
+        """
+        topic = self.research_topic(instance)
+        tracker = Path(workdir) / self.TRACKER_FILE
+        if not tracker.is_file():
+            # No record is not a reason to leave nothing behind. A task that
+            # passed on try 1 may never have needed a second phase, and one
+            # that died early still knows its subject failed — both are worth
+            # more to a later run than an absent skill, which is
+            # indistinguishable from a subject nobody has ever tried.
+            if on_call:
+                on_call("[learn] no record to snapshot — writing the skill "
+                        "from the attempt evidence instead")
+        skill = self.task_skill_name(topic)
+        if on_call:
+            on_call(f"[learn] snapshotting the task record into `{skill}` "
+                    f"({'solved' if resolved else 'not solved'})")
+        prompt = self.SNAPSHOT_PROMPT.format(
+            topic="{topic}", tracker=str(tracker), skill=skill,
+            outcome="SOLVED" if resolved else "NOT SOLVED")
+        evidence = [p for p in (tracker,
+                                Path(workdir) / "attempt-1" / "attempt-notes.md",
+                                Path(workdir) / "attempt-1" / "exchange.md")
+                    if p.is_file()]
+        self.standalone_stage(instance, store_root, workdir, prompt,
+                              attachments=[str(p) for p in evidence],
+                              timeout_s=self.FINALIZE_BUDGET_S,
+                              agent=self.filer_agent_name, phase="learn",
+                              on_call=on_call)
+        return skill
+
+    def research_from_tracker(self, instance: Dict[str, Any], store_root: Path,
+                              workdir: Path, attempt_index: int = 1,
+                              on_call=None) -> Dict[str, Any]:
+        """Diagnose the open failure and write the fix into the task's skill.
+
+        The sequential pipeline's research: one pass, one subject — whatever the
+        tracker has under `Open`. It does not plan, fan out, or generate
+        candidates. It reads the record, works out the fix, and updates the
+        skill the next attempt will load.
+
+        Bounded, and the bound grows. A first pass gets five minutes because a
+        diagnosis that needs longer has usually lost its subject; a pass that
+        runs out reports where it got to and the next one is given more, which
+        is a better trade than starting long and never learning whether long was
+        needed.
+        """
+        topic = self.research_topic(instance)
+        tracker = Path(workdir).parent / self.TRACKER_FILE
+        # THE name the next attempt looks up: the task's own slug.
+        #
+        # One skill per task, named after the task — there is no second kind to
+        # distinguish it from, so a `solution-` prefix only creates ways for
+        # the writer and the reader to disagree. They did: research wrote
+        # `solution-<topic>-solution` while `best_skill_for` looked up
+        # `solution-<topic>`, and measured live, try 2 loaded the skill the
+        # LEARN pass had left after try 1, re-applied the same change, and the
+        # harness reported `try 2 re-applies the change from try 1 — the
+        # diagnosis did not move`. The diagnosis had moved; it was filed where
+        # no reader would look.
+        skill = self.task_skill_name(topic)
+        budget = int(self.RESEARCH_BUDGET_S
+                     * (self.RESEARCH_BUDGET_MULTIPLE ** max(0, attempt_index - 2)))
+        if on_call:
+            on_call(f"[research] diagnosing the open failure, {budget}s, "
+                    f"writing into `{skill}`")
+        report = Path(workdir) / f"research-{attempt_index}.md"
+        prompt = self.TASK_RESEARCH_PROMPT.format(
+            topic="{topic}", tracker=str(tracker), skill=skill, budget=budget,
+            report=str(report))
+        # The record AND the task's whole conversation.
+        #
+        # The record is the organised view — problem, approaches, what worked,
+        # what did not — and it is what research reads first. The conversation
+        # is the unabridged one, and it is attached so that a diagnosis can go
+        # back to what was actually said rather than re-deriving it. Without
+        # it, research repeats work the task has already done: the record is
+        # organised by design rather than exhaustive in order, so the
+        # conversation is where a diagnosis goes for the exact wording of
+        # something the record has summarised.
+        attachments = [str(p) for p in (
+            tracker,
+            Path(workdir).parent / "conversation.md",
+            Path(workdir).parent / "conversation-summary.md",
+        ) if p.is_file()]
+        started = time.time()
+        # Runs as the FILER: it can read the code and the record, and its one
+        # write is the skill. It cannot patch the repository, which is the
+        # difference between "propose a fix for the next attempt to execute"
+        # and "become the next attempt".
+        stdout = self.standalone_stage(
+            instance, store_root, workdir, prompt, attachments=attachments,
+            timeout_s=budget, phase="research", agent=self.filer_agent_name,
+            on_call=on_call)
+        outcome = self.parse_events(stdout, AttemptOutcome())
+        # The three lines, echoed once at the end so the pass can be read off
+        # the trace even when its narration scrolled past.
+        # Matched at the START of a line, and only when it reads as a report.
+        #
+        # `if marker in line` matched the agent QUOTING the instruction back:
+        # measured live, the trace showed ``APPROACH: `, `ANSWER:`\n6. I have
+        # 300`` — the format spec itself, parsed as a finding. A restatement of
+        # what it was asked to do is not a report of what it did.
+        found: Dict[str, str] = {}
+        steps: List[str] = []
+        for raw in self.assistant_text(stdout).splitlines():
+            # `**PROBLEM:**` is the same report as `PROBLEM:` — markdown
+            # emphasis is how a model writes a heading, and stripping only the
+            # left side left every value starting `** `.
+            line = raw.strip().lstrip("*-# ").strip()
+            for key in ("PROBLEM", "APPROACH", "ANSWER"):
+                if not line.startswith(f"{key}:") and not line.startswith(
+                        f"{key}**:"):
+                    continue
+                value = line.split(":", 1)[1].strip().lstrip("*").strip()
+                value = value.strip('"\'`,')
+                # A value that names another marker, or is mostly punctuation,
+                # is the spec being echoed rather than an answer.
+                if not value or len(value) < 8:
+                    continue
+                if any(other + ":" in value
+                       for other in ("PROBLEM", "APPROACH", "ANSWER")):
+                    continue
+                # PROBLEM and ANSWER are stated once; APPROACH is stated before
+                # each thing tried, and the SEQUENCE is the audit. Keeping only
+                # the first threw away exactly what shows a pass going in
+                # circles — the same approach twice in different words.
+                if key == "APPROACH":
+                    steps.append(value[:200])
+                elif key not in found:
+                    found[key] = value[:200]
+        if steps:
+            found["APPROACH"] = steps[0]
+        if on_call:
+            if found.get("PROBLEM"):
+                on_call(f"[research] PROBLEM: {found['PROBLEM']}")
+            for n, step in enumerate(steps, 1):
+                on_call(f"[research] APPROACH {n}/{len(steps)}: {step}")
+            if found.get("ANSWER"):
+                on_call(f"[research] ANSWER: {found['ANSWER']}")
+            if not found and not steps:
+                on_call("[research] ** reported no PROBLEM/APPROACH/ANSWER — "
+                        "the pass cannot be audited from its trace")
+            if not found:
+                on_call("[research] ** reported no PROBLEM/APPROACH/ANSWER — "
+                        "the pass cannot be audited from its trace")
+        return {
+            "attempt": attempt_index,
+            "kind": "tracked",
+            "report": str(report),
+            "problem": found.get("PROBLEM", ""),
+            "approach": found.get("APPROACH", ""),
+            "approaches": steps,
+            "answer": found.get("ANSWER", ""),
+            "stages": ["research"],
+            "steps": outcome.steps,
+            "tokens_total": outcome.tokens_total,
+            "cost_usd": outcome.cost_usd,
+            "stage_seconds_total": round(time.time() - started, 1),
+            "skill": skill,
+            "budget_s": budget,
+        }
+
     def research(self, instance: Dict[str, Any], store_root: Path,
                  workdir: Path, attempt_index: int = 1,
                  notes: Optional[Path] = None, on_call=None,
@@ -2988,6 +3463,24 @@ class OpenCodeArm(Arm):
             # to detect.
             if self.uses_phronix:
                 prompt += PHRONIX_RETRY_SUFFIX
+                # The task's OWN record travels with it.
+                #
+                # Not the harness's raw judgement — that is the baseline's
+                # channel, and injecting it here would hand phronix the answer
+                # through the prompt and then credit its memory for it. The
+                # tracker is phronix's own product: what it worked out about
+                # this task, organised as the problem, how it has been
+                # approached, what worked and what did not.
+                #
+                # Passed rather than retrieved because it is THIS task's
+                # memory, not the library. A retry that has to go and find its
+                # own last attempt spends its opening turns rediscovering what
+                # it did an hour ago, and the record exists precisely so the
+                # next stage starts from what the last one established.
+                tracker = workdir.parent / self.TRACKER_FILE
+                if tracker.is_file():
+                    files += self.attachments([tracker])
+                    prompt += self.TRACKER_NOTE
             else:
                 prompt = TASK_PROMPT + RETRY_SUFFIX
                 files += self.attachments([feedback])
@@ -4148,6 +4641,113 @@ phase owes and how to mark a partial measurement as partial.
     #: throwing away the parallelism the cluster exists to provide.
     max_parallel_evaluations = int(
         os.environ.get("PHRONIX_BENCH_EVALUATIONS") or 6)
+
+    #: The headings the record must have, in this order.
+    #:
+    #: Known strings, so the shape is checkable rather than merely requested.
+    #: Every other layer of this pipeline learned the same lesson today: a rule
+    #: stated in a skill and checked nowhere is a rule the model follows when
+    #: it happens to. Measured on the first live record: it wrote `## Problem
+    #: Statement`, `## Attempts`, `### Attempt 1`, `## Key Notes` — good
+    #: content, and organised by WHEN things happened rather than by what they
+    #: mean, which is the transcript shape the record exists to replace.
+    TRACKER_SECTIONS = ("## The problem", "## How it has been approached",
+                        "## What worked", "## What did not work")
+
+    RESHAPE_PROMPT = """\
+The record at `{tracker}` is written, and it is not in the shape the next phase
+reads. Rewrite it — same content, correct headings.
+
+It must have these four, spelled exactly, in this order:
+
+{sections}
+
+Missing now: {missing}
+
+Keep every fact that is already there; this is a reorganisation, not a rewrite
+from evidence. Put each existing item under the heading it belongs to:
+
+* what is being solved, as it now stands -> **The problem**
+* one line per attempt or pass, what it tried -> **How it has been approached**
+* anything confirmed, with what confirmed it -> **What worked**
+* anything tried that failed, with WHY -> **What did not work**
+* everything else worth a line -> **Notes**
+
+A per-attempt heading like `### Attempt 1` is the shape to remove: it organises
+by when things happened, and the next phase needs them organised by what they
+mean.
+"""
+
+    #: Told to a retry that is handed the task's record.
+    TRACKER_NOTE = """
+
+`tracker.md` is attached: this task's own record, kept across attempts. It has
+the problem as it now stands, how it has been approached, what worked and what
+did not.
+
+Read it before you touch anything. What is under **What worked** is banked —
+keep it working. What is under **What did not work** has been tried, and the
+reason it failed is there; repeating it costs an attempt and changes nothing.
+"""
+
+    #: Where one task's running record lives. Per task, never shared.
+    TRACKER_FILE = "tracker.md"
+
+    #: Keeps the record. Can read and write ONE file; no Bash, Edit or Agent.
+    tracker_agent_name = "phronix-tracker"
+
+    #: Seconds the research pass gets on its first try, and the multiple each
+    #: later try earns.
+    #:
+    #: Short on purpose. A diagnosis that needs an hour has usually lost its
+    #: subject, and the loop is sequential — every minute here is a minute the
+    #: next attempt is not running. A pass that runs out says where it got to
+    #: and the next one is given longer, which is a better trade than starting
+    #: long and never learning whether long was needed.
+    RESEARCH_BUDGET_S = int(_tuned("research.task_research_seconds", 300))
+    RESEARCH_BUDGET_MULTIPLE = float(
+        _tuned("research.task_research_multiple", 1.5))
+
+    TRACK_PROMPT = """\
+Fold what just happened into this task's record.
+
+`skill_load("phronix-task-tracker")` is your first action and that skill is the
+method; this message is only the input.
+
+Task: `{topic}`
+Phase that just ran: **{phase}** ({cost})
+The record: `{tracker}` — create it if it is not there yet.
+
+Note what this phase COST under **How it has been approached**, beside what it
+tried: a stage that took twelve minutes to reach the same place as one that
+took two is a fact about the approach, and only the record can hold it.
+
+Everything else you need is attached. Rewrite the whole record, reorganised
+so nothing is lost and everything is where the next phase will look. Do
+not attempt the task, do not fix anything, do not research.
+"""
+
+    TASK_RESEARCH_PROMPT = """\
+This task attempted and did not fully succeed. Diagnose the open failure and
+write the fix into the task's solution skill.
+
+`skill_load("phronix-task-research")` is your first action and that skill is the
+method; this message is only the input.
+
+Task: `{topic}`
+The record: `{tracker}` — the problem, how it has been approached, what worked,
+what did not. Read it first: it is there so you do not repeat what this task
+has already done.
+The task's conversation is attached too, unabridged, for when the record has
+compacted away a detail you need.
+The skill to update: `{skill}`
+
+You have {budget}s. `I5` says what to do if that is not enough.
+
+Say what you are doing as you do it — `PROBLEM:` first, `APPROACH:` before
+each thing you try, `ANSWER:` last — and write the same three into `{report}`.
+`I6` says why the trace needs them.
+"""
 
     def research(self, instance: Dict[str, Any], store_root: Path,
                  workdir: Path, attempt_index: int = 1,
@@ -6031,17 +6631,26 @@ It is the plan itself, not background reading.
             return bool(name) and any((root / name / "SKILL.md").is_file()
                                       for root in roots)
 
-        # 1. The merged solution: the answer plus a link to every candidate.
+        # 1. The task's OWN skill. One task, one skill, named after the task.
+        #
+        # Checked before anything else because it is what the tracked loop
+        # writes — research updates it between attempts and the snapshot closes
+        # it out — so it is both the most current and the only one guaranteed
+        # to exist by convention rather than by a pass having happened to run.
+        if on_disk(here):
+            return here
+
+        # 2. The merged solution from the parallel pipeline, when that ran.
         merged = f"solution-{here}"
         if on_disk(merged):
             return merged
 
-        # 2. What the record points at — only useful once a record exists.
+        # 3. What the record points at — only useful once a record exists.
         named = self._in_store(store_root, research_mod.topic_skill, topic) or ""
         if named:
             return named
 
-        # 3. THE CANDIDATES, then the topic's own skill, found by NAME.
+        # 4. THE CANDIDATES, found by NAME.
         #
         # Steps 1 and 2 both depend on a research record, and a record does not
         # survive a run unless its session was folded into the common folder.
@@ -6618,8 +7227,7 @@ It is the plan itself, not background reading.
         # The name the pre-attempt lookup will search for, computed here so the
         # writer and the reader cannot disagree about it.
         topic = self.research_topic(instance)
-        solution = "solution-" + re.sub(r"[^a-z0-9]+", "-",
-                                        str(topic).lower()).strip("-")
+        solution = self.task_skill_name(topic)
         command = self.agent_command(
             self.LEARN_PROMPT.format(topic="{topic}", solution=solution),
             checkout,

@@ -30,8 +30,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .arms import ARM_ORDER, Arm, AttemptOutcome, build as build_arm
-from .isolation import (DEFAULT_IMAGE_TEMPLATE, ContainerSession, IsolationError,
-                        Runtime, fresh_store, promote_store, seed_store,
+from .isolation import (
+    DEFAULT_IMAGE_TEMPLATE, ContainerSession, IsolationError,
+                        Runtime, fresh_store, promote_store,
+                        promote_to_source, seed_store,
                         snapshot_store, store_inventory)
 from .metrics import Attempt, TaskResult, append_result
 from .trace import Tracer
@@ -135,6 +137,22 @@ class RunConfig:
     #: The default is the opposite: solve from a remembered skill if there is
     #: one, plainly if there is not, and research only once that has failed.
     research_first: bool = False
+    #: Which research pipeline runs: "sequential" (the default) or "parallel".
+    #:
+    #: sequential — the tracked loop. Check for a skill, attempt, evaluate,
+    #:   fold the result into this task's tracker record, and either write the
+    #:   solution (it passed) or hand the open failure to research (it did not),
+    #:   which updates the task's skill for the next attempt. One thing at a
+    #:   time, until progress stops.
+    #: parallel — the earlier pipeline: plan emits ideas, each idea is refined,
+    #:   built and tried on its own thread, pairs are combined into super-ideas,
+    #:   and the first pass stops production.
+    #:
+    #: Both are kept so the two can be compared on the same tasks. The
+    #: sequential loop is the default because the parallel one has a standing
+    #: dependency the measurements never satisfied: it needs the planner to
+    #: record ideas, and across every run measured it recorded none.
+    pipeline: str = "sequential"
     #: Isolate this run's research in its own folder, invisible to reads unless
     #: reuse is on. Empty means write straight into the common folder.
     research_session: str = ""
@@ -537,6 +555,20 @@ def _failure_only(text: str) -> str:
         start -= 1
     kept = [line for line in lines[start:] if not line.strip().endswith("... ok")]
     return "\n".join(kept).strip()
+
+
+def _patch_text(attempt_dir: Path) -> str:
+    """What an attempt changed, read from where the runner wrote it.
+
+    `Attempt` has no `patch` field, and `attempt.patch` raised AttributeError
+    on every evaluation turn of every run — so no task conversation ever
+    recorded what an attempt did, and the only sign was one trace line.
+    """
+    path = Path(attempt_dir) / "patch.diff"
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _feedback_note(attempt_index: int, previous: Dict[str, Any]) -> str:
@@ -1998,7 +2030,17 @@ class Runner:
                 try:
                     arm.record_verdict(
                         workdir, f"evaluation of attempt {attempt_index}",
-                        verdict=attempt.verdict, patch=attempt.patch or "",
+                        # The patch lives on the OUTCOME, not the attempt.
+                        #
+                        # `Attempt` has no `patch` field, so this raised
+                        # AttributeError every single time — every evaluation
+                        # turn was missing from every task conversation in
+                        # every run, and the only sign was one trace line.
+                        # The conversation is what the next attempt inherits,
+                        # so this cost each retry the record of what the last
+                        # one changed and what the tests said about it.
+                        verdict=attempt.verdict,
+                        patch=_patch_text(workdir / f"attempt-{attempt_index}"),
                         skill=getattr(arm, "pinned_skill", ""),
                         subject_dir=arm.subject_dir(
                             workdir / f"attempt-{attempt_index}"))
@@ -2126,6 +2168,33 @@ class Runner:
         else:
             if self.config.until_pass and not result.resolved:
                 result.stopped_early = f"hit the {ceiling}-attempt ceiling"
+
+        # The task is over. Turn what it learned into something that outlives it.
+        #
+        # The tracker is per task and dies with it — that isolation is the
+        # point, because an established fact from one task is an assumption in
+        # another. So the last act of a task is to snapshot the record into a
+        # skill: what was established, what remained open, what was ruled out.
+        #
+        # Written whether the task passed or not. A task that failed after four
+        # attempts knows more about its subject than one that passed on the
+        # first, and throwing that away is why a later run on the same subject
+        # starts from nothing.
+        if (str(getattr(self.config, "pipeline", "sequential")).lower()
+                != "parallel" and getattr(arm, "uses_phronix", False)):
+            try:
+                arm.ensure_task_skill(
+                    instance, store_root, workdir,
+                    on_call=((lambda text: _say("learn", text))
+                             if tracer else None))
+                arm.snapshot_tracker(
+                    instance, store_root, workdir,
+                    resolved=bool((last_verdict or {}).get("resolved")),
+                    on_call=((lambda text: _say("learn", text))
+                             if tracer else None))
+            except Exception as exc:      # a snapshot that fails is not a failed task
+                if tracer:
+                    tracer.event("learn", f"could not snapshot the record: {exc}")
 
         # Two tasks in a row with no container is the host, not the tasks.
         #
@@ -2262,6 +2331,21 @@ class Runner:
                         pass    # a progress bonus must never break the task
 
                 self._sync_research_session(quiet=True, store_root=store_root)
+                # Into the SOURCE tree, always — `--fresh` and `--no-carry`
+                # included. The project layer is gitignored, so everything a
+                # run learned lived exactly as long as its checkout and a clone
+                # started from nothing. `--fresh` is unaffected: it filters on
+                # READ, keeping the framework's own tools and hiding bundled
+                # task answers, so a from-scratch run still starts clean.
+                try:
+                    into_src = promote_to_source(store_root)
+                    if into_src.get("promoted") and tracer:
+                        tracer.event("promoted",
+                                     f"{len(into_src['promoted'])} file(s) into "
+                                     f"{into_src.get('destination', 'the source tree')}")
+                except Exception as exc:
+                    if tracer:
+                        tracer.event("promote-failed", f"source tree: {exc}"[:200])
                 try:
                     promoted = promote_store(store_root,
                                              Path(self.config.carry_root))
@@ -2581,10 +2665,65 @@ class Runner:
                     trial = self.trial_runner(
                         arm, instance, store_root, attempt_dir,
                         baseline_for=session, tracer=tracer, narrate=narrate)
-                research = (None if skip else
-                            arm.research(instance, store_root, attempt_dir,
-                                         attempt_index=attempt_index, notes=notes,
-                                         on_call=narrate, trial=trial))
+                tracked = str(getattr(self.config, "pipeline", "sequential")
+                              ).lower() != "parallel"
+                if skip:
+                    research = None
+                elif tracked and getattr(arm, "uses_phronix", False):
+                    # The tracked loop: one subject, taken from this task's own
+                    # record. No plan, no fan-out, no candidates — the record
+                    # says what is open and the pass fixes that.
+                    research = arm.research_from_tracker(
+                        instance, store_root, attempt_dir,
+                        attempt_index=attempt_index, on_call=narrate)
+                    attempt.stages.append({
+                        "name": "research",
+                        "steps": int((research or {}).get("steps") or 0),
+                        "tokens_output": int((research or {}).get("tokens_total") or 0),
+                        "elapsed_s": float((research or {}).get("stage_seconds_total") or 0),
+                        "note": (research or {}).get("answer", "")[:40],
+                    })
+                    # The diagnosis is worth nothing under a name nothing
+                    # reads: check before the next attempt looks it up.
+                    try:
+                        arm.ensure_task_skill(
+                            instance, store_root, attempt_dir,
+                            on_call=narrate)
+                    except Exception as exc:
+                        if tracer:
+                            tracer.event("skill", f"could not re-file: {exc}")
+                    # And record what research itself concluded. Every stage
+                    # goes into the record, or the next pass cannot see that a
+                    # diagnosis has already been made and rejected.
+                    try:
+                        # What research actually produced, or the tracker is
+                        # recording a stage it cannot see. It had no evidence
+                        # at all here: the report it wrote and the skill it
+                        # updated are the whole output of the pass, and both
+                        # were being withheld from the one agent whose job is
+                        # to write down what happened.
+                        seen = [Path(p) for p in
+                                ((research or {}).get("report", ""),
+                                 arm.solution_skill_path(
+                                     store_root, arm.research_topic(instance)))
+                                if p]
+                        arm.track(instance, store_root, attempt_dir,
+                                  phase="research",
+                                  cost=f"try {attempt_index}, "
+                                       f"{(research or {}).get('stage_seconds_total', '?')}s "
+                                       f"of {(research or {}).get('budget_s', '?')}s",
+                                  evidence=[p for p in seen if p.is_file()],
+                                  on_call=((lambda text: _say("track", text))
+                                           if tracer else None))
+                    except Exception as exc:
+                        if tracer:
+                            tracer.event("track",
+                                         f"could not record the research: {exc}")
+                else:
+                    research = arm.research(
+                        instance, store_root, attempt_dir,
+                        attempt_index=attempt_index, notes=notes,
+                        on_call=narrate, trial=trial)
                 # Research that did nothing at all is catastrophic, not a bad
                 # result. Zero tool calls means the agent never started: a bad
                 # command, a dead endpoint, a missing binary. A research pass
@@ -2760,6 +2899,38 @@ class Runner:
                 else:
                     outcome = arm.generate(instance, store_root, attempt_dir,
                                            container, on_call=narrate_attempt)
+                # The record covers what the attempt DID, not only how it was
+                # judged. A verdict says a test failed; the attempt's own diff
+                # and account say what was tried, and "tried and did not work"
+                # is what stops the next attempt trying it again.
+                if (str(getattr(self.config, "pipeline", "sequential")).lower()
+                        != "parallel" and getattr(arm, "uses_phronix", False)):
+                    try:
+                        (attempt_dir / "attempt-diff.patch").write_text(
+                            outcome.patch or "(the agent produced no diff)\n",
+                            encoding="utf-8")
+                        attempt.stages.append({
+                            "name": "attempt",
+                            "steps": int(outcome.steps or 0),
+                            "tokens_input": int(outcome.tokens_input or 0),
+                            "tokens_output": int(outcome.tokens_output or 0),
+                            "elapsed_s": round(time.time() - started, 1),
+                        })
+                        arm.track(instance, store_root, attempt_dir,
+                                  phase="attempt",
+                                  cost=f"try {attempt_index}, "
+                                       f"{outcome.steps} steps, "
+                                       f"{round(time.time() - started)}s",
+                                  evidence=[attempt_dir / "attempt-diff.patch",
+                                            attempt_dir / "prompt.md"],
+                                  on_call=((lambda text: _say("track", text))
+                                           if tracer else None))
+                    except Exception as exc:
+                        if tracer:
+                            tracer.event("track",
+                                         f"could not record the attempt: {exc}")
+
+                evaluation_started = time.time()
                 if tracer:
                     tracer.begin("evaluate", "running the instance's tests")
 
@@ -2890,6 +3061,42 @@ class Runner:
                          f"{', '.join(failing) or 'unknown'}"))
 
         arm.learn(instance, store_root, attempt_dir, outcome, verdict)
+
+        # Fold this attempt into the task's own record, before the next try.
+        #
+        # Its own stage, and per task. `learn` above writes what crosses task
+        # boundaries — a solution skill, a memory — and the always-on learner
+        # keeps working across everything in the background. The tracker is
+        # neither: it is this task's memory, holding what is established, what
+        # is still open and what has been ruled out, so the next attempt and
+        # the research pass between them read a page instead of a transcript.
+        if (str(getattr(self.config, "pipeline", "sequential")).lower()
+                != "parallel" and getattr(arm, "uses_phronix", False)):
+            try:
+                attempt.stages.append({
+                    "name": "evaluate",
+                    "elapsed_s": round(time.time() - evaluation_started, 1),
+                    "note": f"{(verdict or {}).get('fail_to_pass_passed', '?')}"
+                            f"/{(verdict or {}).get('fail_to_pass_total', '?')} target",
+                })
+                arm.track(instance, store_root, attempt_dir, phase="evaluate",
+                          cost=f"try {attempt_index}, "
+                               f"{(verdict or {}).get('fail_to_pass_passed', '?')}"
+                               f"/{(verdict or {}).get('fail_to_pass_total', '?')}"
+                               f" target tests",
+                          # `exchange.md` carries what the tests PRINTED — the
+                          # assertion and the traceback — and `evaluation.json`
+                          # names every target test by outcome. The digest
+                          # alone says a test failed; these say which, and why.
+                          evidence=[attempt_dir / "attempt-notes.md",
+                                    attempt_dir / "exchange.md",
+                                    attempt_dir / "evaluation.json"],
+                          on_call=((lambda text: _say("track", text))
+                                   if tracer else None))
+            except Exception as exc:      # a record that fails is not a failed task
+                if tracer:
+                    tracer.event("track", f"could not update the record: {exc}")
+
         attempt.verdict = verdict
         return attempt
 

@@ -99,6 +99,7 @@ while [ $# -gt 0 ]; do
     --nodes)    NODES="$2"; shift 2;;
     # Passed through rather than interpreted: the default is `auto`, which
     # measures the fleet, and a group has no better information than that.
+    --pipeline) EXTRA+=(--pipeline "$2"); shift 2;;
     --budget-scale) EXTRA+=(--budget-scale "$2"); shift 2;;
     --cluster)  CLUSTER="${2:-$PROJECT/$FLEET/cluster.json}"; shift 2;;
     --local)    CLUSTER=$PROJECT/$FLEET/cluster.json; shift;;

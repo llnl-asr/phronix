@@ -60,6 +60,13 @@ class Attempt:
     #: it made pass, and whether it solved the task. Reported because "plan B
     #: got two of three where the top-ranked plan got none" is the finding, and
     #: a single adopted patch hides it.
+    #: What each STAGE of this try cost: name, steps, tokens, seconds.
+    #:
+    #: A try's totals say it took nine minutes; they do not say whether that
+    #: was the attempt thinking, the evaluation running tests, or research
+    #: diagnosing. Those are different problems with different fixes, and the
+    #: totals hide which one you have.
+    stages: List[Dict[str, Any]] = field(default_factory=list)
     trials: List[Dict[str, Any]] = field(default_factory=list)
     #: The skill holding the solution this attempt produced.
     #:

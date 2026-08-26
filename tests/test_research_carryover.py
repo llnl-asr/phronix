@@ -19,6 +19,7 @@ nothing at all.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -4534,18 +4535,27 @@ def test_a_solved_task_is_recognised_by_a_later_run(tmp_path, monkeypatch):
     (skills / "pallets-flask-4045" / "SKILL.md").write_text("# topic skill\n")
     assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == "pallets-flask-4045"
 
-    # A candidate written by a previous pass outranks the bare topic skill: it
-    # is the one that was actually raced against the tests.
+    # The task's OWN skill outranks a candidate from the parallel pipeline.
+    #
+    # It used to be the other way round, on the reasoning that a candidate was
+    # actually raced against the tests. The tracked loop changed what the bare
+    # name means: it is the skill research updates between attempts and the
+    # snapshot closes out, so it is the most current thing there is — where a
+    # candidate is a frozen artefact of one earlier pass.
     cand = skills / "solution-pallets-flask-4045-reject-dotted-name"
     cand.mkdir(parents=True)
     (cand / "SKILL.md").write_text("# candidate\n")
-    assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == cand.name
+    assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == "pallets-flask-4045"
 
-    # The merged solution outranks both — it carries the answer plus links to
-    # every candidate tried.
+    # The merged solution is found when the task has no skill of its own —
+    # which is the parallel pipeline's shape, where the merge IS the output.
+    # With a task skill present that one wins, for the same reason it beats a
+    # candidate: it is what the tracked loop keeps current.
     merged = skills / "solution-pallets-flask-4045"
     merged.mkdir(parents=True)
     (merged / "SKILL.md").write_text("# merged\n")
+    assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == "pallets-flask-4045"
+    shutil.rmtree(skills / "pallets-flask-4045")
     assert arm.best_skill_for(tmp_path, "pallets__flask-4045") == merged.name
 
     # A different problem must still find nothing — this is a lookup by the
@@ -6002,3 +6012,544 @@ def test_the_refined_unit_is_an_idea_not_a_step_of_one():
     assert 'aspect="{step}"' in Arm.REFINE_IDEA_PROMPT
     # And it still knows the tree is patched.
     assert "working tree is NOT the original code" in Arm.REFINE_IDEA_PROMPT
+
+
+def test_the_tracked_pipeline_is_a_loop_over_one_task_record():
+    """Two skills, no prompts carrying the method, and a record per task.
+
+    The pipeline: check for a skill, attempt, evaluate, fold the result into
+    this task's record, then either write the solution (it passed) or hand the
+    open failure to research (it did not), which updates the skill the next
+    attempt loads. Sequential, until progress stops.
+    """
+    from pathlib import Path as _P
+
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+    from tests.benchmark.runner import RunConfig
+
+    # Sequential is the default; the parallel pipeline stays reachable.
+    assert RunConfig(tasks=[], arms=[]).pipeline == "sequential"
+
+    skills = _P("src/phronix/.phronix/skills")
+    for name in ("phronix-task-tracker", "phronix-task-research"):
+        assert (skills / name / "SKILL.md").is_file(), name
+
+    # The prompts are POINTERS at those skills, not the method itself.
+    for prompt, skill in ((Arm.TRACK_PROMPT, "phronix-task-tracker"),
+                          (Arm.TASK_RESEARCH_PROMPT, "phronix-task-research")):
+        assert skill in prompt
+        assert len(prompt) < 900, len(prompt)
+
+    # The tracker is its own stage, run by an agent that can WRITE the record
+    # and do nothing else. The filer was tried first and could not: it has
+    # `skill_write` and no `Write`, so the stage ran, said "folding into
+    # tracker.md", and produced no file.
+    source = _P("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    track = source[source.index("    def track(self"):]
+    assert "agent=self.tracker_agent_name" in track[:2500]
+    # And in the TASK directory, not the checkout — the source is not evidence
+    # of what happened, and it is what convinced five earlier stages the task
+    # was already done.
+    assert "cwd=tracker.parent" in track[:2500]
+
+    tools = set(Arm._agent_spec(Arm.tracker_agent_name).get("tools") or [])
+    arm = Arm.__new__(Arm)
+    denied = set(" ".join(
+        arm._denial_flags(Arm.tracker_agent_name)).split()[-1].split(","))
+    assert "Write" in tools                       # it can write the record
+    assert {"Bash", "Edit", "Agent", "Task"} <= denied   # and nothing else
+
+    # It runs after the attempt AND after the evaluation: a verdict says a test
+    # failed, the attempt's own diff says what was tried.
+    runner_source = _P("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    # Every stage goes into the record — attempt, evaluate, research — or the
+    # next pass cannot see that a diagnosis has already been made and rejected.
+    assert runner_source.count("arm.track(") == 3
+    assert 'phase="research"' in runner_source
+    assert 'phase="attempt"' in runner_source
+    assert 'phase="evaluate"' in runner_source
+
+    # Per task, and spanning attempts — an attempt-local record could not carry
+    # what the last attempt found to the next one.
+    assert 'tracker = Path(workdir).parent / self.TRACKER_FILE' in source
+
+    # Research is bounded and the bound grows with each try.
+    assert Arm.RESEARCH_BUDGET_S == 300
+    assert Arm.RESEARCH_BUDGET_MULTIPLE > 1.0
+    assert "self.RESEARCH_BUDGET_MULTIPLE ** max(0, attempt_index - 2)" in source
+
+    # And the record becomes a skill when the task ends, whichever way it went.
+    snapshot = source[source.index("    def snapshot_tracker(self"):]
+    assert "resolved" in snapshot[:1200]
+    # The final skill has a fixed shape, built from the fix AND the record:
+    # what it solves, the key idea, the instructions, the constraints, and the
+    # pitfalls — that last one is the part only this task can write.
+    snap = " ".join(Arm.SNAPSHOT_PROMPT.split())
+    for section in ("What problem it solves", "The key idea",
+                    "Instructions to solve it", "Constraints and rules",
+                    "Pitfalls and lessons"):
+        assert section in snap, section
+    assert "Write it whether the task passed or not" in snap
+
+
+def test_research_reads_the_record_and_the_whole_conversation():
+    """Research must not repeat work the task has already done.
+
+    The record is compacted by design — problem, approaches, what worked, what
+    did not — and compaction loses detail a diagnosis sometimes needs. So the
+    task's unabridged conversation goes in beside it: the record says what has
+    been tried, the conversation says exactly what was said when it was.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    prompt = " ".join(Arm.TASK_RESEARCH_PROMPT.split())
+    assert "so you do not repeat what this task has already done" in prompt
+    assert "unabridged" in prompt
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    research = source[source.index("    def research_from_tracker(self"):]
+    assert 'Path(workdir).parent / "conversation.md"' in research[:4000]
+
+
+def test_the_record_is_organised_as_problem_approach_worked_and_not():
+    """Every stage leaves the record in a shape the next stage can act on.
+
+    Not a log of what happened: the PROBLEM as it now stands, how it has been
+    approached, what worked, what did not. By the second attempt the problem is
+    no longer the issue text — a phase that starts from the issue when half of
+    it is solved re-solves the half that is done.
+    """
+    skill = (Path("src/phronix/.phronix/skills/phronix-task-tracker")
+             / "SKILL.md").read_text(encoding="utf-8")
+
+    for heading in ("## The problem", "## How it has been approached",
+                    "## What worked", "## What did not work"):
+        assert heading in skill, heading
+    # Order matters: the next phase reads from the top and may not finish.
+    assert (skill.index("## The problem")
+            < skill.index("## How it has been approached")
+            < skill.index("## What worked")
+            < skill.index("## What did not work"))
+    # "What did not work" carries the reason, or it reads as "not tried hard
+    # enough" and gets tried again.
+    assert "it needs\nthe *why*" in skill
+
+
+def test_a_standalone_stage_that_cannot_start_says_so():
+    """A stage that never ran must not look like one that ran and found nothing.
+
+    `standalone_stage` runs the tracker, the tracked research pass and the
+    end-of-task snapshot. It swallowed every exception and returned "", so a
+    `NameError` on its first line was reported as a completed stage: measured
+    live, `research> diagnosing the open failure, 300s` and the tracker call
+    after it both landed in the same second, three times, and no record was
+    ever written.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("    def standalone_stage(self"):
+                  source.index("    def research_from_tracker(self")]
+
+    # The runner streams (see stream_opencode, which closes stdin itself) —
+    # the two faults this test was written for were a missing `subprocess`
+    # import and an inherited stdin, and moving to the shared runner removes
+    # both by construction.
+    assert "stream_opencode(" in body
+    # And both failure modes are reported, not swallowed.
+    assert "could not run:" in body
+    assert "exited rc=" in body
+
+
+def test_the_tracked_stages_report_what_they_are_doing():
+    """A five-minute stage that prints nothing is indistinguishable from a dead one.
+
+    `standalone_stage` used `subprocess.run`, which returns nothing until the
+    process exits. Measured live: the trace showed `diagnosing the open
+    failure, 300s` and then silence — the stage was working and there was no
+    way to see it, or to see it stop.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("    def standalone_stage(self"):
+                  source.index("    def research_from_tracker(self")]
+
+    # The same streaming runner every research stage already uses.
+    assert "stream_opencode(" in body
+    assert "subprocess.run(" not in body
+
+    # And every caller passes its narrator through, or the stream has nowhere
+    # to go.
+    for caller in ("def track(self", "def research_from_tracker(self",
+                   "def snapshot_tracker(self"):
+        chunk = source[source.index(caller):]
+        head = chunk[:chunk.index("\n    def ", 10)]
+        assert "on_call=on_call" in head, caller
+
+
+def test_research_reports_its_problem_approach_and_answer():
+    """A pass has to be auditable from its trace, not from a transcript.
+
+    `research> diagnosing the open failure, 300s` and then silence says nothing
+    about whether the pass had one subject or three, what it checked, or why it
+    concluded what it did. Three lines make a wrong answer traceable to the step
+    that produced it — and make a loop going in circles visible as the same
+    APPROACH twice in different words.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    prompt = Arm.TASK_RESEARCH_PROMPT
+    for key in ("PROBLEM:", "APPROACH:", "ANSWER:"):
+        assert key in prompt, key
+    assert "{report}" in prompt
+    # The format is the harness's parsing contract, so it stays in the prompt;
+    # the reasoning lives in the skill, where the pointer guard keeps it.
+    assert len(prompt) < 900, len(prompt)
+    skill = (Path("src/phronix/.phronix/skills/phronix-task-research")
+             / "SKILL.md").read_text(encoding="utf-8")
+    assert "### I6" in skill
+    assert "cannot be audited" in skill
+    assert "ANSWER: could not confirm" in skill
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    research = source[source.index("    def research_from_tracker(self"):]
+    # Echoed once at the end, so the pass reads off the trace even when its
+    # narration has scrolled past.
+    # PROBLEM and ANSWER once; every APPROACH in sequence, numbered — the
+    # sequence is the audit, and keeping only the first threw away exactly what
+    # shows a pass going in circles.
+    assert 'APPROACH {n}/{len(steps)}' in research[:8000]
+    assert '[research] PROBLEM:' in research[:8000]
+    # And a pass that reported none of them says so, rather than looking like
+    # one that simply had nothing to report.
+    assert "reported no PROBLEM/APPROACH/ANSWER" in research[:8000]
+
+
+def test_one_task_one_skill_named_after_the_task():
+    """A fix filed under a name nothing reads is a fix that was never made.
+
+    There is no second kind of skill for a task to distinguish itself from, so
+    a `solution-` prefix only created ways for the writer and the reader to
+    disagree — and they did. Research wrote `solution-<topic>-solution` while
+    `best_skill_for` looked up `solution-<topic>`. Measured live: try 2 loaded
+    the skill the LEARN pass had left after try 1, re-applied the same change,
+    and the harness reported "try 2 re-applies the change from try 1 — the
+    diagnosis did not move". The diagnosis had moved. It was filed where no
+    reader would look.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    assert Arm.task_skill_name("django__django-13551") == "django-django-13551"
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    marker = "\n    def "
+    for who in ("    def research_from_tracker(self",
+                "    def snapshot_tracker(self"):
+        chunk = source[source.index(who):]
+        assert "self.task_skill_name(topic)" in chunk[:chunk.index(marker, 10)], who
+
+    # The reader checks the task's own skill FIRST.
+    reader = source[source.index("    def best_skill_for(self, store_root"):]
+    assert reader.index("if on_disk(here):") < reader.index('merged = f"solution-{here}"')
+
+    # Research reads code but writes only the skill: it proposes a fix for the
+    # next attempt to execute, it does not become the next attempt.
+    chunk = source[source.index("    def research_from_tracker(self"):]
+    assert "agent=self.filer_agent_name" in chunk[:chunk.index(marker, 10)]
+    tools = set(Arm._agent_spec(Arm.filer_agent_name).get("tools") or [])
+    arm = Arm.__new__(Arm)
+    denied = set(" ".join(
+        arm._denial_flags(Arm.filer_agent_name)).split()[-1].split(","))
+    assert "mcp__phronix__skill_write" in tools and "Read" in tools
+    assert {"Bash", "Edit", "Write"} <= denied
+
+
+def test_the_record_travels_with_the_task_between_stages():
+    """Each stage starts from what the last one established, not from scratch.
+
+    The record is written after every phase; passing it forward is what makes
+    that worth doing. A retry that has to rediscover its own last attempt
+    spends its opening turns on work an hour old.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+
+    # The retry attempt is handed it, with a note saying how to read it.
+    assert "tracker = workdir.parent / self.TRACKER_FILE" in source
+    note = " ".join(Arm.TRACKER_NOTE.split())
+    assert "What is under **What worked** is banked" in note
+    assert "repeating it costs an attempt and changes nothing" in note
+
+    # Research gets it too, alongside the unabridged conversation.
+    research = source[source.index("    def research_from_tracker(self"):]
+    assert "tracker," in research[:4000]
+
+    # And it stays phronix's OWN product: the raw harness judgement remains the
+    # baseline's channel, or the arm scores on a prompt injection rather than
+    # on its memory.
+    retry = source[source.index("        feedback = workdir / \"feedback.md\""):]
+    bare = retry[retry.index("            else:"):retry.index("        if plan:")]
+    assert "self.attachments([feedback])" in bare
+
+
+def test_the_audit_lines_are_reports_not_the_instruction_echoed_back():
+    """A restatement of what it was asked to do is not a report of what it did.
+
+    `if marker in line` matched the agent quoting the format spec. Measured
+    live, the trace showed ``APPROACH: `, `ANSWER:`\\n6. I have 300`` — the
+    instruction itself, parsed and displayed as a finding.
+    """
+    import textwrap
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    start = source.index("        found: Dict[str, str] = {}")
+    block = textwrap.dedent(source[start:source.index("        if on_call:", start)])
+
+    # The parser reads the agent's WORDS, so feed it the same stream shape the
+    # harness does.
+    from tests.benchmark.arms import ClaudePhronixArm as _Arm
+
+    said = ("Let me follow the format: `PROBLEM:`, `APPROACH:`, `ANSWER:`\n"
+            "PROBLEM: test_token_with_different_secret fails on a None email\n"
+            "- APPROACH: check whether get_email_field_name exists on the base user\n"
+            "ANSWER: use getattr(user, user.get_email_field_name(), '')")
+    stream = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": said}]}})
+    scope = {"Dict": dict, "stdout": stream, "self": _Arm}
+    exec(block, scope)                                  # noqa: S102 - the code under test
+    found = scope["found"]
+
+    assert found["PROBLEM"].startswith("test_token_with_different_secret")
+    # A leading bullet is still a report.
+    assert found["APPROACH"].startswith("check whether")
+    assert found["ANSWER"].startswith("use getattr")
+    # And the echoed spec contributed nothing.
+    for value in found.values():
+        assert "`" not in value and "ANSWER:" not in value
+
+
+def test_only_the_agents_own_words_are_parsed_for_the_audit_lines():
+    """The stream is JSON; only `text` blocks are what the agent said.
+
+    Reading raw stdout put envelope fragments into the trace and into the
+    record. Measured live:
+
+        PROBLEM: `, `ANSWER:`\\n6. I have 300 seconds to
+        complete this","signature":"EosHCrIBCBEYAipA...
+
+    — a base64 signature displayed as a finding, and written into `tracker.md`
+    as the diagnosis the next attempt was handed.
+    """
+    import json as _json
+
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    stream = "\n".join([
+        _json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "PROBLEM: token fails for CustomEmailField"}]}}),
+        _json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {}}]}}),
+        '{"signature":"EosHCrIBCBEYAipAlWquqv8h6J9pQ","type":"thinking"}',
+        "not json at all",
+        _json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "ANSWER: use get_email_field_name()"}]}}),
+    ])
+
+    said = Arm.assistant_text(stream)
+    assert said == ("PROBLEM: token fails for CustomEmailField\n"
+                    "ANSWER: use get_email_field_name()")
+    assert "signature" not in said and "tool_use" not in said
+
+    # And the audit parser reads that, not the raw stream.
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert "for raw in self.assistant_text(stdout).splitlines():" in source
+
+
+def test_every_tracked_stage_is_given_what_it_is_asked_to_record():
+    """A tracker with no evidence is recording a stage it cannot see.
+
+    `track:research` was called with none: the report research wrote and the
+    skill it updated are the whole output of that pass, and both were withheld
+    from the one agent whose job is writing down what happened.
+    """
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+
+    # The attempt: what it changed, and what it was asked.
+    assert 'attempt_dir / "attempt-diff.patch"' in source
+    # The evaluation: what the tests PRINTED and every target test by outcome.
+    # The digest alone says a test failed; these say which, and why.
+    assert 'attempt_dir / "exchange.md"' in source
+    assert 'attempt_dir / "evaluation.json"' in source
+    # Research: its report and the skill it wrote.
+    research_call = source[source.index('phase="research"') - 900:
+                           source.index('phase="research"') + 400]
+    assert '(research or {}).get("report", "")' in research_call
+    assert "solution_skill_path(" in research_call
+
+
+def test_the_record_reorganises_and_never_discards():
+    """The task's memory grows; what must not grow is disorder.
+
+    Compaction was the wrong instruction: a detail recorded three phases ago is
+    one the next phase does not have to rediscover, and nothing can know in
+    advance which detail that will be. An error message, a line number, a flag
+    that did not work — cheap to keep, expensive to re-derive.
+    """
+    skill = (Path("src/phronix/.phronix/skills/phronix-task-tracker")
+             / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "### I2 — Reorganise every time. Never discard." in skill
+    assert "**Nothing is dropped.**" in skill
+    # Merging keeps both facts, rather than choosing between them.
+    assert "become ONE entry holding both facts" in skill
+    # A contradicted belief MOVES between sections, carrying its evidence.
+    assert "moves from **What worked** to **What did not work**" in skill
+    # And the rule that a long record is not a reason to delete.
+    assert "not to delete" in skill
+
+    # The prompt and the agent ask for the same thing.
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+    assert "reorganised" in Arm.TRACK_PROMPT
+    agent = (Path("src/phronix/.phronix/agents/phronix-tracker.yaml")
+             ).read_text(encoding="utf-8")
+    assert "never shortened" in agent
+
+
+def test_the_record_shape_is_checked_not_merely_requested():
+    """A rule stated in a skill and checked nowhere is followed when convenient.
+
+    Measured on the first live record: it wrote `## Problem Statement`,
+    `## Attempts`, `### Attempt 1`, `## Key Notes` — good content, organised by
+    WHEN things happened rather than by what they mean, which is the transcript
+    shape the record exists to replace. A per-attempt heading is the tell: the
+    next one gets `### Attempt 2`, and a reader asking "what has been ruled
+    out?" has to read every section and work it out.
+    """
+    import tempfile
+
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    scratch = Path(tempfile.mkdtemp())
+    wrong = scratch / "wrong.md"
+    wrong.write_text("# t\n## Problem Statement\n## Attempts\n### Attempt 1\n")
+    assert Arm.missing_sections(wrong) == list(Arm.TRACKER_SECTIONS)
+
+    right = scratch / "right.md"
+    right.write_text("\n".join(Arm.TRACKER_SECTIONS))
+    assert Arm.missing_sections(right) == []
+
+    # A record that does not exist is missing all of them, not an error.
+    assert Arm.missing_sections(scratch / "absent.md") == list(Arm.TRACKER_SECTIONS)
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    track = source[source.index("    def track(self"):]
+    # Sent back once, naming what is missing...
+    assert "missing = self.missing_sections(tracker)" in track[:4000]
+    assert "self.RESHAPE_PROMPT.format(" in track[:4000]
+    # ...and a second failure is reported, not looped on: the content is there
+    # either way, and a record in the wrong shape beats no record.
+    assert "still = self.missing_sections(tracker)" in track[:4000]
+
+    reshape = " ".join(Arm.RESHAPE_PROMPT.split())
+    assert "this is a reorganisation, not a rewrite from evidence" in reshape
+    assert "`### Attempt 1` is the shape to remove" in reshape
+
+
+def test_the_task_skill_is_filed_under_the_name_the_lookup_asks_for():
+    """Told the exact name and given the tool, agents still invent their own.
+
+    Measured in one run: `django-django-13551` and `matplotlib-matplotlib-24970`
+    were written correctly, and beside them sat
+    `django-password-reset-token-email-invalidation` and
+    `matplotlib-24970-numpy-deprecation` — good content under names the lookup
+    will never ask for. matplotlib-24970 then opened its next attempt with "no
+    skill covers this task; solving from scratch" while its own diagnosis sat
+    in the store.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    rename = " ".join(Arm.RENAME_PROMPT.split())
+    # It says why a descriptive name fails, not just that it is wrong.
+    assert "A later run does not search for a skill" in rename
+    # And asks for a merge rather than a re-derivation.
+    assert "one task, one skill" in rename
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    check = source[source.index("    def ensure_task_skill(self"):]
+    # It only acts when the lookup would MISS, and finds what to merge.
+    assert "if self.best_skill_for(store_root, topic) == wanted:" in check[:3000]
+    assert "if not found:" in check[:3000]
+    # A second failure is reported, because the consequence is silent: the next
+    # run starts from scratch with the answer sitting in the store.
+    assert "will start from scratch" in check[:3000]
+
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    # Checked after research — before the next attempt looks it up — and again
+    # when the task ends.
+    assert runner.count("arm.ensure_task_skill(") == 2
+
+
+def test_a_run_always_saves_into_the_source_tree_and_fresh_still_reads_clean(tmp_path):
+    """Saving and reading are different questions.
+
+    Everything a run learned went to `/.phronix`, which is gitignored — so it
+    lived exactly as long as the checkout it was learned in, and a clone
+    started from nothing. Promotion into the packaged layer fixes that, and
+    would quietly undo `--fresh` if reading were not filtered: a bundled entry
+    is visible to every run by construction.
+    """
+    import os
+
+    from phronix.capabilities import TASK_CAPABILITY_DIR, visible_files
+    from tests.benchmark.isolation import SOURCE_DIRS, promote_to_source
+
+    # Answers and the research behind them — research is the expensive half.
+    assert SOURCE_DIRS == ("capabilities", "research")
+
+    source = Path("tests/benchmark/isolation.py").read_text(encoding="utf-8")
+    body = source[source.index("def promote_to_source("):]
+    # It never edits what the framework ships; a run ADDS to the source tree.
+    assert "Never overwrite what the framework ships" in body
+
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    # Unconditional: not behind `--no-carry`, which targets the project layer.
+    call = runner[runner.index("into_src = promote_to_source(") - 700:
+                  runner.index("into_src = promote_to_source(")]
+    assert "`--fresh` and `--no-carry`" in call
+
+    # And the read side: a bundled TASK ANSWER is hidden from a fresh run,
+    # while the framework's own tools stay — which is what `--fresh` means.
+    caps = Path("src/phronix/capabilities.py").read_text(encoding="utf-8")
+    assert "def is_task_answer(path: Path) -> bool:" in caps
+    assert 'f"/{TASK_CAPABILITY_DIR}/" in Path(path).as_posix()' in caps
+    assert "and not is_task_answer(path)" in caps
+
+
+def test_every_task_leaves_exactly_one_skill_however_it_ended():
+    """Pass on try 1, pass on try 3, or never pass — all owe a skill.
+
+    An absent skill is indistinguishable from a subject nobody has tried, so a
+    later run pays full price for work already done. And a task that leaves
+    FIVE splits every later retrieval: measured in one run, four tasks produced
+    fifteen skills, django alone contributing `django-django-13551` plus four
+    descriptively-named copies of the same answer.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+
+    # The copies are removed once the merge has landed — and only then.
+    check = source[source.index("    def ensure_task_skill(self"):]
+    body = check[:check.index("\n    def ", 10)]
+    assert body.index("if not landed:") < body.index("shutil.rmtree(stray)")
+    assert "Two skills for one subject split every read" in body
+
+    # A missing record is not a reason to leave nothing behind.
+    snap = source[source.index("    def snapshot_tracker(self"):]
+    assert "from the attempt evidence instead" in snap[:2000]
+
+    # And the snapshot runs whatever the outcome was.
+    assert "Write it whether the task passed or not" in " ".join(
+        Arm.SNAPSHOT_PROMPT.split())
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    call = runner[runner.index("arm.snapshot_tracker(") - 600:
+                  runner.index("arm.snapshot_tracker(")]
+    assert "A task that failed after four" in call

@@ -528,6 +528,60 @@ def _differs_from_bundled(path: Path, store_root: Path) -> bool:
         return True
 
 
+#: What a run always contributes back to the SOURCE tree, whatever else it does.
+#:
+#: Answers and the research behind them. The project layer that `carry_root`
+#: normally targets is `/.phronix`, which is gitignored — so everything a run
+#: learned lived exactly as long as the checkout it was learned in, and a
+#: clone started from nothing.
+#:
+#: `--fresh` still means what it says: `capabilities.visible_files` hides
+#: bundled TASK ANSWERS from a from-scratch run while keeping the framework's
+#: own tools. Saving and reading are different questions, and conflating them
+#: is what made "always keep it" and "start clean" look incompatible.
+SOURCE_DIRS = ("capabilities", "research")
+
+
+def promote_to_source(store_root: Path) -> Dict[str, Any]:
+    """Copy this run's capabilities and research into the packaged layer.
+
+    Always, and regardless of `--fresh` or `--no-carry`: research is the
+    expensive half of a run, and the point of keeping it is not paying for it
+    twice. What a fresh run is entitled to is a clean READ, which it still
+    gets.
+    """
+    from phronix.layers import bundled_root
+
+    store_root = Path(store_root)
+    try:
+        destination = Path(bundled_root())
+        destination.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:                     # a read-only install
+        return {"promoted": [], "error": str(exc)[:120]}
+
+    carried: List[str] = []
+    for kind in SOURCE_DIRS:
+        source = store_root / kind
+        if not source.is_dir():
+            continue
+        for path in sorted(source.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(store_root)
+            target = destination / relative
+            # Never overwrite what the framework ships. A run adds to the
+            # source tree; it does not edit it.
+            if target.exists() and kind == "capabilities" and "tasks" not in relative.parts:
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
+                carried.append(str(relative))
+            except OSError:
+                continue
+    return {"promoted": carried, "destination": str(destination)}
+
+
 def promote_store(store_root: Path, carry_root: Path) -> Dict[str, Any]:
     """Write what a run learned back into the durable project layer.
 

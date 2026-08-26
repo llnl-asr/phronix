@@ -91,6 +91,7 @@ while [ $# -gt 0 ]; do
     # having exercised it zero times. Measured on django__django-13551 under
     # Sonnet 5: both arms passed on try 1 in under a minute and no research
     # stage ran.
+    --pipeline)          EXTRA+=(--pipeline "$2"); shift 2;;
     --research-first)    EXTRA+=(--research-first); shift;;
     --parallel-tasks) PARALLEL_TASKS="$2"; EXTRA+=(--parallel-tasks "$2"); shift 2;;
     --limit)   EXTRA+=(--limit "$2"); shift 2;;

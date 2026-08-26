@@ -89,9 +89,25 @@ def visible_files() -> Dict[str, Path]:
         return found
     # Keyed by filename here and by module name in the registry — compare on
     # the stem, which is the one form both agree about.
+    def is_task_answer(path: Path) -> bool:
+        """Is this one task's answer, rather than a framework tool?"""
+        return f"/{TASK_CAPABILITY_DIR}/" in Path(path).as_posix()
+
+    # Bundled tools YES; bundled task ANSWERS no.
+    #
+    # Every run now promotes what it learned into the bundled layer, so that a
+    # finding survives a clone — the project layer is gitignored and never did.
+    # That would quietly undo `--fresh`, because a bundled entry is visible to
+    # every run by construction, and a from-scratch run would inherit the
+    # answers of every run before it while reporting that it started clean.
+    #
+    # The split is the same one the directory layout already makes: a tool that
+    # knows nothing about any task ships with the framework and is part of what
+    # `--fresh` means; a fix for one bug in one project is an answer, and an
+    # answer is exactly what a from-scratch run must not be given.
     return {name: path for name, path in found.items()
             if Path(name).stem in _SESSION_AUTHORED
-            or which_layer(path) == "bundled"}
+            or (which_layer(path) == "bundled" and not is_task_answer(path))}
 
 #: What a capability module must define.
 ENTRY_POINT = "register"

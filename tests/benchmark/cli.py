@@ -339,6 +339,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         carry_root=("" if args.no_carry else (args.carry_root or default_carry_root())),
         max_spend_usd=float(getattr(args, "max_spend", 0.0) or 0.0),
         # Research is the fallback, not the opening move, unless asked.
+        pipeline=args.pipeline,
         research_on_retry=args.research_on_retry or not args.research_first,
         research_first=args.research_first,
         research_reuse=not args.fresh,
@@ -708,6 +709,18 @@ def build_parser() -> argparse.ArgumentParser:
                           "reads /metrics from the replicas and is a no-op for a "
                           "hosted endpoint, where there is no fleet to measure "
                           "and the calibration already applies.")
+    run.add_argument("--pipeline", default="sequential",
+                     choices=("sequential", "parallel"),
+                     help="Which research pipeline runs. 'sequential' (default) "
+                          "is the tracked loop: check for a skill, attempt, "
+                          "evaluate, fold the result into this task's record, "
+                          "then either write the solution or hand the open "
+                          "failure to research, which updates the skill the "
+                          "next attempt loads. 'parallel' is the earlier "
+                          "pipeline — plan emits ideas, each is refined, built "
+                          "and tried on its own thread, pairs combine into "
+                          "super-ideas. Both are kept so they can be compared "
+                          "on the same tasks.")
     run.add_argument("--split", default="lite", choices=("lite", "verified", "full"))
     run.add_argument("--dataset-cache", default="")
     run.add_argument("--no-fresh", action="store_true",

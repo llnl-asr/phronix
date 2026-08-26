@@ -196,6 +196,12 @@ PHASES = (
     ("research", ("research",)),
     ("attempt", ("attempt", "search-skill", "recall")),
     ("evaluate", ("evaluate", "promoted", "trial", "approach-")),
+    # The tracker: its own stage, run after every other one, folding what just
+    # happened into the task's record. Without an entry here it matched no
+    # prefix and fell through to "not started" — so a task actively recording
+    # read as a task that had not begun, which is the one thing this column
+    # exists to distinguish.
+    ("track", ("track",)),
     # Everything before the first real stage: exporting the checkout, waiting
     # for a slot, or nothing reported yet. A task sitting here for a long time
     # is queued, which at 6x oversubscription is most of them.
@@ -355,8 +361,25 @@ class Task:
                             f" steps={int(a.get('steps') or 0):<3}"
                             f" {short(int(a.get('tokens_input') or 0) + int(a.get('tokens_output') or 0)):>7}"
                             f" {human(wall):>7}"))
+                # The stages INSIDE the try, as a tree.
+                #
+                # A try's totals say it took nine minutes; they do not say
+                # whether that was the attempt thinking, the evaluation running
+                # tests, or research diagnosing. Those are different problems
+                # with different fixes, and the totals hide which one you have.
+                last = len(a.get("stages") or []) - 1
+                for n, st in enumerate(a.get("stages") or []):
+                    elbow = "└─" if n == last and not a.get("recalled_skill") else "├─"
+                    steps = int(st.get("steps") or 0)
+                    tok = int(st.get("tokens_input") or 0) + int(st.get("tokens_output") or 0)
+                    out.append(("dim",
+                                f"  {elbow} {str(st.get('name', '?'))[:14]:<14}"
+                                f" steps={steps:<3}"
+                                f" {short(tok):>7}"
+                                f" {human(float(st.get('elapsed_s') or 0)):>7}"
+                                + (f"  {st['note']}" if st.get("note") else "")))
                 if a.get("recalled_skill"):
-                    out.append(("dim", f"  skill: {a['recalled_skill']} (solved with it)"))
+                    out.append(("dim", f"  └─ skill: {a['recalled_skill']} (solved with it)"))
                 for trial in a.get("trials") or []:
                     won = "SOLVED" if trial.get("resolved") else "failed"
                     out.append(("pass" if trial.get("resolved") else "dim",
