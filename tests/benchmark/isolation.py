@@ -22,10 +22,15 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import signal
 import re
 import shlex
 import shutil
+import sys
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -98,6 +103,13 @@ class Runtime:
     #: space, or ``bash -lc "cd /testbed && pytest"``, would otherwise arrive as
     #: several mangled arguments.
     remote_shell: bool = False
+    #: The node this runtime's commands run on, when they run elsewhere.
+    #:
+    #: The launcher already carries it, buried in an argv tuple. Naming it
+    #: lets a caller ask where a task's container lives WITHOUT parsing that —
+    #: which is what puts a task's agent on the same node as its own container
+    #: rather than on the login node.
+    host: str = ""
 
     @classmethod
     def detect(cls, preferred: str = "podman",
@@ -167,8 +179,8 @@ class Runtime:
         ``-n`` redirects stdin from /dev/null: without it ssh competes with the
         parent for the terminal and can consume input meant for something else.
         """
-        return replace(self, launcher=("ssh", "-n", "-o", "BatchMode=yes",
-                                       "-o", "StrictHostKeyChecking=no", host),
+        return replace(self, host=host,
+                       launcher=("ssh", "-n", *ssh_options(), host),
                        remote_shell=True)
 
     def with_flux(self, job: str) -> "Runtime":
@@ -229,9 +241,28 @@ class Runtime:
         which the caller can act on.
         """
         import os
-        import signal
-
         command = self.command_for(args)
+        for attempt in range(SSH_RETRIES):
+            result = self._run_once(command, timeout)
+            if result.returncode == 0 or not _transient_ssh(result.stderr):
+                break
+            # sshd refused the connection, not the command. Both of its
+            # limits are transient and both are hit at this concurrency:
+            # `MaxStartups` (ten unauthenticated connections) and, with
+            # multiplexing on, `MaxSessions` (ten sessions per connection).
+            # Measured on one host at 40 simultaneous commands, plain ssh
+            # managed 35 and multiplexed 39 — neither survives, and every
+            # loss voided a task with `isolation: could not start <image>`,
+            # which reads as a broken image.
+            time.sleep(SSH_RETRY_WAIT_S * (attempt + 1) + random.random())
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, command,
+                                                result.stdout, result.stderr)
+        return result
+
+    def _run_once(self, command: List[str],
+                  timeout: int) -> subprocess.CompletedProcess:
+        """One attempt at *command*, bounded and cleaned up on timeout."""
         process = subprocess.Popen(command, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True,
                                    stdin=subprocess.DEVNULL,
@@ -254,10 +285,7 @@ class Runtime:
             code = -1
             err = (err or "") + f"\n[timed out after {timeout}s]"
 
-        result = subprocess.CompletedProcess(command, code, out or "", err or "")
-        if check and code != 0:
-            raise subprocess.CalledProcessError(code, command, out, err)
-        return result
+        return subprocess.CompletedProcess(command, code, out or "", err or "")
 
     def available(self) -> bool:
         try:
@@ -542,6 +570,204 @@ def _differs_from_bundled(path: Path, store_root: Path) -> bool:
 SOURCE_DIRS = ("capabilities", "research")
 
 
+#: The two sections a task skill accumulates knowledge in.
+#:
+#: Ordered, because the labels are positional: `I1` is simply the first
+#: instruction, and a merge that reordered them would invalidate every
+#: reference already written against the old numbering.
+_MERGED_SECTIONS = (("## Instructions", "I"), ("## Rules", "R"))
+
+
+def _skill_blocks(text: str, heading: str) -> List[Tuple[str, str]]:
+    """The ``### L — Title`` blocks under *heading*, as (title, body)."""
+    lines = text.splitlines()
+    try:
+        start = lines.index(heading) + 1
+    except ValueError:
+        return []
+    out: List[Tuple[str, str]] = []
+    title, body = "", []
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        match = re.match(r"^###\s+\S+\s+—\s+(.*)$", line)
+        if match:
+            if title:
+                out.append((title, "\n".join(body).strip()))
+            title, body = match.group(1).strip(), []
+        elif title:
+            body.append(line)
+    if title:
+        out.append((title, "\n".join(body).strip()))
+    return out
+
+
+def _same_point(one: str, other: str) -> bool:
+    """Do two block titles make the same point?
+
+    Compared on their words rather than their text, because the agent that
+    writes the second one has not seen the first: "Add email to password reset
+    token hash" and "Include email field in password reset token hash to
+    invalidate on email change" are one instruction written twice. Exact-match
+    dedup keeps both, and a skill that says the same thing three times costs a
+    later run three reads to discover it was one thing.
+    """
+    def words(text: str) -> set:
+        return {w for w in re.findall(r"[a-z0-9_]+", text.lower())
+                if w not in _STOPWORDS and len(w) > 2}
+
+    first, second = words(one), words(other)
+    if not first or not second:
+        return False
+    overlap = len(first & second) / min(len(first), len(second))
+    return overlap >= 0.7
+
+
+_STOPWORDS = {"the", "and", "for", "with", "when", "that", "this", "from",
+              "into", "before", "after", "use", "using", "add", "adds"}
+
+
+def merge_skill_text(old: str, new: str) -> str:
+    """Reconcile a task skill against the one already in the source tree.
+
+    A task is attempted more than once — a second group, a `--reuse` run, the
+    same subject reached from a different failure — and each pass writes what
+    IT learned. Overwriting keeps only the newest, which is not the most
+    complete: a run that passed on try 1 has no pitfalls section, and dropping
+    the four ruled-out approaches an earlier run spent four attempts finding is
+    exactly the cost this whole mechanism exists to avoid.
+
+    So the two are merged rather than replaced. Instructions and rules are
+    unioned on the point they make, the newer wording winning where both cover
+    the same ground, and the labels and index are rebuilt over the result. The
+    frontmatter is the new one's: it names the same subject either way.
+    """
+    if not old.strip():
+        return new
+    if not new.strip():
+        return old
+
+    head = new.split("## Index")[0].rstrip() if "## Index" in new else ""
+    if not head:
+        head = new.split("## Instructions")[0].rstrip()
+
+    merged: Dict[str, List[Tuple[str, str]]] = {}
+    for heading, _ in _MERGED_SECTIONS:
+        # Collapsed against ITSELF first. The duplicates are not only across
+        # passes: one pass writing three instructions that make one point
+        # leaves them side by side, and merging a fourth against that keeps
+        # all three. Longest wording wins here — within one file the fuller
+        # block is the one that was written with the most known.
+        kept: List[Tuple[str, str]] = []
+        for title, body in _skill_blocks(old, heading):
+            for index, (had, had_body) in enumerate(kept):
+                if _same_point(had, title):
+                    if len(body) > len(had_body):
+                        kept[index] = (title, body)
+                    break
+            else:
+                kept.append((title, body))
+        for title, body in _skill_blocks(new, heading):
+            for index, (had, _body) in enumerate(kept):
+                if _same_point(had, title):
+                    kept[index] = (title, body)     # the newer wording wins
+                    break
+            else:
+                kept.append((title, body))
+        merged[heading] = kept
+
+    index_rows, sections = [], []
+    for heading, letter in _MERGED_SECTIONS:
+        blocks = merged[heading]
+        if not blocks:
+            continue
+        name = heading.replace("## ", "")
+        body = [heading, ""]
+        for number, (title, text) in enumerate(blocks, 1):
+            label = f"{letter}{number}"
+            index_rows.append(f"| `{label}` | {name} | {title} |")
+            body += [f"### {label} — {title}", "", text, ""]
+        sections.append("\n".join(body).rstrip())
+
+    references = ""
+    for text in (new, old):
+        if "## References" in text:
+            references = "## References" + text.split("## References", 1)[1]
+            break
+
+    out = [head, "", "## Index", "",
+           "| Label | Section | Covers |", "| --- | --- | --- |",
+           *index_rows, "", *[s + "\n" for s in sections]]
+    if references:
+        out.append(references.rstrip())
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _has_substance(path: Path) -> bool:
+    """Is this skill worth keeping for good?
+
+    Promotion is permanent, so the bar is the one the framework already holds
+    its own artifacts to: it must say how to do something, and its index must
+    describe what is actually in it. Both failures are real and both were
+    measured on one run — ten of sixteen promoted skills had neither an
+    Instructions nor a Rules section, and one carried an `X1` block the index
+    never listed, which index-first retrieval can never reach.
+
+    Checked on the FILE rather than through `correctors.correct`, which
+    resolves the skill through the layer stack: at this point the skill is
+    still in the run store and is not in any layer.
+    """
+    from phronix.skill_schema import parse_skill
+
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return False
+    if "## Instructions" not in text and "## Rules" not in text:
+        return False
+    try:
+        skill = parse_skill(path.parent)
+    except Exception:
+        return False
+    blocks = {b["label"] for b in skill.get("blocks", [])}
+    return bool(blocks) and blocks == {r["label"] for r in skill.get("index", [])}
+
+
+def _reconcile_research(target: Path, incoming: Path) -> bool:
+    """Fold a research record into the one already in the source tree.
+
+    Same reasoning as the skills, and the same failure without it: the record
+    is named for its subject, so every pass lands on one path and a copy keeps
+    only the last. `research.sync_session` already merges a session into the
+    run's own folder; this is that same merge one level further out, from the
+    run into the tree that outlives it.
+
+    Approaches, trials and what was ruled out accumulate — a ruled-out approach
+    stays ruled out — so nothing here removes, only adds.
+    """
+    from phronix.research import _merge_records
+
+    try:
+        if incoming.suffix == ".jsonl":
+            # Append-only observation log: union of lines, order preserved.
+            seen = target.read_text(errors="replace").splitlines()
+            known = set(seen)
+            added = [line for line in incoming.read_text(errors="replace").splitlines()
+                     if line.strip() and line not in known]
+            if not added:
+                return False
+            target.write_text("\n".join(seen + added).strip() + "\n")
+            return True
+        if incoming.suffix != ".json":
+            return False
+        merged = _merge_records(json.loads(target.read_text(encoding="utf-8")),
+                                json.loads(incoming.read_text(encoding="utf-8")))
+        target.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        return True
+    except (OSError, ValueError, ImportError):
+        return False
+
+
 def promote_to_source(store_root: Path) -> Dict[str, Any]:
     """Copy this run's capabilities and research into the packaged layer.
 
@@ -572,6 +798,47 @@ def promote_to_source(store_root: Path) -> Dict[str, Any]:
             # Never overwrite what the framework ships. A run adds to the
             # source tree; it does not edit it.
             if target.exists() and kind == "capabilities" and "tasks" not in relative.parts:
+                continue
+            # A task answer that already exists is RECONCILED, not replaced.
+            #
+            # The canonical name means the same subject always lands on the
+            # same path, so a plain copy makes each pass erase the one before
+            # it. What a run knows about a subject only grows — the pitfalls a
+            # failing run found are still true after a later run passes — so
+            # the two are merged and the merge is what the next run starts
+            # from.
+            # Per-run working state, not a result. `sync_session` folds each
+            # task's session record into `research/` as the task ends, and
+            # promoting the session folders too would check in the
+            # intermediate state of every run that ever started.
+            if kind == "research" and "sessions" in relative.parts:
+                continue
+            # The raw observation log and its read cursor are the always-on
+            # learner's INPUT, not a result. It drains them into skills and
+            # memory as a run proceeds; carrying the log itself would replay
+            # every run's unpromoted signal into every later run's grouping —
+            # measured, one run's twelve observations were enough to change
+            # what `research.notice()` reported for an unrelated project.
+            if path.name.startswith("observations."):
+                continue
+            # A skill with neither instructions nor rules says nothing about
+            # how to do anything. They happen — a stage stopped on the clock,
+            # an agent wrote a title and no body — and once promoted they are
+            # kept for good and answer retrievals with nothing.
+            if path.name == "SKILL.md" and not _has_substance(path):
+                continue
+            if target.is_file() and kind == "research":
+                if _reconcile_research(target, path):
+                    carried.append(str(relative))
+                continue
+            if target.is_file() and path.name == "SKILL.md" and kind == "capabilities":
+                try:
+                    reconciled = merge_skill_text(target.read_text(errors="replace"),
+                                                  path.read_text(errors="replace"))
+                    target.write_text(reconciled)
+                    carried.append(str(relative))
+                except (OSError, ValueError):
+                    pass
                 continue
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -699,8 +966,185 @@ def seed_store(store_root: Path, carry_root: Path,
     return {"seeded": seeded, "carry_root": str(carry_root)}
 
 
+#: How long a shared ssh connection outlives the command that opened it.
+SSH_PERSIST_S = 600
+
+
+#: How many shared connections to keep per host.
+#:
+#: One is not enough. sshd allows `MaxSessions` multiplexed sessions per
+#: connection — ten by default — and a run with thirty tasks puts far more than
+#: that through one host: the excess is REFUSED, not queued and not silently
+#: unmultiplexed, and the caller sees
+#:
+#:     mux_client_request_session: session request failed: Session open refused
+#:
+#: which surfaced as `isolation: could not start <image>` and voided the try.
+#: Four masters give forty sessions per host, while still being few enough
+#: connections to open under `MaxStartups`, which is the limit multiplexing was
+#: added to avoid in the first place.
+SSH_MASTERS = 8
+
+
+#: ssh failures that are the SERVER refusing a connection, not the command
+#: failing. Retrying these is correct; retrying a real error is not.
+_TRANSIENT_SSH = ("kex_exchange_identification",
+                  "Session open refused by peer",
+                  "mux_client_request_session",
+                  "Connection reset by peer",
+                  "Connection closed by remote host",
+                  "connect to host .* port .*: Connection refused")
+
+SSH_RETRIES = 4
+SSH_RETRY_WAIT_S = 0.7
+
+
+def _transient_ssh(stderr: str) -> bool:
+    """Whether this failure is ssh refusing, rather than the command failing."""
+    text = str(stderr or "")
+    return any(re.search(pattern, text) for pattern in _TRANSIENT_SSH)
+
+
+def ssh_options(shard: Optional[int] = None) -> List[str]:
+    """`-o` flags every ssh in the harness uses, multiplexing included.
+
+    One TCP connection and one authentication per HOST, shared by everything
+    that follows: the agents, the container commands, the reapers.
+
+    Without it each of those is a fresh connection and a fresh key exchange,
+    and sshd refuses past `MaxStartups` — ten concurrent unauthenticated
+    connections by default. Measured the first time thirty tasks ran with
+    their agents on compute nodes: a task died with
+
+        could not start ...sympy-17630: kex_exchange_identification: Connection
+
+    which names neither ssh nor a limit and reads like a broken image. It is
+    also simply faster: a multiplexed command skips the handshake entirely,
+    and the container path makes several ssh calls per task.
+
+    The control socket lives on node-local disk. It is a unix socket, and a
+    unix socket on the parallel filesystem does not work — nor would sharing
+    one between machines mean anything, since the master is per client.
+    `%C` is a hash of (host, port, user), which keeps the path short: the
+    limit is around 100 characters and a run directory alone can exceed it.
+    """
+    # OFF by default, and that is a correction of my own change.
+    #
+    # Multiplexing was added to avoid `MaxStartups` (ten concurrent
+    # UNAUTHENTICATED connections), which cost about one failure in sixty. It
+    # trades that for `MaxSessions` (ten multiplexed sessions per connection),
+    # which is worse in every way that matters: the refusal is not queued and
+    # not silently downgraded, it FAILS —
+    #
+    #     mux_client_request_session: session request failed: Session open
+    #     refused by peer
+    #
+    # — and surfaces as `isolation: could not start <image>`, voiding the try.
+    # Sharding across several masters only moves the cliff: measured on one
+    # host, 4 masters gave 39/40, and 8 gave 36/40 because thread ids do not
+    # spread evenly over a small modulus.
+    #
+    # So it is opt-in until a mux refusal degrades to a direct connection
+    # rather than failing. `PHRONIX_SSH_MUX=1` turns it back on.
+    if str(os.environ.get("PHRONIX_SSH_MUX", "")).strip() not in ("1", "true", "yes"):
+        return ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
+    control = Path(os.environ.get("TMPDIR") or "/tmp") / f"ssh-{os.getuid()}"
+    try:
+        control.mkdir(parents=True, exist_ok=True)
+        control.chmod(0o700)
+    except OSError:
+        # No socket directory means no multiplexing, not no ssh.
+        return ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
+    # Spread over the masters. Keyed on the calling THREAD, so one task's
+    # commands reuse one connection (which is what makes them cheap) while
+    # concurrent tasks land on different ones.
+    if shard is None:
+        shard = threading.get_ident() % SSH_MASTERS
+    return ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath={control}/%C-{shard % SSH_MASTERS}",
+            "-o", f"ControlPersist={SSH_PERSIST_S}"]
+
+
+def warm_ssh(hosts: Sequence[str], timeout: int = 30) -> List[str]:
+    """Open the shared connection to each host, once, before the work starts.
+
+    Multiplexing only helps once a master EXISTS. Thirty commands issued at
+    once are thirty simultaneous first connections, every one of them racing
+    to create it, so every one does a full key exchange and sshd refuses the
+    excess exactly as it did without multiplexing. Measured on one node:
+
+        plain                          26/30 ok
+        multiplexed, no master         25/30 ok
+        multiplexed, master pre-opened 30/30 ok in 0.6s
+
+    So the master is opened deliberately, here, while nothing is competing.
+    Failures are ignored: an unreachable host is the container preflight's
+    business, and a host that cannot be warmed simply gets unmultiplexed
+    connections rather than none.
+    """
+    opened: List[str] = []
+
+    def warm(host: str) -> Optional[str]:
+        opened = 0
+        for shard in range(SSH_MASTERS):
+            try:
+                done = subprocess.run(
+                    ["ssh", "-n", *ssh_options(shard), host, "true"],
+                    capture_output=True, timeout=timeout)
+                opened += 1 if done.returncode == 0 else 0
+            except (OSError, subprocess.SubprocessError):
+                continue
+        return host if opened else None
+
+    hosts = [h for h in hosts if h]
+    if not hosts:
+        return opened
+    with ThreadPoolExecutor(max_workers=min(8, len(hosts))) as pool:
+        opened = [h for h in pool.map(warm, hosts) if h]
+    return opened
+
+
+def without_harness_venv(env: Dict[str, str]) -> Dict[str, str]:
+    """The same environment, minus the benchmark's own virtualenv.
+
+    The harness runs under it, so an inherited environment carries
+    ``VIRTUAL_ENV`` and puts that venv's ``bin`` first on PATH — and an agent
+    exploring a Python repository runs ``pip install -e .`` as a matter of
+    course. That installs the TASK's source into the shared venv.
+
+    Measured: seven SWE-bench repos (django, flask, matplotlib, pylint, sphinx,
+    xarray, pytest) were editable-installed there, shadowing the real packages
+    for everything that used it. The benchmark's own suite then imported
+    ``_pytest`` out of a task checkout and died with "required field lineno
+    missing from alias"; one ``.pth`` pointed into the previous day's run, so
+    it had been changing what every later task imported, silently, across runs.
+
+    Applied to EVERY arm, not just the phronix one. It lived inside
+    `isolated_env` at first, which the bare arm does not call — it takes
+    `dict(os.environ)` — so the protected arm was clean and the control arm
+    went on polluting the venv they share. A guard that covers one arm of a
+    comparison is worse than none, because the arms stop being comparable.
+
+    Removed rather than redirected: the agent's Python work belongs in the
+    task's container, and a stray install should FAIL where it can be seen
+    instead of succeeding somewhere shared.
+    """
+    env = dict(env)
+    venv = env.get("VIRTUAL_ENV") or os.environ.get("VIRTUAL_ENV") or sys.prefix
+    if venv:
+        env.pop("VIRTUAL_ENV", None)
+        binary = str(Path(venv) / "bin")
+        env["PATH"] = os.pathsep.join(
+            part for part in str(env.get("PATH", "")).split(os.pathsep)
+            if part and part.rstrip("/") != binary.rstrip("/"))
+    env["PIP_REQUIRE_VIRTUALENV"] = "1"
+    return env
+
+
 def isolated_env(store_root: Path, cache_root: Path,
-                 extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+                 extra: Optional[Dict[str, str]] = None,
+                 fresh: bool = False) -> Dict[str, str]:
     """Environment that pins phronix to this run's store and cache.
 
     Every layer is redirected. ``PHRONIX_HOME`` in particular: without it the
@@ -727,6 +1171,21 @@ def isolated_env(store_root: Path, cache_root: Path,
         # before it while reporting that it started clean.
         "PHRONIX_BUNDLED_READONLY": "1",
     })
+    env = without_harness_venv(env)
+
+    # `--fresh`, told to the LIBRARY rather than only to the harness.
+    #
+    # `capabilities.session_only()` reads this, and it is what hides bundled
+    # TASK ANSWERS from a from-scratch run while keeping the framework's own
+    # tools. Nothing set it: the filter existed, was tested, and had never once
+    # been active in a real run. It did not matter while the bundled tree held
+    # no answers — and promotion now puts them there by design, so a `--fresh`
+    # run was reading the previous run's answer for the very task it was about
+    # to attempt.
+    if fresh:
+        env["PHRONIX_FRESH_CAPABILITIES"] = "1"
+    else:
+        env.pop("PHRONIX_FRESH_CAPABILITIES", None)
     Path(env["PHRONIX_HOME"]).mkdir(parents=True, exist_ok=True)
     env.update(extra or {})
     return env

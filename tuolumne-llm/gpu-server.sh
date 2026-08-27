@@ -24,7 +24,23 @@ RUNDIR=${RUNDIR:-$LLM_ROOT/logs/latest}
 mkdir -p "$LLM_ROOT/logs/servers" "$PIDDIR" "$RUNDIR/nodes"
 log=$LLM_ROOT/logs/servers/${HOSTN}-gpu${gpu}-${key}.log
 
-read -r -a PROFILE_ARGS <<< "$(profile_args)" || exit 1
+# Every line of the profile, not just the first.
+#
+# This was `read -r -a PROFILE_ARGS <<< "$(profile_args)"`, and `read` stops at
+# the first newline: the profiles echo their flags across a dozen lines, so
+# everything after the opening `--parallel` was silently dropped. The server
+# then ran on llama.cpp's own defaults for context, KV type, batch size, cache
+# and threads — with LLAMA_SLOTS at its default of 1 the surviving `--parallel
+# 1` looked right, which is why it went unseen. Measured once slots were raised:
+# `-c` never arrived, so the window came out as llama's default divided by 8
+# rather than the 131072 per slot the profile computes.
+#
+# `$(...)` unquoted word-splits on ALL whitespace, newlines included, which is
+# exactly the tokenisation these flags want; profile output is flags this repo
+# writes, never user text, so there is nothing here for globbing to surprise.
+PROFILE_TEXT=$(profile_args) || exit 1
+# shellcheck disable=SC2206
+PROFILE_ARGS=( $PROFILE_TEXT )
 
 # Prefer a copy staged on this node's local SSD.
 #

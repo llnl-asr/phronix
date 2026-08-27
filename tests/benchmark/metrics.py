@@ -83,6 +83,12 @@ class Attempt:
     #: run that found the answer and one that found nothing produced identical
     #: traces, both opening at "attempt".
     recalled_skill: str = ""
+    #: Did the attempt actually LOAD the skill it was handed?
+    #:
+    #: Offered and used are different things, and only one of them says the
+    #: store worked. `None` means no skill was offered, so there is nothing to
+    #: have used.
+    skill_loaded: Optional[bool] = None
     #: Tokens the learning pass spent after this attempt was judged.
     tokens_learn: int = 0
     #: Seconds the learning pass took. Separate from ``wall_s`` for the same

@@ -15,8 +15,12 @@ mkdir -p "$LLM_ROOT"/{src,models,logs}
 if [[ ! -x $LLM_ROOT/venv/bin/python ]]; then
     python3 -m venv "$LLM_ROOT/venv"
 fi
+# litellm >= 1.98: 1.79 numbered Anthropic content blocks wrong on the
+# text-to-tool_use transition — it emitted a `content_block_delta` for an
+# index it never opened and Claude Code dropped the turn with "API Error:
+# Content block not found". See the README section on streaming.
 PIP_CONFIG_FILE=/dev/null "$LLM_ROOT/venv/bin/pip" install -q -U -i https://pypi.org/simple \
-    pip "huggingface_hub[cli]" hf_transfer "litellm[proxy]" "fastapi==0.115.12"
+    pip "huggingface_hub[cli]" hf_transfer "litellm[proxy]>=1.98" "fastapi==0.115.12"
 
 # --- llama.cpp fork (turboquant KV cache + MTP speculation)
 if [[ ! -d $LLAMA_SRC/.git ]]; then

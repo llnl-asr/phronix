@@ -106,6 +106,41 @@ PHRONIX_FLEET=corona-llm corona-llm/status.sh
 Unset, everything still defaults to `tuolumne-llm` exactly as before. An
 explicit `--cluster <path>` beats both.
 
+## Streaming, and the switch for it
+
+`FLEET_STREAMING=on` (the default) has the gateway stream from llama.cpp.
+`FLEET_STREAMING=off` has it read each reply whole and re-chunk it to the
+client.
+
+```bash
+FLEET_STREAMING=off flux proxy <alloc> corona-llm/deploy.sh nemotron
+```
+
+Both exist because both fail somewhere. The client speaks the Anthropic
+protocol and llama.cpp speaks OpenAI, and LiteLLM translates between them as
+the tokens arrive. On the text-to-`tool_use` transition it has been seen to
+emit a `content_block_delta` for a block index it never opened, and the client
+drops the whole turn:
+
+```
+attempt>  I'll start by reading the issue and task brief files...
+attempt>  API Error: Content block not found
+```
+
+Measured on nemotron-3.5: about one turn in sixty task-arms. The harness scores
+those as `attempt-void` rather than as a failed try, so a low rate costs
+wall-clock rather than results — which is why `on` is still the default.
+
+`off` sets `supports_native_streaming: false` on every backend entry. LiteLLM
+then calls llama.cpp without streaming and chunks the finished reply back as
+SSE, so the client still streams and there is no incremental block sequence
+upstream left to get out of order. The cost is latency: nothing reaches the
+agent until the whole turn is generated, and a long turn on a slow card is a
+long silence.
+
+Rule of thumb: leave it `on`, and switch to `off` if `Content block not found`
+starts costing real attempts.
+
 ## The `corona` server profile
 
 `PROFILE=corona` (the default here, via `FLEET_PROFILE`) is `solo` resized for

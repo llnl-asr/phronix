@@ -46,6 +46,15 @@ GPUS_PER_SERVER=${GPUS_PER_SERVER:-${FLEET_GPUS_PER_SERVER:-1}}
 CORES_PER_SERVER=${CORES_PER_SERVER:-${FLEET_CORES_PER_SERVER:-22}}
 GATEWAY_CORES=${GATEWAY_CORES:-${FLEET_GATEWAY_CORES:-8}}
 LLM_KEY=${LLM_KEY:-${FLEET_KEY:-sk-tuolumne}}
+# Backend streaming, on by default — see FLEET_STREAMING in env.sh for what
+# each side costs. Rendered into every model entry below, so it applies to the
+# pinned names as well as to the load-balanced one.
+STREAMING=${STREAMING:-${FLEET_STREAMING:-on}}
+if [ "$STREAMING" = off ]; then
+    export STREAM_LINE="      supports_native_streaming: false"
+else
+    export STREAM_LINE=""
+fi
 # Defaults are the measured ones, not the historical ones:
 #   solo      one slot per GPU, so a conversation's prompt cache is never
 #             evicted by another agent's (prefill was 77% of GPU time).
@@ -296,7 +305,15 @@ rebuild_config_from_records() {
     [ -e "${records[0]}" ] || { echo "  no node records; leaving the config as written"; return 1; }
 
     local live
-    live=$("$PBENCH_PY" - "$RUNDIR" "$MODEL_ALIAS" <<'EOF'
+    # The alias the fleet actually serves, derived the same way every other
+    # caller derives it. This read `$MODEL_ALIAS`, which nothing ever sets: the
+    # function aborted under `set -u` with "MODEL_ALIAS: unbound variable" the
+    # moment it was called — and it is ONLY called when the fleet came up
+    # short, which is exactly when the gateway must stop routing to backends
+    # that never started. Measured: 14/16 replicas up, the correction died on
+    # its first line, and tasks pinned to the two dead ports failed with
+    # "Cannot connect to host corona220:8054".
+    live=$("$PBENCH_PY" - "$RUNDIR" "${ALIAS[${GPU_MODEL[0]}]}" <<'EOF'
 import glob, json, os, sys
 
 run_dir, alias = sys.argv[1], sys.argv[2]
@@ -320,6 +337,8 @@ for index, (host, port) in enumerate(seen):
                   f"      api_base: http://{host}:{port}/v1",
                   "      api_key: dummy",
                   "      rpm: 100000"]
+        if os.environ.get("STREAM_LINE"):
+            lines.append(os.environ["STREAM_LINE"])
 print("\n".join(lines))
 print(len(seen), file=sys.stderr)
 EOF
@@ -364,6 +383,7 @@ CFG=$RUNDIR/litellm.yaml
               echo "      api_base: http://$h:$((BASE_PORT + g))/v1"
               echo "      api_key: dummy"
               echo "      rpm: 100000"
+              [ -n "$STREAM_LINE" ] && echo "$STREAM_LINE"
           done
           index=$((index + 1))
       done

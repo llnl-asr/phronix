@@ -25,6 +25,7 @@ it.
 | `I2` | Instructions | Keep what is established — a fix that regresses it is not a fix |
 | `I3` | Instructions | Do not re-try what is ruled out |
 | `I4` | Instructions | Write the fix into the solution skill, executably |
+| `I7` | Instructions | Read the lessons first, and write one back |
 | `I5` | Instructions | You are on a clock; an unfinished diagnosis is still worth writing |
 | `I6` | Instructions | Say the problem, the approach and the answer, as you go |
 | `R1` | Rules | Diagnose the error, do not improve the area |
@@ -82,6 +83,29 @@ What that means concretely:
 
 Update the existing solution skill rather than founding a second one. Two skills
 for one task split every later retrieval.
+
+### I7 — Read the lessons first, and write one back
+
+The skill you are updating has a `LESSONS.md` beside it, attached with it. That
+file is what earlier attempts on this task already tried and how each one
+failed. Read it before you diagnose: a revision that proposes something already
+recorded there spends a whole try learning what was on file before you started.
+
+They are separate files on purpose — "how do I do this" and "what went wrong
+last time" are different questions — and `skill_load` returns the instructions
+unless you ask for the lessons by name. The skill's `## References` names the
+call.
+
+So write BOTH halves:
+
+* `skill_write` — the corrected fix, as `I4` describes it.
+* `skill_write_lesson` — what the attempt you are diagnosing tried, and how it
+  failed, naming the tests it broke. A patch that fixes nothing and regresses
+  seven tests is a lesson; without it the try after this one repeats it.
+
+Measured on a task where this was missing: the skill's instructions were empty
+and the only thing the task had learned sat unread in `LESSONS.md`, so tries 2
+and 3 both loaded the skill and got nothing.
 
 ### I5 — You are on a clock; an unfinished diagnosis is still worth writing
 

@@ -372,7 +372,19 @@ def skill_dirs(start: Optional[Path] = None) -> Dict[str, Path]:
 
 
 def task_skill_dirs(start: Optional[Path] = None) -> Dict[str, Path]:
-    """Answers filed as skills under ``capabilities/tasks/<subject>/``."""
+    """Answers filed as skills under ``capabilities/tasks/<subject>/``.
+
+    Under ``--fresh`` only what THIS session wrote is visible, in every layer
+    including the bundled one. That exemption used to run the other way — the
+    bundled layer skipped the filter — which is right for the framework's own
+    method skills and exactly backwards here, because this directory holds
+    nothing but ANSWERS. Once a run promotes its answers into the packaged
+    tree, as every run now does, the next `--fresh` run opened a task with
+    "trying remembered skill" and was not from scratch at all.
+
+    `capabilities.visible_files` has always drawn this line correctly via
+    `is_task_answer`; this is the same rule on the path skills are read by.
+    """
     from phronix.capabilities import session_authored, session_only
 
     fresh = session_only()
@@ -384,7 +396,7 @@ def task_skill_dirs(start: Optional[Path] = None) -> Dict[str, Path]:
             continue
         for skill_file in sorted(root.glob("*/*/SKILL.md")):
             name = skill_file.parent.name
-            if fresh and layer.name != "bundled" and name not in mine:
+            if fresh and name not in mine:
                 continue
             out[name] = skill_file.parent
     return out

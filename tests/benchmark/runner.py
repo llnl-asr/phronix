@@ -34,7 +34,7 @@ from .isolation import (
     DEFAULT_IMAGE_TEMPLATE, ContainerSession, IsolationError,
                         Runtime, fresh_store, promote_store,
                         promote_to_source, seed_store,
-                        snapshot_store, store_inventory)
+                        snapshot_store, store_inventory, warm_ssh)
 from .metrics import Attempt, TaskResult, append_result
 from .trace import Tracer
 
@@ -265,6 +265,29 @@ class Ledger:
         return {"reused": sorted(set(reused)), "cross_repo": sorted(set(cross))}
 
 
+def _transcript_loaded(task_dir: Path, attempt_index: int, skill: str) -> bool:
+    """Did this attempt's transcript contain a load of *skill*?
+
+    The transcript is the same source the trace narrates `skill load: X` from,
+    so this and the trace cannot disagree — which the retrieval log did.
+    """
+    if not skill:
+        return False
+    for name in ("opencode.jsonl", "transcript.jsonl", "agent.jsonl"):
+        path = Path(task_dir) / f"attempt-{attempt_index}" / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        # The skill named anywhere in a tool call is a load: the name is not
+        # free text the agent would otherwise emit.
+        if skill in text:
+            return True
+    return False
+
+
 def read_retrievals(path: Path) -> List[str]:
     """Skill names from a retrieval log, de-duplicated in first-seen order."""
     if not Path(path).is_file():
@@ -374,6 +397,83 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")[:40] or "plan"
 
 
+#: Exception classes an import-time breakage announces itself with.
+_IMPORT_ERRORS = ("SyntaxError", "IndentationError", "NameError", "ImportError",
+                  "ModuleNotFoundError", "AttributeError", "TypeError",
+                  "ValueError", "RuntimeError")
+
+
+def _error_tail(text: str, limit: int = 400) -> str:
+    """The end of a testbed's output, cut at a LINE and led by the exception.
+
+    This was `text[-400:]`, and a tail cut by character count starts mid-token:
+    the recorded cause of a lost task read `the runner did not start: rning` —
+    the end of the word "warning" from a pip notice — with the actual
+    `SyntaxError` sitting a few lines above, inside the same quoted blob and
+    invisible to anyone reading the trace. Measured on three tasks in one run.
+
+    So: keep whole lines, and put the exception line FIRST, because that line
+    is the answer and everything else is the path that reached it.
+    """
+    lines = [l.rstrip() for l in (text or "").strip().splitlines() if l.strip()]
+    if not lines:
+        return ""
+    lead = next((l.strip() for l in reversed(lines)
+                 if any(name in l for name in _IMPORT_ERRORS)), "")
+    kept, size = [], len(lead)
+    for line in reversed(lines):
+        if line.strip() == lead:
+            continue
+        size += len(line) + 1
+        if size > limit:
+            break
+        kept.append(line)
+    body = "\n".join(reversed(kept))
+    return f"{lead}\n{body}".strip() if lead else body
+
+
+def _blamed_files(text: str) -> List[str]:
+    """Every source file a traceback names, most-recently-mentioned first.
+
+    Not just `/testbed/...` paths. pytest reports a broken conftest import as
+    `ConftestImportFailure: SyntaxError: invalid syntax (blueprints.py, line 1)`
+    — the file that actually failed to parse appears as a BARE BASENAME, and
+    the only absolute path in the message is `/testbed/tests/conftest.py`,
+    which is the importer and not the culprit. Blaming the absolute path alone
+    read that as an environment fault and aborted a task whose patch had just
+    put a syntax error in `src/flask/blueprints.py`.
+    """
+    words = [w.strip('",\'()[]') for w in (text or "").replace("\n", " ").split()]
+    out = []
+    for word in words:
+        if word.startswith("/testbed/"):
+            out.append(word[len("/testbed/"):])
+        elif word.endswith(".py") and "/" not in word:
+            out.append(word)
+    out.reverse()
+    return out
+
+
+def _blames_patch(text: str, touched: Sequence[str]) -> str:
+    """The patched file a traceback blames, or "".
+
+    Matched on the full path when the traceback gives one and on the BASENAME
+    otherwise. A basename can in principle collide — two `__init__.py` — and
+    the asymmetry is deliberate: a false "the patch broke it" costs one retry
+    that would have happened anyway, while a false "the environment broke"
+    throws the whole task away with no further try. Measured, the second
+    happened three times in one run and the first has not happened yet.
+    """
+    names = {name: PurePosixPath(name).name for name in touched}
+    for blamed in _blamed_files(text):
+        base = PurePosixPath(blamed).name
+        for name, name_base in names.items():
+            if blamed == name or blamed.endswith("/" + name) \
+                    or name.endswith("/" + blamed) or base == name_base:
+                return name
+    return ""
+
+
 def _patch_changes(patch: str) -> List[str]:
     """The lines a patch adds, normalised for comparison.
 
@@ -390,6 +490,15 @@ def _patch_changes(patch: str) -> List[str]:
         if text and text not in out:
             out.append(text)
     return out
+
+
+def _patch_files(patch: str) -> List[str]:
+    """The paths a patch touches. `_patch_changes` returns added LINES; the
+    two are not interchangeable and reading one for the other silently
+    compared a filename against a line of source."""
+    return sorted({m.group(1) for m in
+                   re.finditer(r"^\+\+\+ b/(\S+)", patch or "", re.MULTILINE)
+                   if m.group(1) != "/dev/null"})
 
 
 def _repeats_earlier(patch: str, history: List[Dict[str, Any]]) -> int:
@@ -439,8 +548,9 @@ def _pytest_probe(container, timeout: int = 300):
     detail = ((probe.stdout or "") + (probe.stderr or "")).strip()
     # Say which of the two it was, so the caller can act differently.
     if "No module named" in detail or "not found" in detail:
-        return False, f"pytest is genuinely absent: {detail[-400:]}"
-    return False, f"the probe did not answer (rc={probe.returncode}): {detail[-400:]}"
+        return False, f"pytest is genuinely absent: {_error_tail(detail)}"
+    return False, (f"the probe did not answer (rc={probe.returncode}): "
+                   f"{_error_tail(detail)}")
 
 
 def _has_pytest(container) -> bool:
@@ -1123,7 +1233,7 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
                 instance, fail_to_pass, pass_to_pass,
                 f"the testbed environment cannot run pytest: {why} "
                 f"(install said: "
-                f"{(install.stdout + install.stderr).strip()[-200:]})",
+                f"{_error_tail(install.stdout + install.stderr, 200)})",
                 on_event)
 
     # ``--tb=short``, not ``--tb=no``. The traceback is the only part of the
@@ -1194,7 +1304,7 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
         return _runner_failure(
             instance, fail_to_pass, pass_to_pass,
             f"no test produced a result; the runner did not start: "
-            f"{output.strip()[-300:]}", on_event)
+            f"{_error_tail(output, 300)}", on_event)
 
     def passed(name: str) -> bool:
         # Prefix, not equality: the stored id may be a truncation of the real
@@ -1352,6 +1462,23 @@ class Runner:
         else:
             self._runtimes = []
 
+    def warm_connections(self, tracer=None) -> None:
+        """Open the shared ssh connection to every node, before any work.
+
+        See `isolation.warm_ssh`: multiplexing is worth nothing until a master
+        exists, and thirty tasks starting together are thirty simultaneous
+        first connections that sshd refuses past `MaxStartups`.
+        """
+        hosts = [h for h in self.nodes() if h]
+        if not hosts:
+            return
+        opened = warm_ssh(hosts)
+        if tracer:
+            missed = [h for h in hosts if h not in opened]
+            tracer.event("ssh", f"shared connection open to {len(opened)}/"
+                                f"{len(hosts)} node(s)"
+                                + (f"; not warmed: {', '.join(missed)}" if missed else ""))
+
     def nodes(self) -> List[str]:
         """Every node tasks may be placed on, in assignment order."""
         listed = [n.strip() for n in str(self.config.nodes or "").split(",")
@@ -1500,6 +1627,12 @@ class Runner:
                   "`flux jobs` and pass --node for the new one.", flush=True)
             raise IsolationError(problem)
         (self.out / "manifest.json").write_text(json.dumps(self.manifest(), indent=2) + "\n")
+        # Before any task: one shared ssh connection per node, opened while
+        # nothing is competing for sshd. See `warm_connections`.
+        try:
+            self.warm_connections()
+        except Exception:
+            pass          # unmultiplexed connections, not no connections
         try:
             if self.config.parallel_arms and len(self.config.arms) > 1:
                 return self._run_arms_parallel()
@@ -1717,6 +1850,9 @@ class Runner:
 
         # The session the arm writes into, and whether it may read outside it.
         arm.research_session = self.config.research_session
+        # What the run was TOLD to be, handed to the library so that
+        # what it may see matches. See `isolated_env`.
+        arm.fresh = bool(self.config.fresh)
         arm.research_reuse = self.config.research_reuse
 
         # One learner for the whole arm, started before any task is.
@@ -1877,6 +2013,18 @@ class Runner:
                  tracer: Optional[Tracer] = None) -> TaskResult:
         # Which node this task's containers run on, for the life of the thread.
         self._local.runtime = self.runtime_for(order)
+        # And its AGENTS, on that same node.
+        #
+        # They used to run wherever the harness did, which here is a shared
+        # login node: measured at 12 tasks, 60 `claude` processes and a load
+        # average of 10.8 on 48 cores while every allocated compute node sat at
+        # 0.00. The allocation was being used for containers and nothing else,
+        # and the ceiling on parallelism was a machine outside it that
+        # seventeen other people were also using.
+        #
+        # The same node as the container on purpose: a task's reasoning and its
+        # test runs then share a host, a page cache and a checkout.
+        arm.agent_host = getattr(self._local.runtime, "host", "") or ""
         # And which backend its conversation belongs to. Set on the arm because
         # Claude Code takes its model from the environment rather than argv.
         try:
@@ -1892,6 +2040,22 @@ class Runner:
         before = store_inventory(store_root)
         retrieval_log = workdir / "retrievals.jsonl"
         retrieval_log.write_text("")
+
+        # The record keeps itself, for as long as the task runs.
+        #
+        # Every phase pushes what it did and carries on; this folds several of
+        # them per invocation on its own clock. That is what makes recording
+        # amortised instead of a whole agent session charged to every phase —
+        # which is what it was, and what made `track` 163 of one run's 241
+        # stage kills.
+        if getattr(arm, "uses_phronix", False):
+            try:
+                arm.start_tracking(instance, store_root, workdir,
+                                   on_call=(lambda text: tracer.step("track", text))
+                                   if tracer else None)
+            except Exception as exc:      # a tracker that will not start is not a failed task
+                if tracer:
+                    tracer.event("track", f"could not start the record: {exc}")
 
         # Research runs ONCE per task, before any attempt.
         #
@@ -2080,12 +2244,48 @@ class Runner:
             # dutifully produced another patch for a test suite that could not
             # execute. All three diffs came out byte-identical.
             if (attempt.verdict or {}).get("runner_failed"):
-                result.stopped_early = (
-                    f"the test runner never started, so no attempt at this task "
-                    f"can be judged: {(attempt.verdict or {}).get('error', '')[:160]}")
-                if tracer:
-                    tracer.event("ABORT", result.stopped_early)
-                break
+                # ... UNLESS the attempt's own patch is what stopped it.
+                #
+                # The two are indistinguishable in the verdict and opposite in
+                # meaning. A stray `+` in `pylint/lint/__init__.py` is a
+                # SyntaxError, so conftest cannot import and no test runs — and
+                # that is not a harness fault, it is the clearest possible
+                # failed attempt ("your patch does not import"), the one case a
+                # retry reliably fixes. Aborting it threw the task away after
+                # try 1. Measured: 3 of 16 tasks in one run, every one of them
+                # self-inflicted, all three aborted as "environment".
+                #
+                # Told apart by asking whether the file the traceback names is
+                # one this attempt changed. No extra container work, and right
+                # on every case seen.
+                error = (attempt.verdict or {}).get("error", "")
+                touched = _patch_files(
+                    _patch_text(workdir / f"attempt-{attempt_index}"))
+                blamed = _blames_patch(error, touched)
+                if blamed:
+                    # Recorded so the retry is told what to fix. Without this
+                    # the next attempt inherits "0/N target tests" and no hint
+                    # that the suite never ran, which is how a retry rewrites
+                    # the same broken edit.
+                    attempt.verdict["runner_failed"] = False
+                    attempt.verdict["broke_testbed"] = blamed
+                    attempt.verdict["failure_detail"] = (
+                        f"the patch broke {blamed}, so the test suite could not "
+                        f"even be imported and NOTHING ran: {error}")
+                    if tracer:
+                        tracer.event(
+                            "self-inflicted",
+                            f"the patch broke {blamed} — the suite could not be "
+                            f"imported, so this is a failed attempt and not a "
+                            f"harness fault; retrying")
+                else:
+                    result.stopped_early = (
+                        f"the test runner never started, so no attempt at this "
+                        f"task can be judged: "
+                        f"{(attempt.verdict or {}).get('error', '')[:160]}")
+                    if tracer:
+                        tracer.event("ABORT", result.stopped_early)
+                    break
 
             # Repeated isolation failures mean the environment is gone, not that
             # the task is hard. Retrying spends the whole ceiling producing
@@ -2182,16 +2382,38 @@ class Runner:
         # starts from nothing.
         if (str(getattr(self.config, "pipeline", "sequential")).lower()
                 != "parallel" and getattr(arm, "uses_phronix", False)):
+            # The record, brought up to date and the tracker stopped.
+            #
+            # Before the learn stages, because they READ it: the snapshot is
+            # the one moment the record crosses out of the task, and folding
+            # after that would write into a record nothing will read again.
+            try:
+                arm.stop_tracking(workdir, instance=instance,
+                                  store_root=store_root,
+                                  on_call=(lambda text: tracer.step("track", text))
+                                  if tracer else None)
+            except Exception as exc:      # a tracker that fails is not a failed task
+                if tracer:
+                    tracer.event("track", f"could not close the record: {exc}")
+
+            # `tracer.step`, not `_say` — which is a CLOSURE INSIDE
+            # `run_attempt` and has never been in scope here. Both calls
+            # therefore raised `NameError` on the first line of the `try` and
+            # were swallowed as "could not snapshot the record", so the skill
+            # a task leaves behind for the next run was never written: not on a
+            # pass, not on a failure, not once. The trace said so every time
+            # and read like a snapshot that had been attempted.
+            def _learn(text: str) -> None:
+                tracer.step("learn", text)
+
             try:
                 arm.ensure_task_skill(
                     instance, store_root, workdir,
-                    on_call=((lambda text: _say("learn", text))
-                             if tracer else None))
+                    on_call=_learn if tracer else None)
                 arm.snapshot_tracker(
                     instance, store_root, workdir,
                     resolved=bool((last_verdict or {}).get("resolved")),
-                    on_call=((lambda text: _say("learn", text))
-                             if tracer else None))
+                    on_call=_learn if tracer else None)
             except Exception as exc:      # a snapshot that fails is not a failed task
                 if tracer:
                     tracer.event("learn", f"could not snapshot the record: {exc}")
@@ -2489,6 +2711,46 @@ class Runner:
             return AttemptOutcome(error="every plan trial failed to run"), trials
         return winner["outcome"], trials
 
+
+    @staticmethod
+    def _trace_skill_use(tracer, attempt, retrieval_log: Path,
+                         before: set, attempt_index: int) -> None:
+        """Record whether the attempt loaded the skill it was given.
+
+        Reported for BOTH outcomes, because the silent case is the one that
+        matters: a skill that is written, found, handed over and then never
+        opened is indistinguishable in the results from one that was used, and
+        the run reads as though the store worked.
+        """
+        wanted = getattr(attempt, "recalled_skill", "") or ""
+        if not wanted or tracer is None:
+            return
+        # Read from the attempt's own TRANSCRIPT, not the retrieval log.
+        #
+        # `retrievals.jsonl` records only what the harness-run stages loaded —
+        # measured, it held `phronix-task-tracker` and
+        # `phronix-learning-reconcile` and nothing from the attempt at all,
+        # empty for two of three tasks. The attempt agent's `skill_load` never
+        # reaches it, so reading it there reported "never loaded it" for
+        # attempts whose trace plainly said `skill load: <name>` — a false
+        # negative on the one question this event exists to answer.
+        loaded = [name for name in read_retrievals(retrieval_log)
+                  if name not in before]
+        attempt.skill_loaded = wanted in loaded or _transcript_loaded(
+            Path(retrieval_log).parent, attempt.index, wanted)
+        if attempt.skill_loaded:
+            tracer.event("skill-use",
+                         f"try {attempt_index}: loaded `{wanted}` and worked "
+                         f"from it",
+                         data={"skill": wanted, "loaded": True})
+        else:
+            tracer.event("skill-use",
+                         f"try {attempt_index}: ** was given `{wanted}` and "
+                         f"never loaded it",
+                         ["the store answered and the attempt solved from "
+                          "scratch anyway — this scores as phronix and is not"],
+                         data={"skill": wanted, "loaded": False,
+                               "loaded_instead": loaded[:4]})
 
     def run_attempt(self, arm: Arm, instance: Dict[str, Any], attempt_index: int,
                     store_root: Path, workdir: Path, retrieval_log: Path,
@@ -2804,6 +3066,9 @@ class Runner:
                 # opened identically at "attempt", and the only way to tell
                 # them apart was to read the agent's prompt out of a transcript.
                 attempt.recalled_skill = ""
+                # What the store had already served, so that what THIS attempt
+                # loads can be told apart from what an earlier one did.
+                retrieved_before = set(read_retrievals(retrieval_log))
                 if getattr(arm, "uses_phronix", False):
                     if tracer:
                         tracer.begin("search-skill",
@@ -2841,6 +3106,11 @@ class Runner:
                                  self.config.timeout_s)
                 narrate_attempt = ((lambda text: _labelled("attempt", text))
                                    if tracer else None)
+                # When this attempt began, for the per-stage timings the record
+                # and the `top.sh` tree read. Defined HERE because every branch
+                # below produces an outcome — measured trials, a plan race, or
+                # a plain generate — and each one is timed from the same point.
+                started = time.time()
                 plans = []
                 # 0 means every plan research produced; 1 is the single
                 # merged attempt; N is the top N.
@@ -2916,6 +3186,18 @@ class Runner:
                             "tokens_output": int(outcome.tokens_output or 0),
                             "elapsed_s": round(time.time() - started, 1),
                         })
+                        # Was the skill USED, or only offered?
+                        #
+                        # The trace said `found X — the attempt solves with it`
+                        # the moment the lookup hit, which reports what the
+                        # harness did, not what the agent did. An attempt
+                        # handed a skill and ignoring it, and one that read it
+                        # and applied it, produced identical lines — so the
+                        # question the whole store exists to answer could not
+                        # be read off a run.
+                        self._trace_skill_use(
+                            tracer, attempt, retrieval_log, retrieved_before,
+                            attempt_index)
                         arm.track(instance, store_root, attempt_dir,
                                   phase="attempt",
                                   cost=f"try {attempt_index}, "

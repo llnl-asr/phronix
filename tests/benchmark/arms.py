@@ -31,6 +31,7 @@ import shlex
 import shutil
 import sys
 import threading
+import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -40,7 +41,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from phronix import bus as bus_module
 from phronix import capabilities as capabilities_module
 
-from .isolation import Container, isolated_env
+from .isolation import (Container, isolated_env, ssh_options,
+                        without_harness_venv)
 
 #: The one model every arm uses. LivAI is OpenAI-compatible, so mini-swe-agent
 #: (litellm) and opencode (ai-sdk openai-compatible) can both reach it.
@@ -908,6 +910,85 @@ LLM_GATE = _LlmGate()
 
 
 #: Serialises every in-process phronix call that has to set env vars.
+#: Backend pins handed out so far, key -> position. See `Arm._pin_index`.
+#:
+#: Module level, not per arm: two arms and every task in the process draw from
+#: one sequence, which is what makes the spread even across everything running
+#: at once. Never pruned — a task that finished still owns its pin, so a retry
+#: returns to the backend that still holds its conversation.
+#: Per-task settings that must NOT be shared between concurrent tasks.
+#:
+#: An `Arm` instance is reused for every task that arm runs, and the runner
+#: runs many at once in threads. Writing a per-task value onto the arm as a
+#: plain attribute is therefore a data race with a plausible-looking result:
+#: the last task to start overwrites it for every task already running.
+#:
+#: Measured the first time agents were placed on compute nodes: 25 agents
+#: landed on ONE node of five, two nodes got none, and fifteen stayed on the
+#: login node — every task reading whichever host was written last. The
+#: runtime already avoided this with a thread-local; these two did not.
+#:
+#: `pinned_for_env` had the same race silently: a task could send its
+#: conversation to another task's backend, which is exactly the prompt-cache
+#: locality the pinning exists to create.
+_TASK_LOCAL = threading.local()
+
+
+#: The always-on trackers, keyed by the record they keep.
+#:
+#: One per TASK, not one per job like the learner: the record belongs to one
+#: task and two tasks sharing a writer would merge two histories. Keyed on the
+#: record's path because that is what makes two callers the same task —
+#: the arm object is shared and its thread is not the tracker's.
+_TRACKERS: Dict[str, "_TrackerState"] = {}
+_TRACKER_LOCK = threading.Lock()
+
+
+@dataclass
+class _TrackerState:
+    """What one task's always-on tracker needs to keep going."""
+
+    tracker: Path
+    stop: Any                       # threading.Event
+    thread: Any = None
+    pending: List[Dict[str, Any]] = field(default_factory=list)
+    evidence: List[str] = field(default_factory=list)
+    #: Events folded into the record so far. `note` returns the sequence
+    #: number of the event it queued, so a caller that must not read a stale
+    #: record can wait for `folded >= mine` rather than for a fixed delay.
+    queued: int = 0
+    folded: int = 0
+    lock: Any = field(default_factory=threading.Lock)
+    moved: Any = field(default_factory=threading.Condition)
+    cycles: int = 0
+
+
+def task_pool(max_workers: int) -> ThreadPoolExecutor:
+    """A thread pool whose workers inherit the calling TASK's settings.
+
+    `_TASK_LOCAL` is thread-local, which is what keeps concurrent tasks from
+    overwriting each other — and it means a worker thread starts with nothing.
+    Research fans out through six pools, so every one of those agents read an
+    empty `agent_host` and ran on the login node: the placement worked for the
+    attempt and silently did not for the research that surrounds it.
+
+    Inherited at thread START, from the thread that builds the pool, which is
+    the task's own. Anything a task changes afterwards does not propagate, and
+    nothing here changes after the task begins.
+    """
+    parent = (getattr(_TASK_LOCAL, "agent_host", ""),
+              getattr(_TASK_LOCAL, "pinned_for_env", ""))
+
+    def adopt(host: str, pin: str) -> None:
+        _TASK_LOCAL.agent_host = host
+        _TASK_LOCAL.pinned_for_env = pin
+
+    return ThreadPoolExecutor(max_workers=max_workers,
+                              initializer=adopt, initargs=parent)
+
+_PIN_ASSIGNED: Dict[str, int] = {}
+_PIN_LOCK = threading.Lock()
+
 _STORE_ENV_LOCK = threading.Lock()
 
 
@@ -1159,10 +1240,110 @@ def tail_text(path: Path, limit: int) -> str:
         return ""
 
 
+#: Environment names that must NOT be shipped to a compute node.
+#:
+#: Everything else is carried verbatim — the agent needs its PATH, its store
+#: pointers and its model settings, and they all name paths on the shared
+#: filesystem, which is the same filesystem there.
+_LOCAL_ONLY_ENV = ("SSH_", "XDG_", "DISPLAY", "TERM", "SHLVL", "_", "OLDPWD",
+                   "SLURM_", "FLUX_URI", "FLUX_JOB", "HOSTNAME", "PWD")
+
+#: What a shell will accept on the left of `export NAME=`.
+_SHELL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def remote_agent_command(command: List[str], cwd: Path, env: Dict[str, str],
+                         host: str, timeout_s: int,
+                         scratch: Optional[Path] = None) -> List[str]:
+    """Wrap an agent invocation so it runs on *host* instead of here.
+
+    The agents were launched with a plain `Popen` on whatever machine drove the
+    run, which on this cluster is a SHARED LOGIN NODE. Measured at 12 tasks:
+    60 `claude` processes and a load average of 10.8 on 48 cores, while every
+    one of the six allocated compute nodes sat at load 0.00 — the benchmark
+    used its allocation for containers and for nothing else, and the ceiling on
+    parallelism was a machine that was not even part of the allocation, shared
+    with seventeen other users.
+
+    The agent is sent to the node that already holds its container, so a task's
+    reasoning and its test runs share a host and a page cache.
+
+    Passed as a SCRIPT on the shared filesystem rather than as an ssh command
+    line: the environment is dozens of variables including paths with spaces,
+    and every one of them would otherwise have to survive two levels of shell
+    splitting. The script is written where the run can be inspected afterwards.
+
+    `timeout` runs on the far side too. Killing ssh closes the connection but
+    does not reliably kill what it started, so the remote process bounds itself;
+    the local timeout in `stream_opencode` stays as the backstop.
+    """
+    import shlex
+
+    directory = Path(scratch or cwd)
+    # NEVER inside the checkout's own tree.
+    #
+    # `scratch` defaults to the working directory, which is the repository the
+    # agent is judged on — so a 525-line launcher appeared as a NEW FILE in
+    # every `attempt-diff.patch`, was applied to the testbed at evaluation, was
+    # listed as the attempt's changed file, and was picked up as the researched
+    # approach ("attempted by editing agent-on-node-3f63cbcf0ba8.sh"). It also
+    # carries the whole environment, gateway key included, into the artifacts.
+    #
+    # SCRATCH_DIR is already excluded from the patch via .git/info/exclude, so
+    # a checkout gets its launchers there and everything else is unchanged.
+    if (directory / ".git").exists():
+        directory = directory / SCRATCH_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    # One file per LAUNCH, not per directory.
+    #
+    # A fixed name is a race as soon as two agents start from the same
+    # directory, which the research fan-out does by design: the second writer
+    # replaces the first one's command and environment, and the first can end
+    # up executing the second's prompt against the second's model pin. Nothing
+    # downstream could detect it — both are valid scripts.
+    script = directory / f"agent-on-node-{uuid.uuid4().hex[:12]}.sh"
+    lines = ["#!/bin/bash", "# Written by the harness; runs one agent on one compute node.", ""]
+    for key, value in sorted(env.items()):
+        if any(key.startswith(skip) or key == skip for skip in _LOCAL_ONLY_ENV):
+            continue
+        # Only names a shell can actually export.
+        #
+        # The environment on this cluster carries bash FUNCTIONS — Lmod
+        # exports `module` and `ml` as `BASH_FUNC_module%%` and
+        # `BASH_FUNC_ml%%`, whose values are multi-line function bodies. Those
+        # are not valid identifiers, so the `export` fails, and worse the body
+        # runs on past the failed line: the shell then reads `case "$-" in`
+        # and the rest of the function as commands, and the script is
+        # corrupted from that point on.
+        #
+        # Measured: every `track` fold produced no record and no output at
+        # all, and the same function bodies surfaced as the tail of unrelated
+        # error messages (`try 1: unset __lmod_sh_dbg;`), which read like a
+        # broken agent rather than a broken script.
+        #
+        # The functions are no loss: `module`/`ml` are for interactive shells,
+        # and everything the agent needs is already in the exported PATH.
+        if not _SHELL_NAME.match(key):
+            continue
+        lines.append(f"export {key}={shlex.quote(str(value))}")
+    lines += ["", f"cd {shlex.quote(str(cwd))} || exit 97", ""]
+    # `exec` so the shell is replaced: one fewer process for a signal to have
+    # to traverse, and the agent's exit status is the script's.
+    inner = " ".join(shlex.quote(part) for part in command)
+    lines.append(f"exec timeout --signal=TERM --kill-after=30 {int(timeout_s) + 60} {inner}")
+    script.write_text("\n".join(lines) + "\n")
+    script.chmod(0o755)
+    # Multiplexed: thirty agents on five nodes is thirty key exchanges
+    # otherwise, and sshd drops them past `MaxStartups`. See `ssh_options`.
+    return ["ssh", "-n", *ssh_options(), "-o", "ServerAliveInterval=30",
+            host, "bash", str(script)]
+
+
 def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
                     timeout_s: int, on_call=None,
                     root: Optional[Path] = None,
-                    stats: Optional[Dict[str, Any]] = None) -> Any:
+                    stats: Optional[Dict[str, Any]] = None,
+                    host: str = "") -> Any:
     """Run opencode, reporting each tool call as it happens.
 
     ``subprocess.run`` returns nothing until the process exits, which for a
@@ -1186,7 +1367,12 @@ def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
     gate = LLM_GATE.slot(on_call)
     gate.__enter__()
 
-    process = subprocess.Popen(command, cwd=str(cwd), env=env, text=True,
+    # On a compute node when this task has one; here when it does not.
+    launch = command
+    if host:
+        launch = remote_agent_command(command, cwd, env, host, timeout_s,
+                                      scratch=root or cwd)
+    process = subprocess.Popen(launch, cwd=str(cwd), env=env, text=True,
                                stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -1417,11 +1603,92 @@ def tool_path_env(env: Dict[str, str]) -> Dict[str, str]:
     Prepended, not appended: a system node of the wrong major version would
     otherwise win and fail in a much less obvious way.
     """
-    bin_dir = str(Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin"))
+    # NODE only, not the whole virtualenv.
+    #
+    # This used to prepend the venv's entire `bin`, which hands the agent the
+    # harness's `pip` AND its `python` — and `python` is how you find
+    # site-packages. Agents used both: `pip install -e .` put seven task repos
+    # in there, and where pip was blocked they wrote `.pth` files by hand
+    # (`ourrepo.pth`, `pylint_repo.pth`, `repopath.pth`, each pointing at a
+    # task checkout). Every one of those changed what later tasks imported.
+    #
+    # Measured, the corona venv has no node in it at all, so the exposure
+    # bought nothing there whatsoever.
+    #
+    # A directory of symlinks to node and its friends gives what this function
+    # is actually for, and nothing else: the agent's `python` is then the
+    # system one, whose site-packages is not the harness's.
     current = env.get("PATH", os.environ.get("PATH", ""))
-    if bin_dir not in current.split(os.pathsep):
-        env["PATH"] = os.pathsep.join([bin_dir, current])
+    node_dir = _node_shim_dir()
+    if node_dir and node_dir not in current.split(os.pathsep):
+        env["PATH"] = os.pathsep.join([node_dir, current])
+    # Belt and braces: `pip` refuses even if some other path reaches one.
+    #
+    # This function exists for node, and it hands over the whole venv to get
+    # it — including `pip`, which is how the harness's own site-packages kept
+    # being rewritten by the tasks it was running. `without_harness_venv`
+    # strips the venv, and then this puts it straight back, so stripping alone
+    # never worked: measured, `pytest 4.6.1.dev145` from a task checkout was
+    # editable-installed over the real one and dragged `pluggy` down to
+    # 0.13.1, after which the benchmark's own suite could not start.
+    #
+    # `PIP_REQUIRE_VIRTUALENV` does not help here either — that pip IS in a
+    # virtualenv, its own, which is exactly the one being protected.
+    #
+    # So the guard is a shim earlier on PATH that refuses and says why. Node
+    # keeps working, `python` keeps working, and an agent that tries to
+    # install gets a message naming the container instead of a silent success
+    # in a shared directory.
+    env["PATH"] = os.pathsep.join([_pip_guard_dir(), env["PATH"]])
     return env
+
+
+_PIP_GUARD_LOCK = threading.Lock()
+
+
+def _node_shim_dir() -> str:
+    """A directory linking node/npx/npm from this venv, and nothing else.
+
+    Empty string when the venv has no node — then there is nothing to expose
+    and the harness's directory stays off the agent's PATH entirely.
+    """
+    source = Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin")
+    wanted = [name for name in ("node", "npx", "npm")
+              if (source / name).exists()]
+    if not wanted:
+        return ""
+    shim = Path(os.environ.get("TMPDIR") or "/tmp") / f"phronix-node-{os.getuid()}"
+    with _PIP_GUARD_LOCK:
+        try:
+            shim.mkdir(parents=True, exist_ok=True)
+            for name in wanted:
+                link = shim / name
+                if not link.exists():
+                    link.symlink_to(source / name)
+        except OSError:
+            return str(source)          # exposure beats a broken agent
+    return str(shim)
+
+
+def _pip_guard_dir() -> str:
+    """A directory holding `pip` shims that refuse, made once per process."""
+    guard = Path(os.environ.get("TMPDIR") or "/tmp") / f"phronix-pipguard-{os.getuid()}"
+    with _PIP_GUARD_LOCK:
+        try:
+            guard.mkdir(parents=True, exist_ok=True)
+            for name in ("pip", "pip3"):
+                shim = guard / name
+                if not shim.exists():
+                    shim.write_text(
+                        "#!/bin/sh\n"
+                        "echo \"pip is disabled here: this is the benchmark's own\" >&2\n"
+                        "echo \"environment, shared by every task. Install inside the\" >&2\n"
+                        "echo \"task container instead.\" >&2\n"
+                        "exit 1\n")
+                    shim.chmod(0o755)
+        except OSError:
+            return str(guard)
+    return str(guard)
 
 
 def _needs_key(base_url: str) -> bool:
@@ -1521,6 +1788,13 @@ class Arm:
     name: str = "base"
     uses_phronix: bool = False
     store_readonly: bool = True
+    #: Is this a from-scratch run?
+    #:
+    #: Set by the runner from `--fresh`, and passed to the library through
+    #: `PHRONIX_FRESH_CAPABILITIES` so that what a run may SEE matches what it
+    #: was told to be. Defaults False so an arm built by a test or by hand
+    #: behaves like an ordinary carried run.
+    fresh: bool = False
 
     #: Which arm this is, and where its conversation is kept.
     #:
@@ -1747,30 +2021,35 @@ class Arm:
         # `results[*]["skill"]`.
         hits = found.get("results") if isinstance(found, dict) else found
         bundled = _bundled_skill_names()
+        # What `--fresh` allows this run to see.
+        #
+        # `skills.search` is its OWN read path: it indexes every layer and
+        # knows nothing about the fresh filter, so excluding `bundled` — which
+        # is the framework's `skills/` directory — let a bundled TASK ANSWER
+        # through. Measured after promotion started writing answers into the
+        # packaged tree: a `--fresh` run reported "no skill covers this task;
+        # solving from scratch" on the harness path and then, one line later,
+        # "trying remembered skill `scikit-learn-column-transformer-empty-
+        # columns`" on this one. Two retrieval paths, one filter between them.
+        #
+        # `skill_dirs` applies that filter, so a name it does not list is a
+        # name this run is not entitled to.
+        try:
+            from phronix.layers import skill_dirs
+
+            allowed = set(skill_dirs())
+        except Exception:
+            allowed = set()
         for hit in hits or []:
             name = (hit.get("skill") or hit.get("name") or "") if isinstance(
                 hit, dict) else str(hit)
             if not name or name in bundled:
                 continue
+            if allowed and name not in allowed:
+                continue
             # The hit has to be ABOUT this subject. Search ranks by relevance
             # and always returns its best guess, so a store with nothing for
             # this repository still answers.
-            if subject.lower() in name.lower():
-                return name
-        return ""
-        bundled = _bundled_skill_names()
-        for hit in found:
-            name = (hit.get("name") if isinstance(hit, dict) else str(hit)) or ""
-            if not name or name in bundled:
-                continue
-            # The hit has to be ABOUT this subject.
-            #
-            # Search ranks by relevance and always returns its best guess, so a
-            # store with nothing for this repository still answers — measured,
-            # it recalled a skill called `status` for a pylint task and the
-            # attempt was told to try it as a remembered solution. Requiring
-            # the subject in the name is crude and it is checkable, which is
-            # what a corrector has to be.
             if subject.lower() in name.lower():
                 return name
         return ""
@@ -1787,17 +2066,37 @@ class Arm:
         return self.pinned_models[self._pin_index(instance)]
 
     def _pin_index(self, instance: Dict[str, Any]) -> int:
-        # Keyed on the ARM as well as the task.
-        #
-        # The two arms of one task were deliberately given the same backend, on
-        # the reasoning that they would share a warm prefix. They do not: the
-        # bare and phronix arms send different system prompts and diverge from
-        # the first token, so there is no prefix to share — and once a backend
-        # has a single slot, sending both there means each arm waits for the
-        # other. Observed as four requests queued while 28 backends sat idle.
+        """Which backend this arm's turns go to. Stable, and evenly spread.
+
+        Keyed on the ARM as well as the task. The two arms of one task were
+        deliberately given the same backend, on the reasoning that they would
+        share a warm prefix. They do not: the bare and phronix arms send
+        different system prompts and diverge from the first token, so there is
+        no prefix to share — and once a backend has a single slot, sending both
+        there means each arm waits for the other.
+
+        Assigned ROUND-ROBIN rather than by hashing the key.
+
+        `sha256(key) % N` is balls-in-bins, and at the sizes that matter here
+        it does not spread: measured on this group with 14 arms across 16
+        backends, it used 8 of them — one backend drew three arms, several drew
+        two, and half the fleet drew nothing. The fleet reported it exactly:
+        `8/16 replica(s) active`, `work 0.227 (IMBALANCED)`, and zero deferred
+        requests while half the GPUs idled. Hashing gives an arbitrary but
+        stable answer, and stability is the only property actually needed —
+        so the assignment is handed out in order and then remembered, which is
+        stable AND even.
+
+        The counter is shared by every arm in the process, because the spread
+        that matters is across everything running at once, not within one arm.
+        """
+        if not self.pinned_models:
+            return 0
         key = f"{getattr(self, 'arm_name', '')}:{instance.get('instance_id', '')}"
-        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
-        return int(digest[:8], 16) % len(self.pinned_models)
+        with _PIN_LOCK:
+            if key not in _PIN_ASSIGNED:
+                _PIN_ASSIGNED[key] = len(_PIN_ASSIGNED)
+            return _PIN_ASSIGNED[key] % len(self.pinned_models)
 
     def fanout_models(self, instance: Dict[str, Any], width: int) -> List[str]:
         """Distinct backends for `width` agents that run at the same time.
@@ -1877,72 +2176,241 @@ class Arm:
         """
         raise NotImplementedError
 
+    #: How often the always-on tracker folds what it has been handed.
+    #:
+    #: The same shape as the learner's clock, and for the same reason: several
+    #: events fold in one invocation instead of one invocation per event.
+    TRACK_CYCLE_S = float(_tuned("tracking.cycle_seconds", 30.0))
+
+    #: How long a stage will wait for its own event to reach the record.
+    #:
+    #: Only the stages that READ the record need this — research, and the
+    #: snapshot at the end. Everything else pushes and carries on, which is
+    #: what makes the cost amortised rather than per-phase.
+    TRACK_WAIT_S = float(_tuned("tracking.wait_seconds", 240.0))
+
+    def _tracker_state(self, task_dir: Path) -> "_TrackerState":
+        """The always-on tracker for this task.
+
+        Takes the TASK directory, never an attempt directory. The record is
+        per task and the key is its path, so a caller that passed an attempt
+        dir would silently get a second tracker writing a second record one
+        level down — two histories for one task, and neither complete. The
+        methods that are handed an attempt dir convert it at the call.
+        """
+        tracker = Path(task_dir) / self.TRACKER_FILE
+        key = str(tracker)
+        with _TRACKER_LOCK:
+            found = _TRACKERS.get(key)
+            if found is None:
+                found = _TrackerState(tracker=tracker, stop=threading.Event())
+                _TRACKERS[key] = found
+        return found
+
+    def start_tracking(self, instance: Dict[str, Any], store_root: Path,
+                       task_dir: Path, on_call=None) -> None:
+        """Run one tracker for this task, folding events on a clock.
+
+        The record used to be written by a STAGE: an agent invoked after every
+        phase, which re-read everything and rewrote the file. That cost a whole
+        session per phase, and when the agent flailed it burned its entire
+        clock and produced nothing — measured on scikit-learn-25570, 900s spent
+        on "looking for files named like tracker.md" and an empty record, after
+        which research ran with nothing to read (`fom=NONE approaches=0`).
+
+        So the tracker becomes what the learner already is: always on, fed by
+        events, reconciling on its own clock. A phase pushes what it did and
+        carries on; several events fold in one invocation; and by the time a
+        stage needs the record it is already in order.
+
+        It never blocks the pipeline. A cycle that fails loses that cycle, the
+        events stay queued for the next one, and the thread is a daemon so a
+        wedged tracker cannot hold the run open.
+        """
+        state = self._tracker_state(task_dir)
+        with state.lock:
+            if state.thread is not None:
+                return
+
+            def cycle() -> None:
+                while not state.stop.is_set():
+                    state.stop.wait(self.TRACK_CYCLE_S)
+                    self._fold_events(instance, store_root, task_dir, state,
+                                      on_call=on_call)
+
+            state.thread = threading.Thread(target=cycle, daemon=True,
+                                            name=f"tracker-{state.tracker.parent.name}")
+            state.thread.start()
+        if on_call:
+            on_call(f"[track] running: folding every {self.TRACK_CYCLE_S:.0f}s")
+
+    def note_event(self, task_dir: Path, phase: str, cost: str = "",
+                   evidence: Optional[List[Path]] = None) -> int:
+        """Hand the tracker what just happened. Returns this event's number.
+
+        Deterministic and cheap — a list append, no model, no file. The number
+        is what lets a stage that must read the record wait for its own event
+        to have landed rather than for a fixed delay.
+        """
+        state = self._tracker_state(task_dir)
+        with state.lock:
+            state.queued += 1
+            state.pending.append({"phase": phase, "cost": cost or "not measured",
+                                  "at": time.strftime("%H:%M:%S"),
+                                  "n": state.queued})
+            for path in (evidence or []):
+                if Path(path).is_file() and str(path) not in state.evidence:
+                    state.evidence.append(str(path))
+            return state.queued
+
+    def _fold_events(self, instance: Dict[str, Any], store_root: Path,
+                     workdir: Path, state: "_TrackerState", on_call=None) -> None:
+        """Fold everything queued into the record, in one invocation."""
+        with state.lock:
+            events = list(state.pending)
+            evidence = list(state.evidence)
+            state.pending = []
+        if not events:
+            return
+
+        highest = max(int(e["n"]) for e in events)
+        phases = ", ".join(f"{e['phase']} ({e['cost']})" for e in events)
+        files = [Path(p) for p in evidence if Path(p).is_file()]
+        if state.tracker.is_file():
+            files.append(state.tracker)
+        prompt = self.TRACK_PROMPT.format(
+            topic="{topic}", phase=phases, tracker=str(state.tracker),
+            cost=f"{len(events)} phase(s) since the last fold")
+        if on_call:
+            on_call(f"[track] folding {len(events)} event(s): {phases}")
+        try:
+            self.standalone_stage(
+                instance, store_root, workdir, prompt,
+                attachments=[str(f) for f in files],
+                timeout_s=self.RECORD_GUARD_S, agent=self.tracker_agent_name,
+                phase="track", cwd=state.tracker.parent, on_call=on_call)
+        except Exception as exc:
+            # A cycle that fails loses the cycle, not the events: they are
+            # already out of `pending`, so they are put back for the next one.
+            with state.lock:
+                state.pending = events + state.pending
+            if on_call:
+                on_call(f"[track] fold failed, {len(events)} event(s) requeued: "
+                        f"{type(exc).__name__}: {exc}")
+            return
+
+        with state.lock:
+            state.cycles += 1
+            state.folded = max(state.folded, highest)
+        with state.moved:
+            state.moved.notify_all()
+
+    def await_record(self, task_dir: Path, upto: int = 0, on_call=None) -> bool:
+        """Wait until the record includes event *upto*. True if it does.
+
+        Bounded, and the caller proceeds either way: an out-of-date record is
+        worse than a current one and far better than a stage that never runs.
+        """
+        state = self._tracker_state(task_dir)
+        target = upto or state.queued
+        deadline = time.time() + self.TRACK_WAIT_S
+        with state.moved:
+            while state.folded < target and time.time() < deadline:
+                if state.pending or state.thread is not None:
+                    state.moved.wait(timeout=min(5.0, max(0.1, deadline - time.time())))
+                else:
+                    break
+        current = state.folded >= target
+        if not current and on_call:
+            on_call(f"[track] the record is behind ({state.folded}/{target} "
+                    f"event(s) folded) — reading it as it stands")
+        return current
+
+    def stop_tracking(self, task_dir: Path, instance: Optional[Dict[str, Any]] = None,
+                      store_root: Optional[Path] = None, on_call=None) -> None:
+        """Fold what is left and stop this task's tracker."""
+        state = self._tracker_state(task_dir)
+        state.stop.set()
+        if instance is not None and store_root is not None:
+            self._fold_events(instance, store_root, task_dir, state, on_call=on_call)
+        thread = state.thread
+        if thread is not None:
+            thread.join(timeout=5.0)
+        with _TRACKER_LOCK:
+            _TRACKERS.pop(str(state.tracker), None)
+
     def track(self, instance: Dict[str, Any], store_root: Path, workdir: Path,
               phase: str, evidence: Optional[List[Path]] = None,
-              on_call=None, cost: str = "") -> Path:
-        """Fold what just happened into this task's record. Returns its path.
+              on_call=None, cost: str = "", wait: bool = False) -> Path:
+        """Hand what just happened to this task's tracker. Returns the record.
 
-        Its own stage, and that is the point. Everything today that was left to
-        an agent as a side-job went unrecorded — an attempt told to note what it
-        found fixed the code instead, a planner told to file its ideas narrated
-        them. An agent whose only tool is recording, whose only input is what
-        just happened, and whose prompt says "do not attempt the task", has
-        nothing else it can do.
+        A PUSH, not a stage. This used to invoke an agent after every phase,
+        which re-read everything and rewrote the record from scratch — a whole
+        session per phase, per task. It was the most expensive thing in the
+        pipeline and the least reliable: measured across one run, 163 of 241
+        stage kills were `track` hitting its ceiling, and raising the ceiling
+        only made each failure longer. On scikit-learn-25570 it spent 900s on
+        "looking for files named like tracker.md" and wrote nothing, after
+        which research ran with no record at all.
+
+        Now the phase records an EVENT — a list append, no model, no file —
+        and the always-on tracker folds several of them per invocation on its
+        own clock. The cost is amortised across the phases instead of charged
+        to each one, and the record is already in order by the time anything
+        reads it.
+
+        `wait=True` is for the stages that READ the record — research, and the
+        snapshot at the end. They wait for their own event to have landed, and
+        proceed on a stale record rather than not at all if it has not.
 
         The record lives beside the task and never leaves it. Two tasks that
         look alike are still two tasks: an established fact from one is an
         assumption in the other, and an assumption presented as established is
         worse than nothing, because the next phase will not re-check it.
         """
-        topic = self.research_topic(instance)
-        # Beside the TASK, not inside one attempt: the record spans attempts,
-        # which is the whole reason the next one can read what the last found.
-        tracker = Path(workdir).parent / self.TRACKER_FILE
-        files = [Path(p) for p in (evidence or []) if Path(p).is_file()]
-        if tracker.is_file():
-            files.append(tracker)
-        prompt = self.TRACK_PROMPT.format(topic="{topic}", phase=phase,
-                                          tracker=str(tracker),
-                                          cost=cost or "not measured")
+        task_dir = Path(workdir).parent
+        state = self._tracker_state(task_dir)
+        mine = self.note_event(task_dir, phase, cost=cost, evidence=evidence)
         if on_call:
-            on_call(f"[track:{phase}] folding into {tracker.name}")
-        # Run in the TASK directory, not the checkout.
-        #
-        # The record is about what happened, and the source is not evidence of
-        # that — it is the thing that convinced five earlier stages the task was
-        # already done. An agent that cannot see the tree cannot conclude from
-        # the tree.
-        self.standalone_stage(instance, store_root, workdir, prompt,
-                              attachments=[str(f) for f in files],
-                              timeout_s=self.FINALIZE_BUDGET_S,
-                              agent=self.tracker_agent_name, phase="track",
-                              cwd=tracker.parent, on_call=on_call)
+            on_call(f"[track:{phase}] recorded ({cost or 'not measured'})")
+        if wait:
+            # Fold now rather than waiting out the clock: the reader is here.
+            self._fold_events(instance, store_root, workdir, state,
+                              on_call=on_call)
+            self.await_record(task_dir, upto=mine, on_call=on_call)
+            self._reshape_if_needed(instance, store_root, workdir,
+                                    state.tracker, phase, on_call=on_call)
+        return state.tracker
 
-        # The shape is CHECKED, not merely asked for.
-        #
-        # Sent back once, naming what is missing. A second failure is reported
-        # rather than looped on: the content is there either way, and a record
-        # in the wrong shape is worth more than no record.
+    def _reshape_if_needed(self, instance: Dict[str, Any], store_root: Path,
+                           workdir: Path, tracker: Path, phase: str,
+                           on_call=None) -> None:
+        """Ask once for the shape the next phase reads, if it is not there.
+
+        Checked rather than merely asked for, and asked again only ONCE: the
+        content is there either way, and a record in the wrong shape is worth
+        more than no record.
+        """
         missing = self.missing_sections(tracker)
-        if missing:
-            if on_call:
-                on_call(f"[track:{phase}] the record is missing "
-                        f"{', '.join(missing)} — asking for it in the shape "
-                        f"the next phase reads")
-            self.standalone_stage(
-                instance, store_root, workdir,
-                self.RESHAPE_PROMPT.format(
-                    tracker=str(tracker), missing=", ".join(missing),
-                    sections="\n".join(f"    {s}" for s in self.TRACKER_SECTIONS)),
-                attachments=[str(tracker)], timeout_s=self.FINALIZE_BUDGET_S,
-                agent=self.tracker_agent_name, phase="track",
-                cwd=tracker.parent, on_call=on_call)
-            still = self.missing_sections(tracker)
-            if still and on_call:
-                on_call(f"[track:{phase}] ** still missing {', '.join(still)} "
-                        f"— the record is organised by something other than "
-                        f"what the next phase reads")
-        return tracker
+        if not missing:
+            return
+        if on_call:
+            on_call(f"[track:{phase}] the record is missing "
+                    f"{', '.join(missing)} — asking for it in the shape "
+                    f"the next phase reads")
+        self.standalone_stage(
+            instance, store_root, workdir,
+            self.RESHAPE_PROMPT.format(
+                tracker=str(tracker), missing=", ".join(missing),
+                sections="\n".join(f"    {s}" for s in self.TRACKER_SECTIONS)),
+            attachments=[str(tracker)], timeout_s=self.RECORD_GUARD_S,
+            agent=self.tracker_agent_name, phase="track",
+            cwd=tracker.parent, on_call=on_call)
+        still = self.missing_sections(tracker)
+        if still and on_call:
+            on_call(f"[track:{phase}] ** still missing {', '.join(still)} "
+                    f"— the record is organised by something other than "
+                    f"what the next phase reads")
 
     @classmethod
     def missing_sections(cls, tracker: Path) -> List[str]:
@@ -1972,7 +2440,7 @@ class Arm:
             checkout = Path(workdir)
         self.research_topic_binding = self.research_topic(instance)
         env = self.phronix_env(
-            tool_path_env(isolated_env(store_root, Path(workdir) / "cache")))
+            tool_path_env(isolated_env(store_root, Path(workdir) / "cache", fresh=self.fresh)))
         env.update(model_env(base_url=self.base_url, api_key=self.api_key))
         env["PHRONIX_WRITE_LAYER"] = "project"
         if phase:
@@ -1999,7 +2467,8 @@ class Arm:
                 # research flow already does. It closes stdin for the same
                 # reason `subprocess.run` had to.
                 stdout, code = stream_opencode(
-                    command, checkout, run_env, timeout_s, on_call=on_call)
+                    command, checkout, run_env, timeout_s, on_call=on_call,
+                    host=self.agent_host)
         except Exception as exc:
             # SAID, not swallowed.
             #
@@ -2115,6 +2584,50 @@ Take everything from the skill(s) named above; nothing needs re-deriving. If
 there are several, merge them — one task, one skill.
 """
 
+    def _refile_task_skill(self, store_root: Path, wanted: str,
+                           found: List[str], on_call=None) -> bool:
+        """Move what this task wrote under other names to the canonical one.
+
+        Deterministic: reads the stray files, merges them, rewrites the
+        frontmatter name, and writes the result where the lookup will find it.
+        Returns whether the canonical skill now exists.
+        """
+        from tests.benchmark.isolation import merge_skill_text
+
+        tasks = Path(store_root) / "capabilities" / "tasks"
+        target = None
+        try:
+            from phronix.capabilities import task_slug
+
+            target = tasks / task_slug(wanted) / wanted / "SKILL.md"
+        except Exception:
+            target = tasks / wanted / wanted / "SKILL.md"
+
+        merged = target.read_text(errors="replace") if target.is_file() else ""
+        for name in found:
+            for stray in sorted((tasks).glob(f"*/{name}/SKILL.md")):
+                try:
+                    merged = merge_skill_text(merged, stray.read_text(errors="replace"))
+                except (OSError, ValueError):
+                    continue
+        if not merged.strip():
+            return False
+
+        # The frontmatter has to name the skill the reader asks for, or the
+        # file is in the right place under the wrong identity.
+        merged = re.sub(r"(?m)^name:.*$", f"name: {wanted}", merged, count=1)
+        merged = re.sub(r"(?m)^subject:.*$", f"subject: {wanted}", merged, count=1)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(merged)
+        except OSError as exc:
+            if on_call:
+                on_call(f"[skill] could not write `{wanted}`: {exc}")
+            return False
+        if on_call:
+            on_call(f"[skill] re-filed {len(found)} skill(s) into `{wanted}`")
+        return True
+
     def ensure_task_skill(self, instance: Dict[str, Any], store_root: Path,
                           workdir: Path, on_call=None) -> str:
         """Make sure this task's skill exists under the name the reader uses.
@@ -2135,22 +2648,62 @@ there are several, merge them — one task, one skill.
         # Anything this task wrote under another name, so the re-ask can merge
         # rather than re-derive.
         tasks = Path(store_root) / "capabilities" / "tasks"
-        stem = wanted.split("-")[0]
+        # Matched on THIS TASK's issue number, not on a name stem.
+        #
+        # The stem was `wanted.split("-")[0]` — "pydata" for
+        # `pydata-xarray-3364` — which matches every other pydata task in the
+        # group. So a task merged a NEIGHBOUR's skill into its own and then
+        # `rmtree`d it. Measured in one run: `pydata-xarray-3364` and
+        # `pydata-xarray-4493` are different tasks, each matched the other,
+        # and 3364's skill was destroyed by 4493's re-file while 4493's
+        # content — real instructions about `dtypes.py` and `GroupBy.__repr__`
+        # — ended up offered to 3364, whose bug is in `concat.py`.
+        #
+        # The issue number is what makes two names the same TASK. A skill the
+        # agent misnamed with a different number is left alone rather than
+        # absorbed: losing one misfiled skill costs this task a diagnosis,
+        # while stealing one costs another task its answer AND gives this one
+        # the wrong instructions.
+        digits = re.findall(r"\d+", wanted)
+        issue = digits[-1] if digits else ""
+        def belongs(name: str) -> bool:
+            if name == wanted:
+                return False
+            if issue and issue in name:
+                return True          # same issue, misnamed variant
+            # A name carrying NO issue number cannot belong to another
+            # numbered task, and this is the shape the agent reaches for when
+            # it names a skill after the bug instead of the ticket —
+            # `sympy-mignotte-bound-fix` was the real diagnosis for
+            # sympy-19254 and would otherwise be stranded.
+            return not re.search(r"\d", name)
+
         found = sorted(d.name for d in tasks.glob("*")
-                       if d.is_dir() and d.name != wanted and stem in d.name)
+                       if d.is_dir() and belongs(d.name))
         if not found:
             return ""
         if on_call:
             on_call(f"[skill] this task's skill is filed as "
                     f"{', '.join(found)} — the lookup asks for `{wanted}`; "
                     f"re-filing it")
-        self.standalone_stage(
-            instance, store_root, workdir,
-            self.RENAME_PROMPT.format(skill=wanted, found=", ".join(
-                f"`{name}`" for name in found)),
-            timeout_s=self.FINALIZE_BUDGET_S, agent=self.filer_agent_name,
-            phase="learn", on_call=on_call)
-        landed = self.best_skill_for(store_root, topic) == wanted
+
+        # Re-filed by the HARNESS, not by an agent.
+        #
+        # Renaming a directory is not a judgement, and making it one made the
+        # whole pipeline depend on a model staying up. Measured on
+        # sympy-19254: research diagnosed the bug and wrote it as
+        # `sympy-mignotte-bound-fix`, the re-file agent was asked to move it to
+        # `sympy-sympy-19254`, and it died on API retries —
+        # `exited rc=255 ... "api_retry","attempt":4` — leaving the trace to
+        # report "still does not exist; the next run will start from scratch"
+        # while the diagnosis sat on disk under a name no reader asks for.
+        #
+        # So the content is moved here, deterministically, and the agent is
+        # not involved. `merge_skill_text` is the same reconciliation used when
+        # promoting into the source tree, so two strays for one task combine
+        # rather than the last one winning.
+        moved = self._refile_task_skill(store_root, wanted, found, on_call=on_call)
+        landed = moved or self.best_skill_for(store_root, topic) == wanted
         if not landed:
             if on_call:
                 on_call(f"[skill] ** `{wanted}` still does not exist — the next "
@@ -2215,10 +2768,46 @@ there are several, merge them — one task, one skill.
                     if p.is_file()]
         self.standalone_stage(instance, store_root, workdir, prompt,
                               attachments=[str(p) for p in evidence],
-                              timeout_s=self.FINALIZE_BUDGET_S,
+                              timeout_s=self.RECORD_GUARD_S,
                               agent=self.filer_agent_name, phase="learn",
                               on_call=on_call)
         return skill
+
+    @staticmethod
+    def _skill_has_content(store_root: Path, skill: str) -> bool:
+        """Does this skill say anything, or is it just the scaffold?
+
+        Existence is not substance, and the difference is invisible from the
+        outside: `skill_write` on a new subject creates the file with its
+        headings, so a research pass that names the skill and writes no blocks
+        leaves `## Instructions` and `## Rules` empty and every later check
+        satisfied.
+
+        Measured on pydata-xarray-3364: 220 bytes, zero blocks, created after
+        try 1 and never filled. `best_skill_for` found it, the lookup reported
+        `found ... — the attempt solves with it`, tries 2 and 3 both loaded it
+        and `skill-use` recorded them as having worked from it. Try 3 was
+        revising an empty file, and nothing in the run said so.
+        """
+        from phronix.skill_schema import parse_skill
+
+        tasks = Path(store_root) / "capabilities" / "tasks"
+        for path in tasks.glob(f"*/{skill}/SKILL.md"):
+            try:
+                found = parse_skill(path.parent)
+            except Exception:
+                continue
+            # INSTRUCTIONS and RULES, not lessons.
+            #
+            # A lesson is "the last attempt failed"; an instruction is what to
+            # do instead. Counting lessons satisfied this check with exactly
+            # the former: pydata-xarray-3364 had an empty `SKILL.md` and a
+            # `LESSONS.md` reading "Attempt to ignore missing variables ...
+            # failed – agent produced no patch", and on that basis tries 2 and
+            # 3 were handed a skill containing no fix at all.
+            if found.get("blocks"):
+                return True
+        return False
 
     def research_from_tracker(self, instance: Dict[str, Any], store_root: Path,
                               workdir: Path, attempt_index: int = 1,
@@ -2238,6 +2827,20 @@ there are several, merge them — one task, one skill.
         """
         topic = self.research_topic(instance)
         tracker = Path(workdir).parent / self.TRACKER_FILE
+        # The record has to be CURRENT before it is read.
+        #
+        # The tracker folds on its own clock, so the events from the attempt
+        # and the evaluation that just ran may still be queued. The reader
+        # waits — bounded — rather than every writer paying for a fold it does
+        # not need. If the wait runs out, this reads the record as it stands:
+        # a slightly stale record is worth far more than a diagnosis that
+        # never runs, which is what the old per-phase stage produced whenever
+        # it hit its ceiling.
+        task_dir = Path(workdir).parent
+        state = self._tracker_state(task_dir)
+        self._fold_events(instance, store_root, workdir, state, on_call=on_call)
+        self.await_record(task_dir, on_call=on_call)
+
         # THE name the next attempt looks up: the task's own slug.
         #
         # One skill per task, named after the task — there is no second kind to
@@ -2269,10 +2872,25 @@ there are several, merge them — one task, one skill.
         # organised by design rather than exhaustive in order, so the
         # conversation is where a diagnosis goes for the exact wording of
         # something the record has summarised.
+        # The record, the conversation — AND the skill with its lessons.
+        #
+        # A revision pass is asked to fix a diagnosis that has already been
+        # tried and failed, so what it most needs is what was tried. That
+        # lived in two places it was never handed: the skill it is about to
+        # rewrite, and the LESSONS.md beside it, which is where every earlier
+        # attempt's failure was recorded. Measured on pydata-xarray-3364: the
+        # one sentence describing what try 1 had attempted and why it failed
+        # sat in `LESSONS.md`, unread, while research re-derived the problem
+        # from the tracker and wrote a skill with no instructions in it.
+        skill_files = [path for pattern in (f"*/{skill}/SKILL.md",
+                                            f"*/{skill}/LESSONS.md")
+                       for path in (Path(store_root) / "capabilities" /
+                                    "tasks").glob(pattern)]
         attachments = [str(p) for p in (
             tracker,
             Path(workdir).parent / "conversation.md",
             Path(workdir).parent / "conversation-summary.md",
+            *skill_files,
         ) if p.is_file()]
         started = time.time()
         # Runs as the FILER: it can read the code and the record, and its one
@@ -2335,6 +2953,39 @@ there are several, merge them — one task, one skill.
             if not found:
                 on_call("[research] ** reported no PROBLEM/APPROACH/ANSWER — "
                         "the pass cannot be audited from its trace")
+
+        # Did the diagnosis actually get FILED?
+        #
+        # The pass is judged on its transcript — PROBLEM/APPROACH/ANSWER — and
+        # nothing checked that the skill it was told to write exists. Measured
+        # on matplotlib-26011: research read the record, the conversation and
+        # the issue, reported `PROBLEM:`, called `skill_load` on a skill that
+        # was not there yet, and stopped at 159s of its 300s having called no
+        # writing tool at all. The trace said `research-2: no phronix tools
+        # called`, and the next line said `no skill covers this task; solving
+        # from scratch` — try 2 started over, with the diagnosis sitting in a
+        # transcript nobody reads.
+        #
+        # `ensure_task_skill` does not cover this: it re-files a skill written
+        # under the WRONG NAME, and there was no skill at all.
+        #
+        # Asked again ONCE, and only to file — not to diagnose again, which is
+        # what the budget was already spent on.
+        if not self._skill_has_content(store_root, skill):
+            if on_call:
+                on_call(f"[research] ** `{skill}` is empty — asking for the "
+                        f"diagnosis to be filed into it")
+            self.standalone_stage(
+                instance, store_root, workdir,
+                self.FILE_DIAGNOSIS_PROMPT.format(
+                    topic="{topic}", skill=skill, report=str(report)),
+                attachments=[str(report)] if report.is_file() else [],
+                timeout_s=self.RECORD_GUARD_S, agent=self.filer_agent_name,
+                phase="research", on_call=on_call)
+            if on_call and not self._skill_has_content(store_root, skill):
+                on_call(f"[research] ** `{skill}` is still empty — try "
+                        f"{attempt_index + 1} will load it and learn nothing")
+
         return {
             "attempt": attempt_index,
             "kind": "tracked",
@@ -2428,10 +3079,31 @@ there are several, merge them — one task, one skill.
         """Total research seconds this task may have spent by ``attempt_index``."""
         return self.research_budget_s * max(1, int(attempt_index))
 
-    #: The pinned model alias for the task currently running, set by the runner
-    #: before each task. Claude Code takes its model from the environment rather
-    #: than argv, so it has to be readable from the arm rather than passed.
-    pinned_for_env: str = ""
+    @property
+    def agent_host(self) -> str:
+        """Compute node this THREAD's task runs its agents on.
+
+        Thread-local: see `_TASK_LOCAL`. Empty means "right here".
+        """
+        return getattr(_TASK_LOCAL, "agent_host", "") or ""
+
+    @agent_host.setter
+    def agent_host(self, value: str) -> None:
+        _TASK_LOCAL.agent_host = value or ""
+
+    @property
+    def pinned_for_env(self) -> str:
+        """The pinned model alias for the task running on THIS thread.
+
+        Claude Code takes its model from the environment rather than argv, so
+        it has to be readable from the arm rather than passed. Thread-local for
+        the same reason as `agent_host`.
+        """
+        return getattr(_TASK_LOCAL, "pinned_for_env", "") or ""
+
+    @pinned_for_env.setter
+    def pinned_for_env(self, value: str) -> None:
+        _TASK_LOCAL.pinned_for_env = value or ""
 
     #: Files each previous attempt changed, set by the runner before an attempt
     #: so feedback can say which locations have already failed.
@@ -2878,6 +3550,7 @@ there are several, merge them — one task, one skill.
         previous_topic = os.environ.get("PHRONIX_RESEARCH_TOPIC")
         previous_session = os.environ.get("PHRONIX_RESEARCH_SESSION")
         previous_reuse = os.environ.get("PHRONIX_RESEARCH_REUSE")
+        previous_fresh = os.environ.get("PHRONIX_FRESH_CAPABILITIES")
         try:
             os.environ["PHRONIX_PROJECT_ROOT"] = str(Path(store_root).parent)
             # In-process phronix calls resolve the same folders the subprocess
@@ -2891,6 +3564,16 @@ there are several, merge them — one task, one skill.
                 os.environ.pop("PHRONIX_RESEARCH_REUSE", None)
             if getattr(self, "research_topic_binding", ""):
                 os.environ["PHRONIX_RESEARCH_TOPIC"] = self.research_topic_binding
+            # The harness's OWN reads obey `--fresh` too.
+            #
+            # The agents get this through `isolated_env`; these in-process
+            # calls did not, so `recalled_skill` searched with the filter off
+            # and offered the attempt a bundled answer that the harness's own
+            # `search-skill` had just correctly refused to return.
+            if getattr(self, "fresh", False):
+                os.environ["PHRONIX_FRESH_CAPABILITIES"] = "1"
+            else:
+                os.environ.pop("PHRONIX_FRESH_CAPABILITIES", None)
             return call(*args, **kwargs)
         except Exception:
             return None
@@ -2901,7 +3584,8 @@ there are several, merge them — one task, one skill.
             for key, value in (("PHRONIX_PROJECT_ROOT", previous_root),
                                ("PHRONIX_RESEARCH_TOPIC", previous_topic),
                                ("PHRONIX_RESEARCH_SESSION", previous_session),
-                               ("PHRONIX_RESEARCH_REUSE", previous_reuse)):
+                               ("PHRONIX_RESEARCH_REUSE", previous_reuse),
+                               ("PHRONIX_FRESH_CAPABILITIES", previous_fresh)):
                 if value is None:
                     os.environ.pop(key, None)
                 else:
@@ -2951,30 +3635,6 @@ class MiniArm(Arm):
             "--yolo", "--cost-limit", str(self.cost_limit),
             "-o", str(trajectory),
         ]
-        # The planner gets the EVIDENCE, not the repository.
-        #
-        # A revision pass runs against a checkout holding the failed attempt's
-        # edits, and the planner reads them as proof there is nothing to plan.
-        # Measured across five runs and five successive gates — a prompt
-        # instruction, a restricted agent, a dedicated filer with no editing
-        # tools, an explicit re-ask, and a standing note saying the tree is
-        # patched — it still answered "the implementation is correct" and
-        # recorded no ideas: 67 plan rounds on one task, 68 re-asks, zero
-        # ideas.
-        #
-        # Every one of those gates argued with the conclusion. None removed
-        # what produces it. The planner does not need the source to name the
-        # ideas worth exploring — it needs the failure, the verdict and the
-        # test that is still red, all of which are files — so it is given a
-        # directory containing exactly those and nothing else.
-        evidence = workdir / "evidence"
-        evidence.mkdir(parents=True, exist_ok=True)
-        for source in context_paths:
-            try:
-                shutil.copy2(source, evidence / Path(source).name)
-            except OSError:
-                pass
-
         started = time.time()
         try:
             result = subprocess.run(command, capture_output=True, text=True,
@@ -3327,8 +3987,8 @@ class OpenCodeArm(Arm):
         checkout = self.prepare_checkout(container, store_root, workdir)
 
         self.research_topic_binding = self.research_topic(instance)
-        env = (isolated_env(store_root, workdir / "cache") if self.uses_phronix
-               else dict(os.environ))
+        env = (isolated_env(store_root, workdir / "cache", fresh=self.fresh)
+               if self.uses_phronix else without_harness_venv(dict(os.environ)))
         env = self.phronix_env(tool_path_env(env))
         env.update(model_env(base_url=self.base_url, api_key=self.api_key))
         if self.uses_phronix:
@@ -3511,7 +4171,7 @@ class OpenCodeArm(Arm):
             launch: Dict[str, Any] = {}
             stdout, code = stream_opencode(command, checkout, env,
                                            self.timeout_s, on_call,
-                                           stats=launch)
+                                           stats=launch, host=self.agent_host)
             # The agent's own error output, which this branch used to discard.
             #
             # `stream_opencode` drains stderr into `stats`; hardcoding "" here
@@ -4446,6 +5106,28 @@ are thin, build what they support and say what is unverified.
     #: The hang-guard for the write-up. Reaching it means wedged, not slow.
     MUST_FINISH_GUARD_S = int(_tuned("research.must_finish_guard_s", 900))
 
+    #: The hang-guard for RECORDING a task's record and its skill.
+    #:
+    #: Recording is not exploring. `track`, `ensure_task_skill` and
+    #: `snapshot_tracker` all read what already happened and write it down;
+    #: none of them can run away, because there is nothing to run away into.
+    #: Cutting one throws away the attempt, evaluation and research that were
+    #: paid for to produce its input.
+    #:
+    #: They ran on `FINALIZE_BUDGET_S` (150s), which is a WORK budget, and hit
+    #: it:
+    #:
+    #:     track>  KILLED at the 150s hard ceiling after 150s
+    #:     track>  exited rc=-9: d":"0be2fb67-6a4c-46ea-b8bd-4a1907...
+    #:     track>  the record is missing ## The problem, ## How it ...
+    #:
+    #: — killed mid-write, leaving a truncated record, which then failed the
+    #: shape check and cost a second full pass to re-ask. The budget did not
+    #: save time; it spent it twice and lost the record in between.
+    #:
+    #: A guard rather than no timeout at all: a wedged agent must still end.
+    RECORD_GUARD_S = int(_tuned("research.record_guard_s", 900))
+
     #: A much shorter guard for the correctors.
     #:
     #: They have no file tools and their input is a list someone else wrote, so
@@ -4654,6 +5336,25 @@ phase owes and how to mark a partial measurement as partial.
     TRACKER_SECTIONS = ("## The problem", "## How it has been approached",
                         "## What worked", "## What did not work")
 
+    FILE_DIAGNOSIS_PROMPT = """\
+You diagnosed this task and did not write the diagnosis down. Write it now.
+
+Task: `{topic}`
+The skill to write: `{skill}`
+
+    skill_write(name="{skill}", ...)
+
+That exact name. The next attempt looks it up by that name and by nothing else,
+so a diagnosis filed anywhere is a diagnosis nobody reads.
+
+What you found is in `{report}` and in what you already said. Do not diagnose
+again, do not read the source again, do not attempt the task: take what is
+there and file it.
+
+If the diagnosis is incomplete, write what you have. A partial fix the next
+attempt can build on is worth more than a complete one it never sees.
+"""
+
     RESHAPE_PROMPT = """\
 The record at `{tracker}` is written, and it is not in the shape the next phase
 reads. Rewrite it — same content, correct headings.
@@ -4735,12 +5436,13 @@ write the fix into the task's solution skill.
 method; this message is only the input.
 
 Task: `{topic}`
-The record: `{tracker}` — the problem, how it has been approached, what worked,
-what did not. Read it first: it is there so you do not repeat what this task
-has already done.
-The task's conversation is attached too, unabridged, for when the record has
-compacted away a detail you need.
-The skill to update: `{skill}`
+
+Attached, and all of it is input rather than description: the record
+`{tracker}`, the unabridged conversation, and the skill `{skill}` with its
+`LESSONS.md`. Read the record and the lessons before you diagnose — `I7`.
+
+Write BOTH: `skill_write` with the corrected fix, and `skill_write_lesson`
+with what just failed and the tests it BROKE.
 
 You have {budget}s. `I5` says what to do if that is not enough.
 
@@ -4794,7 +5496,7 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
                               encoding="utf-8")
 
         env = self.phronix_env(tool_path_env(
-            isolated_env(store_root, workdir / "cache")))
+            isolated_env(store_root, workdir / "cache", fresh=self.fresh)))
         env.update(model_env(base_url=self.base_url, api_key=self.api_key))
         env["PHRONIX_WRITE_LAYER"] = "project"
         # See `solve` above — this is the research half.
@@ -4818,6 +5520,30 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
             context_paths.append(Path(notes))
         full_context = self.attachments(context_paths)
         brief_only = self.attachments([brief_file])
+
+        # The planner gets the EVIDENCE, not the repository.
+        #
+        # A revision pass runs against a checkout holding the failed attempt's
+        # edits, and the planner reads them as proof there is nothing to plan.
+        # Measured across five runs and five successive gates — a prompt
+        # instruction, a restricted agent, a dedicated filer with no editing
+        # tools, an explicit re-ask, and a standing note saying the tree is
+        # patched — it still answered "the implementation is correct" and
+        # recorded no ideas: 67 plan rounds on one task, 68 re-asks, zero
+        # ideas.
+        #
+        # Every one of those gates argued with the conclusion. None removed
+        # what produces it. The planner does not need the source to name the
+        # ideas worth exploring — it needs the failure, the verdict and the
+        # test that is still red, all of which are files — so it is given a
+        # directory containing exactly those and nothing else.
+        evidence = workdir / "evidence"
+        evidence.mkdir(parents=True, exist_ok=True)
+        for source in context_paths:
+            try:
+                shutil.copy2(source, evidence / Path(source).name)
+            except OSError:
+                pass
 
         started = time.time()
         transcripts: List[str] = []
@@ -4950,7 +5676,8 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
                     where,
                     full_context if attachments is None else attachments,
                     agent or self.research_agent_name, model),
-                where, stage_env, budget, narrate, root=where, stats=stats)
+                where, stage_env, budget, narrate, root=where, stats=stats,
+                host=self.agent_host)
             if rc != 0:
                 code = rc
             transcripts.append(out)
@@ -5213,7 +5940,7 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
                 name, prompt = steps[0]
                 stage(name, prompt, budget)
                 return
-            with ThreadPoolExecutor(max_workers=len(steps)) as pool:
+            with task_pool(len(steps)) as pool:
                 # list() forces the wait: the barrier IS the point.
                 list(pool.map(lambda step: stage(step[0], step[1], budget),
                               steps))
@@ -5510,7 +6237,7 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
                         f"once: " + ", ".join(a["name"] for a in self.PLAN_ANGLES))
             jobs = [(lambda job=job: scout(job))
                     for job in enumerate(self.PLAN_ANGLES, 1)]
-            with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            with task_pool(len(jobs)) as pool:
                 list(pool.map(lambda run: run(), jobs))
             # Re-read: whatever the fallback recorded IS the method now.
             #
@@ -5527,7 +6254,7 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
                 on_call(f"[plan] method of {len(method)} step(s); finding ways "
                         f"for each, in parallel: "
                         + ", ".join(str(s.get("name") or "?") for s in method))
-            with ThreadPoolExecutor(max_workers=max(1, len(method))) as pool:
+            with task_pool(max(1, len(method))) as pool:
                 list(pool.map(ways, enumerate(method, 1)))
 
         ideas = self._in_store(store_root, self._load_aspects, topic) or []
@@ -5694,7 +6421,7 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
         # question that has been answered.
 
         # --- the consumer, fed by the plan loop below -----------------------
-        explore_pool = ThreadPoolExecutor(max_workers=self.max_parallel_aspects)
+        explore_pool = task_pool(self.max_parallel_aspects)
         explore_futures: List[Any] = []
         submitted: Dict[str, int] = {}
 
@@ -6046,7 +6773,7 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
                         on_call(f"[trial:{plan['name']}] SOLVED the task — "
                                 f"no more ideas needed; reconciling what is in")
 
-            with ThreadPoolExecutor(max_workers=len(plans)) as pool:
+            with task_pool(len(plans)) as pool:
                 list(pool.map(write_and_try, list(enumerate(plans, 1))))
 
             # THE SUPER IDEA: one more candidate, combining what every idea found.
@@ -6364,7 +7091,7 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
                        "none solved it — questioning what they all assumed"))
 
         env = self.phronix_env(tool_path_env(
-            isolated_env(store_root, workdir / "cache")))
+            isolated_env(store_root, workdir / "cache", fresh=self.fresh)))
         env.update(model_env(base_url=self.base_url, api_key=self.api_key))
         env["PHRONIX_WRITE_LAYER"] = "project"
         env["PHRONIX_PHASE"] = "research"
@@ -6388,7 +7115,8 @@ each thing you try, `ANSWER:` last — and write the same three into `{report}`.
                 # pass's solution skill is written, from the one input that
                 # settles it. Cutting it half way discards N attempts and N
                 # evaluations, which is the most expensive thing in the pass.
-                checkout, env, self.MUST_FINISH_GUARD_S, on_call)
+                checkout, env, self.MUST_FINISH_GUARD_S, on_call,
+                host=self.agent_host)
         except Exception as exc:
             # Reconciliation is bookkeeping over work already done; losing it
             # must not lose the trials themselves.
@@ -6852,7 +7580,7 @@ It is the plan itself, not background reading.
         AttributeError and the learner produced nothing for a whole run.
         """
         env = self.phronix_env(tool_path_env(
-            isolated_env(store_root, workdir / "learner-cache")))
+            isolated_env(store_root, workdir / "learner-cache", fresh=self.fresh)))
         env.update(model_env(base_url=self.base_url, api_key=self.api_key))
         env["PHRONIX_WRITE_LAYER"] = "project"
         # The background learner's own retrievals, kept apart from the
@@ -7048,7 +7776,8 @@ It is the plan itself, not background reading.
                                 self.learner_agent_name),
                             checkout,
                             self._learning_env(store_root, workdir),
-                            self.LEARNING_BUDGET)
+                            self.LEARNING_BUDGET,
+                            host=self.agent_host)
                         return out
                     except Exception as exc:
                         # A learner that dies must not take the run with it —
@@ -7067,7 +7796,7 @@ It is the plan itself, not background reading.
                 if len(groups) == 1:
                     written = [reconcile(groups[0], cycle_name)]
                 else:
-                    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+                    with task_pool(len(groups)) as pool:
                         written = list(pool.map(
                             lambda g: reconcile(g, cycle_name), groups))
 
@@ -7216,7 +7945,7 @@ It is the plan itself, not background reading.
         self.write_exchange(workdir, verdict, outcome.patch or "")
 
         self.research_topic_binding = self.research_topic(instance)
-        env = self.phronix_env(tool_path_env(isolated_env(store_root, workdir / "cache")))
+        env = self.phronix_env(tool_path_env(isolated_env(store_root, workdir / "cache", fresh=self.fresh)))
         env.update(model_env(base_url=self.base_url, api_key=self.api_key))
         env["PHRONIX_WRITE_LAYER"] = "project"
         # The post-attempt harvest, which reads to write rather than to solve.
@@ -7308,11 +8037,17 @@ It is the plan itself, not background reading.
              ("attempt-diff.patch", "attempt-notes.md", "exchange.md")
              if (workdir / name).is_file()],
             agent=self.filer_agent_name)
+        # Imported HERE for the same reason it is in the other stage runners:
+        # the module-level name is not in scope in this file.
+        import subprocess
+
         try:
             result = subprocess.run(command, cwd=checkout, env=run_env,
                                     capture_output=True, text=True,
                                     timeout=self.FINALIZE_BUDGET_S)
-        except Exception:                 # a missing skill is not a failed task
+        except OSError:                   # a missing skill is not a failed task
+            return
+        except subprocess.SubprocessError:
             return
         wrote = self.parse_events(result.stdout, AttemptOutcome())
         outcome.tokens_learn += wrote.tokens_total
@@ -7521,11 +8256,33 @@ CLAUDE_BIN_GLOB = (
 
 
 def find_claude_bin() -> str:
-    """Resolve the Claude Code executable, newest version first."""
-    import glob
+    """Resolve the Claude Code executable. A STABLE path, and one that exists.
 
-    matches = sorted(glob.glob(os.path.expanduser(CLAUDE_BIN_GLOB)), reverse=True)
-    return matches[0] if matches else "claude"
+    PATH first. The extension's copy was preferred because there was no other
+    install, and it moves: VS Code updates the extension in place and deletes
+    the old directory, so a path resolved a minute ago can be gone. Measured
+    live — the harness had baked
+    `anthropic.claude-code-2.1.246-.../native-binary/claude` into its command,
+    the extension became 2.1.247 mid-run, and every stage that started
+    afterwards died instantly with `exited rc=127`, which names neither the
+    binary nor the version and reads like a broken agent.
+
+    The glob remains as a fallback, and every candidate is now checked to be
+    an executable FILE rather than merely a matching name — the directory
+    survived the update that removed the binary inside it, so the glob still
+    matched.
+    """
+    import glob
+    import shutil
+
+    on_path = shutil.which("claude")
+    if on_path:
+        return on_path
+    for match in sorted(glob.glob(os.path.expanduser(CLAUDE_BIN_GLOB)),
+                        reverse=True):
+        if os.path.isfile(match) and os.access(match, os.X_OK):
+            return match
+    return "claude"
 
 
 class ClaudeArm(OpenCodeArm):
@@ -7865,9 +8622,21 @@ class ClaudePhronixArm(PhronixOpenCodeArm, ClaudeArm):
         # The phronix MCP server, declared inline rather than written into the
         # checkout: a config file inside the repository would show up as an
         # untracked addition in the patch this arm is judged on.
+        #
+        # `-P` keeps the CHECKOUT off sys.path. The server is started with the repository
+        # under test as its working directory, and python prepends the working
+        # directory to sys.path — so on `psf__requests` the repo's own
+        # `requests/` package shadowed the one fastmcp imports, `from fastmcp
+        # import FastMCP` came back with no such name, and Claude Code recorded
+        # `mcp_servers: [{"name": "phronix", "status": "failed"}]` and carried
+        # on. The whole phronix arm then ran as a plain agent: no skill_search
+        # (so "no skill covers this task" on every task), no research_* (so
+        # every revision pass recorded 0 aspects and 0 approaches), and the
+        # agent reporting it "couldn't find a capability_list command". Nothing
+        # in the trace named the cause; the arm merely looked ineffective.
         config = {"mcpServers": {"phronix": {
             "command": sys.executable,
-            "args": ["-m", "phronix.mcp_server"],
+            "args": ["-P", "-m", "phronix.mcp_server"],
         }}}
         command += ["--mcp-config", json.dumps(config)]
         command += self._denial_flags(agent)

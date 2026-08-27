@@ -206,8 +206,8 @@ profile_args() {
             echo "--parallel ${LLAMA_SLOTS:-1}
                   -c ${LLAMA_CTX:-$(( ${LLAMA_SLOTS:-1} * 131072 ))}
                   --cache-type-k f16 --cache-type-v f16 --kv-unified
-                  --batch-size 2048 --ubatch-size 2048
-                  --cache-ram 8192 --cache-reuse 1024
+                  --batch-size ${LLAMA_BATCH:-2048} --ubatch-size ${LLAMA_UBATCH:-2048}
+                  --cache-ram ${LLAMA_CACHE_RAM:-8192} --cache-reuse 1024
                   --ctx-checkpoints 8 --checkpoint-min-step 16384
                   -t ${LLAMA_THREADS:-6} -tb ${LLAMA_THREADS:-6}" ;;
         *) echo "unknown PROFILE '$PROFILE' (solo|agent|wide|balanced|throughput|context|accuracy|corona)" >&2; return 1 ;;

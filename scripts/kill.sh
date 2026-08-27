@@ -76,6 +76,68 @@ for pid in $agents; do kill "$pid" 2>/dev/null; done
 sleep 2
 for pid in $agents; do kill -9 "$pid" 2>/dev/null; done
 
+# Agents on the COMPUTE NODES.
+#
+# Agents used to run wherever the harness ran, so killing them here was enough.
+# They now run on the allocated nodes — which is the point, the login node was
+# the ceiling — and the process table is node-local, so a local `pgrep` reports
+# a clean stop while the previous run's agents are still going.
+#
+# Measured immediately after the move: a restarted run showed 67 agents on one
+# node against 2 on another, and the oldest were 267s old — orphans of the run
+# before it, still calling the fleet and still skewing every number the new run
+# produced. A kill that leaves work running is worse than no kill, because it
+# reads as a clean slate.
+#
+# Matched on the RUN PATH, which appears in every agent's argv and in the
+# wrapper script it was started from — never on the binary name, for the same
+# reason as above: an interactive session must survive this.
+agent_nodes() {
+    # Whatever the caller named, else the nodes the newest run recorded, else
+    # this host. A run that never started has no nodes and needs none.
+    if [ -n "${BENCH_NODES:-}" ]; then echo "$BENCH_NODES"; return; fi
+    local newest
+    newest=$(ls -dt "$RUNS"/*/ 2>/dev/null | head -1)
+    [ -n "$newest" ] || return 0
+    "$VENV/bin/python" - "$newest/manifest.json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        print(str(json.load(fh).get("nodes") or "").replace(",", " "))
+except Exception:
+    pass
+PY
+}
+
+# Written to a file and run with `bash -s`, NOT inlined into the ssh command.
+# The pattern needs single quotes, the pids need `$` to survive to the far side,
+# and inlining it needed four levels of escaping that silently produced an empty
+# match — kill.sh reported nothing to reap while 67 agents were running.
+reap_agents=$(cat <<REAPER
+pids=\$(grep -la '$RUNS' /proc/[0-9]*/cmdline 2>/dev/null | sed 's#/proc/##; s#/cmdline##')
+n=0
+for p in \$pids; do kill -9 "\$p" 2>/dev/null && n=\$((n+1)); done
+echo \$n
+REAPER
+)
+
+remote_agents=0
+for host in $(agent_nodes); do
+    [ -n "$host" ] || continue
+    [ "$host" = "$(hostname)" ] && continue
+    n=$(printf '%s\n' "$reap_agents" |
+        timeout 30 ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" bash -s 2>/dev/null |
+        tail -1)
+    case "${n:-0}" in
+      ''|*[!0-9]*) continue;;
+    esac
+    if [ "$n" -gt 0 ]; then
+        echo "  agents on $host: $n"
+        remote_agents=$((remote_agents + n))
+    fi
+done
+[ "$remote_agents" -gt 0 ] && echo "  remote agents reaped: $remote_agents"
+
 # Runs recorded on OTHER hosts.
 #
 # The process table is node-local, so a run launched from a different node is
@@ -136,10 +198,27 @@ if [ -z "$DRY" ]; then
 import sys; sys.path.insert(0, \"/usr/WS2/haridev/phronix/tests\")
 from benchmark.paths import image_store
 print(image_store()[\"root\"].rsplit(\"/\", 1)[0])" 2>/dev/null)
-    [ -n "$S" ] && [ -d "$S" ] || { echo "  ** no image store resolved"; exit 0; }
-    n=$(podman --root "$S/storage" --runroot "$S/run" ps -aq 2>/dev/null | wc -l)
-    [ "$n" -gt 0 ] && podman --root "$S/storage" --runroot "$S/run" rm -f -a >/dev/null 2>&1
-    [ "$n" -gt 0 ] && echo "  containers removed: $n"
+    # EVERY store on this node, not just the one that resolves here.
+    #
+    # The runner resolves the store in ITS OWN process — on the login node,
+    # where the first writable node-local scratch is /tmp — and hands those
+    # paths to podman over ssh. A compute node resolves the same call to
+    # /l/ssd. So the reaper cleaned a store the run had never written to,
+    # reported nothing to do, and left ~110 containers per node holding the
+    # keyring at 200/200 until every new container died with "unable to join
+    # session keyring: disk quota exceeded".
+    #
+    # Listing the candidates is what makes the reaper independent of which
+    # side did the resolving.
+    total=0
+    for S in $S /tmp/$USER/phronix-images /l/ssd/$USER/phronix-images; do
+      [ -n "$S" ] && [ -d "$S/storage" ] || continue
+      n=$(podman --root "$S/storage" --runroot "$S/run" ps -aq 2>/dev/null | wc -l)
+      [ "$n" -gt 0 ] || continue
+      podman --root "$S/storage" --runroot "$S/run" rm -f -a >/dev/null 2>&1
+      echo "  containers removed: $n ($S)"
+      total=$((total + n))
+    done
     # Reaping a container is not the same as reaping its monitor. A container
     # removed while conmon is mid-flight leaves the monitor behind: 30 here,
     # the oldest four and a half hours old, surviving every kill of every run.
@@ -155,7 +234,16 @@ print(image_store()[\"root\"].rsplit(\"/\", 1)[0])" 2>/dev/null)
     exit 0'
   reaper=${reaper//PY/$VENV/bin/python}
 
-  for host in ${BENCH_NODES:-$(hostname)}; do
+  # The nodes the run actually used, not just this one.
+  #
+  # This defaulted to `$(hostname)`, so the reaper only ever cleaned the
+  # machine kill.sh ran on — and the containers are on the COMPUTE nodes.
+  # Measured after a day of starting and killing runs: ~110 leftover
+  # containers on every node and the per-user kernel keyring at 200/200, at
+  # which point every new container dies with "unable to join session keyring:
+  # disk quota exceeded". The next run then fails every task in seconds and
+  # looks like a harness bug.
+  for host in ${BENCH_NODES:-$(agent_nodes) $(hostname)}; do
     if [ "$host" = "$(hostname)" ]; then
       bash -c "$reaper" | sed "s/^/  [$host]/"
     else

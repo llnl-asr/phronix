@@ -19,6 +19,7 @@ nothing at all.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -2020,7 +2021,10 @@ def test_the_learner_reconciles_in_parallel_without_contradicting_itself():
     # workers: one kind, one skill, one writer.
     assert "buckets" in loop and 'candidate.get("kind")' in loop
     assert "min(groups, key=len).extend(topic_lines)" in loop
-    assert "ThreadPoolExecutor(max_workers=len(groups))" in loop
+    # One worker per group. `task_pool`, not a bare `ThreadPoolExecutor`: its
+    # workers inherit the task's compute node, and a bare pool would strand
+    # every learner agent on whatever machine drove the run.
+    assert "task_pool(len(groups))" in loop
     assert "split by\n" in loop or "split by " in loop
 
     # Bounded: each worker is an agent invocation, not a thread of arithmetic.
@@ -6046,11 +6050,19 @@ def test_the_tracked_pipeline_is_a_loop_over_one_task_record():
     # tracker.md", and produced no file.
     source = _P("tests/benchmark/arms.py").read_text(encoding="utf-8")
     track = source[source.index("    def track(self"):]
-    assert "agent=self.tracker_agent_name" in track[:2500]
+    # The stage is run by the always-on tracker, not by `track` — which now
+    # pushes an event and returns. `_fold_events` is what invokes the agent.
+    assert "self.note_event(" in track[:2500]
+    fold = source[source.index("    def _fold_events("):]
+    fold = fold[:fold.index("\n    def ", 10)]
+    assert "agent=self.tracker_agent_name" in fold
     # And in the TASK directory, not the checkout — the source is not evidence
     # of what happened, and it is what convinced five earlier stages the task
     # was already done.
-    assert "cwd=tracker.parent" in track[:2500]
+    # In `_fold_events` now, with the rest of the invocation: the agent is
+    # run from the TASK directory, not the checkout, so the source is not
+    # in front of it at all.
+    assert "cwd=state.tracker.parent" in fold
 
     tools = set(Arm._agent_spec(Arm.tracker_agent_name).get("tools") or [])
     arm = Arm.__new__(Arm)
@@ -6103,12 +6115,18 @@ def test_research_reads_the_record_and_the_whole_conversation():
     from tests.benchmark.arms import ClaudePhronixArm as Arm
 
     prompt = " ".join(Arm.TASK_RESEARCH_PROMPT.split())
-    assert "so you do not repeat what this task has already done" in prompt
+    # The REASON not to repeat prior work now lives in the skill (`I7`), and
+    # the prompt names the record and points at it. Prose in the prompt
+    # describing what an attached file says is what the length limit catches.
+    assert "{tracker}" in prompt and "I7" in prompt
     assert "unabridged" in prompt
 
     source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
     research = source[source.index("    def research_from_tracker(self"):]
-    assert 'Path(workdir).parent / "conversation.md"' in research[:4000]
+    # The whole method, not a byte window of its start: comments explaining
+    # WHY an attachment is there are not a behaviour change.
+    whole = research[:research.index("\n    def ", 10)]
+    assert 'Path(workdir).parent / "conversation.md"' in whole
 
 
 def test_the_record_is_organised_as_problem_approach_worked_and_not():
@@ -6199,8 +6217,26 @@ def test_research_reports_its_problem_approach_and_answer():
     for key in ("PROBLEM:", "APPROACH:", "ANSWER:"):
         assert key in prompt, key
     assert "{report}" in prompt
-    # The format is the harness's parsing contract, so it stays in the prompt;
-    # the reasoning lives in the skill, where the pointer guard keeps it.
+    # The prompt stays short, and the CONTEXT comes from attachments.
+    #
+    # Not a token diet: the pass is handed the record, the conversation, the
+    # skill and its lessons as FILES, and the method lives in
+    # `phronix-task-research`. Prose in the prompt describing what those files
+    # say is the one thing this limit is here to catch — it duplicates the
+    # attachment, ages separately from it, and is the first thing to drift.
+    #
+    # This was 900, on the rule that the prompt carries the harness's parsing
+    # contract while the REASONING lives in the skill the pass loads. That
+    # rule still holds for the method: `phronix-task-research` is where "how
+    # to diagnose" belongs, and `I7` is where the lessons discipline is
+    # written.
+    #
+    # But the owner's preference is explicit: give the pass as much of its
+    # input as possible, in front of it, rather than relying on it to load a
+    # skill to find out what it was handed. What lives here now is the INPUTS
+    # and what to do with them — the record, the conversation, the skill and
+    # its lessons, and the two writes owed back. The limit exists to catch the
+    # method being pasted in wholesale, which is a different failure.
     assert len(prompt) < 900, len(prompt)
     skill = (Path("src/phronix/.phronix/skills/phronix-task-research")
              / "SKILL.md").read_text(encoding="utf-8")
@@ -6215,11 +6251,14 @@ def test_research_reports_its_problem_approach_and_answer():
     # PROBLEM and ANSWER once; every APPROACH in sequence, numbered — the
     # sequence is the audit, and keeping only the first threw away exactly what
     # shows a pass going in circles.
-    assert 'APPROACH {n}/{len(steps)}' in research[:8000]
-    assert '[research] PROBLEM:' in research[:8000]
+    # The whole method: byte windows break whenever a comment is added, which
+    # is not a behaviour change.
+    research = research[:research.index("\n    def ", 10)]
+    assert 'APPROACH {n}/{len(steps)}' in research
+    assert '[research] PROBLEM:' in research
     # And a pass that reported none of them says so, rather than looking like
     # one that simply had nothing to report.
-    assert "reported no PROBLEM/APPROACH/ANSWER" in research[:8000]
+    assert "reported no PROBLEM/APPROACH/ANSWER" in research
 
 
 def test_one_task_one_skill_named_after_the_task():
@@ -6280,7 +6319,8 @@ def test_the_record_travels_with_the_task_between_stages():
 
     # Research gets it too, alongside the unabridged conversation.
     research = source[source.index("    def research_from_tracker(self"):]
-    assert "tracker," in research[:4000]
+    whole = research[:research.index("\n    def ", 10)]
+    assert "tracker," in whole
 
     # And it stays phronix's OWN product: the raw harness judgement remains the
     # baseline's channel, or the arm scores on a prompt injection rather than
@@ -6479,7 +6519,10 @@ def test_the_task_skill_is_filed_under_the_name_the_lookup_asks_for():
     assert "if not found:" in check[:3000]
     # A second failure is reported, because the consequence is silent: the next
     # run starts from scratch with the answer sitting in the store.
-    assert "will start from scratch" in check[:3000]
+    # In the method, not within some byte window of its start: a comment
+    # added above it is not a behaviour change.
+    body = check[:check.index("\n    def ", 10)]
+    assert "will start from scratch" in body
 
     runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
     # Checked after research — before the next attempt looks it up — and again
@@ -6550,6 +6593,992 @@ def test_every_task_leaves_exactly_one_skill_however_it_ended():
     assert "Write it whether the task passed or not" in " ".join(
         Arm.SNAPSHOT_PROMPT.split())
     runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
-    call = runner[runner.index("arm.snapshot_tracker(") - 600:
-                  runner.index("arm.snapshot_tracker(")]
-    assert "A task that failed after four" in call
+    # The reasoning sits with the call, in the same block — not within some
+    # byte window of it. This was `- 600` and broke the moment another comment
+    # was added between the two, which says nothing about the behaviour.
+    at = runner.index("arm.snapshot_tracker(")
+    why = runner.index("# Written whether the task passed or not.")
+    assert why < at, "the reasoning must sit with the call it explains"
+    block = runner[why:at]
+    # Same function: nothing declares a new one between the two.
+    assert "\n    def " not in block
+    assert "A task that failed after four" in block
+
+    # And nothing in that block narrates through a name it does not own —
+    # `_say` belongs to `run_attempt`, and using it here raised `NameError`
+    # on every task, swallowed as "could not snapshot the record".
+    assert "_say(" not in block
+
+
+def test_a_second_pass_on_a_subject_reconciles_rather_than_replaces(tmp_path):
+    """What a run knows about a subject only grows.
+
+    The canonical name means every pass at one task lands on one path, so a
+    plain copy makes each pass ERASE the one before it. That is backwards: a
+    run that failed after four attempts holds four ruled-out approaches, and
+    they stay true after a later run passes. The expensive half of a run is
+    exactly the half a copy throws away.
+    """
+    from tests.benchmark.isolation import merge_skill_text, promote_to_source
+
+    def skill(*blocks: str) -> str:
+        # A REAL skill: promotion refuses one whose index does not match its
+        # content, so the fixture has to satisfy that too.
+        head = ["---", "name: sub", "description: d", "subject: sub",
+                "type: skill", "---", "", "## Index", "",
+                "| Label | Section | Covers |", "| --- | --- | --- |"]
+        head += [f"| `I{n}` | Instructions | {t} |"
+                 for n, t in enumerate(blocks, 1)]
+        body = ["", "## Instructions", ""]
+        for number, title in enumerate(blocks, 1):
+            body += [f"### I{number} — {title}", "", f"body of {title}", ""]
+        return "\n".join(head + body)
+
+    first = skill("Pad the degree tuple to the variable count")
+    second = skill("Never sort monomials before padding")
+    merged = merge_skill_text(first, second)
+    # BOTH, because neither makes the other's point.
+    assert "Pad the degree tuple" in merged
+    assert "Never sort monomials" in merged
+    # Rebuilt labels and index over the union.
+    assert "| `I1` |" in merged and "| `I2` |" in merged
+    assert "### I2 — " in merged
+
+    # Two wordings of ONE point collapse, and the newer wins.
+    same = merge_skill_text(skill("Pad the degree tuple to the variable count"),
+                            skill("Pad the degree tuple to variable count"))
+    assert same.count("### I") == 1
+
+    # End to end: promoting twice accumulates instead of overwriting.
+    store = tmp_path / "store"
+    home = store / "capabilities" / "tasks" / "sub" / "sub"
+    home.mkdir(parents=True)
+    target = tmp_path / "dest" / "capabilities" / "tasks" / "sub" / "sub"
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text(first)
+    (home / "SKILL.md").write_text(second)
+    import phronix.layers as layers
+    original, layers.bundled_root = layers.bundled_root, lambda: tmp_path / "dest"
+    try:
+        promote_to_source(store)
+    finally:
+        layers.bundled_root = original
+    landed = (target / "SKILL.md").read_text()
+    assert "Pad the degree tuple" in landed and "Never sort monomials" in landed
+
+
+def test_research_carried_into_the_source_tree_is_merged_not_copied(tmp_path):
+    """Same rule, one level out: a ruled-out approach stays ruled out."""
+    import json
+
+    from tests.benchmark.isolation import promote_to_source
+
+    store = tmp_path / "store"
+    (store / "research").mkdir(parents=True)
+    dest = tmp_path / "dest"
+    (dest / "research").mkdir(parents=True)
+    (dest / "research" / "sub.json").write_text(json.dumps(
+        {"slug": "sub", "topic": "sub", "approaches": [{"name": "old", "id": 1}]}))
+    (store / "research" / "sub.json").write_text(json.dumps(
+        {"slug": "sub", "topic": "sub", "approaches": [{"name": "new", "id": 2}]}))
+    # Per-run working state is NOT promoted; it is folded in as a task ends.
+    (store / "research" / "sessions" / "run-1").mkdir(parents=True)
+    (store / "research" / "sessions" / "run-1" / "sub.json").write_text("{}")
+
+    import phronix.layers as layers
+    original, layers.bundled_root = layers.bundled_root, lambda: dest
+    try:
+        promote_to_source(store)
+    finally:
+        layers.bundled_root = original
+
+    landed = json.loads((dest / "research" / "sub.json").read_text())
+    names = {a.get("name") for a in landed.get("approaches", [])}
+    assert names == {"old", "new"}, names
+    assert not (dest / "research" / "sessions").exists()
+
+
+def test_fresh_hides_a_promoted_answer_from_the_layer_it_was_promoted_into(tmp_path, monkeypatch):
+    """`--fresh` means from scratch, and promotion is what put the answer there.
+
+    The fresh filter exempted the BUNDLED layer, which is correct for the
+    framework's method skills and backwards for `capabilities/tasks/`, where
+    every entry is an answer to one task. It cost nothing while the bundled
+    tree held no answers. Promotion puts them there by design, and the next
+    fresh run opened a task with `attempt>recall> trying remembered skill
+    scikit-learn-column-transformer-empty-columns` — a run reported as
+    from-scratch, reading a previous run's answer.
+    """
+    import phronix.layers as layers_module
+    from phronix.capabilities import TASK_CAPABILITY_DIR
+
+    bundled = tmp_path / "bundled"
+    answer = bundled / "capabilities" / TASK_CAPABILITY_DIR / "sub" / "prior-answer"
+    answer.mkdir(parents=True)
+    (answer / "SKILL.md").write_text(
+        "---\nname: prior-answer\ntype: skill\n---\n\n## Instructions\n")
+
+    monkeypatch.setattr(layers_module, "bundled_root", lambda: bundled)
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path / "project"))
+
+    # Carried run: the answer is exactly what it is there to reuse.
+    monkeypatch.delenv("PHRONIX_FRESH_CAPABILITIES", raising=False)
+    assert "prior-answer" in layers_module.task_skill_dirs()
+
+    # Fresh run that did not write it: invisible, bundled or not.
+    monkeypatch.setenv("PHRONIX_FRESH_CAPABILITIES", "1")
+    assert "prior-answer" not in layers_module.task_skill_dirs()
+
+
+def test_a_fresh_run_still_sees_the_skill_it_wrote_itself(tmp_path, monkeypatch):
+    """The other half of the fresh rule, and the one that breaks the pipeline.
+
+    Hiding prior answers is only correct if a run's OWN answer stays visible:
+    try 2 attempts with the skill research wrote after try 1, and a filter that
+    could not tell "written here" from "found here" would take that away.
+    """
+    import phronix.layers as layers_module
+    from phronix.capabilities import TASK_CAPABILITY_DIR
+
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path / "project"))
+    monkeypatch.setenv("PHRONIX_FRESH_CAPABILITIES", "1")
+    # The USER layer too: without it `write_block` picks the real `~/.phronix`
+    # and the test writes into the person running it.
+    monkeypatch.setenv("PHRONIX_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(layers_module, "bundled_root", lambda: tmp_path / "bundled")
+
+    from phronix.skills import write_block
+
+    result = write_block("sub-answer", "instruction", "Do the thing",
+                         "The body of the instruction.")
+    assert result["status"] == "ok", result
+
+    # Written this session, so this session can read it back.
+    assert "sub-answer" in layers_module.task_skill_dirs()
+    del TASK_CAPABILITY_DIR
+
+
+def test_recall_cannot_reach_what_fresh_hides_from_the_lookup(tmp_path, monkeypatch):
+    """One filter, two readers — and only one of them was filtered.
+
+    The harness asks `search-skill` before an attempt; the arm ALSO asks
+    `recalled_skill`, which goes through `skills.search` instead. That path
+    excluded the framework's own `skills/` and nothing else, so a promoted task
+    ANSWER was invisible to the first reader and retrievable by the second:
+
+        search-skill     no skill covers this task; solving from scratch
+        attempt>recall>  trying remembered skill `scikit-learn-column-...`
+
+    Both readers must agree about what a run is entitled to see.
+    """
+    import phronix.layers as layers_module
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("    def recalled_skill("):]
+    body = body[:body.index("\n    def ", 10)]
+    # It consults the filtered listing, not just the bundled-skills exclusion.
+    assert "skill_dirs" in body, "recall does not apply the fresh filter"
+
+    # And the filter it consults really does hide a bundled task answer.
+    bundled = tmp_path / "bundled"
+    answer = bundled / "capabilities" / "tasks" / "sub" / "prior-answer"
+    answer.mkdir(parents=True)
+    (answer / "SKILL.md").write_text(
+        "---\nname: prior-answer\ntype: skill\n---\n\n## Instructions\n")
+    monkeypatch.setattr(layers_module, "bundled_root", lambda: bundled)
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path / "project"))
+    monkeypatch.setenv("PHRONIX_HOME", str(tmp_path / "home"))
+
+    monkeypatch.setenv("PHRONIX_FRESH_CAPABILITIES", "1")
+    assert "prior-answer" not in set(layers_module.skill_dirs())
+    monkeypatch.delenv("PHRONIX_FRESH_CAPABILITIES", raising=False)
+    assert "prior-answer" in set(layers_module.skill_dirs())
+
+
+def test_fresh_is_told_to_the_library_and_not_only_to_the_harness(tmp_path):
+    """A filter nothing switches on is not a filter.
+
+    `capabilities.session_only()` reads `PHRONIX_FRESH_CAPABILITIES`, and
+    NOTHING in the harness ever set it — so the from-scratch visibility filter
+    had never once been active in a real run, while passing its own unit tests
+    the whole time. It was invisible for as long as the bundled tree held no
+    task answers. Promotion put them there, and a `--fresh` run began reading
+    the previous run's answer for the task it was about to attempt.
+    """
+    from phronix.capabilities import FRESH_ENV
+    from tests.benchmark.isolation import isolated_env
+
+    on = isolated_env(tmp_path / "store", tmp_path / "cache", fresh=True)
+    assert on[FRESH_ENV] == "1"
+    off = isolated_env(tmp_path / "store", tmp_path / "cache", fresh=False)
+    assert FRESH_ENV not in off
+
+    # And the runner actually passes the run's own setting through.
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert "arm.fresh = bool(self.config.fresh)" in runner
+
+    # Every agent-launching call site opts in, or the arm it launches is not
+    # the run it was told to be.
+    arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert arms.count("isolated_env(") == arms.count("fresh=self.fresh"), (
+        "an isolated_env call site does not pass the run's fresh setting")
+
+    # The harness's OWN in-process reads too — that is the path `recalled_skill`
+    # used to reach around the filter.
+    assert 'os.environ["PHRONIX_FRESH_CAPABILITIES"] = "1"' in arms
+    assert '("PHRONIX_FRESH_CAPABILITIES", previous_fresh)' in arms
+
+
+def test_no_module_in_the_harness_reads_a_name_nothing_defines():
+    """Undefined names, caught here instead of mid-run.
+
+    Every one of these is a latent `NameError` that only fires on the path that
+    reaches it, and every one of them was wrapped in an `except Exception` that
+    turned it into a plausible-looking message. Found in one sweep:
+
+    * `run_attempt` timed its stages from a `started` that did not exist —
+      "could not record the attempt: name 'started' is not defined".
+    * `run_task` narrated the end-of-task learn stage with `_say`, a closure
+      belonging to `run_attempt`, so `ensure_task_skill` and `snapshot_tracker`
+      raised on their first line and were reported as "could not snapshot the
+      record". The skill a task leaves for the next run was never written.
+    * `_write_solution_skill` called `subprocess` without importing it, inside
+      `except Exception: return` — the solution skill silently never appeared.
+    * `MiniArm.generate` carried a block of the PLANNER's evidence-staging code
+      referencing `context_paths`, while `research`, where it belongs, used the
+      `evidence` directory that block was supposed to create.
+
+    A blanket `except` around a stage is the right call — a stage that fails
+    must not fail the task — which is exactly why the names have to be checked
+    somewhere the exception handler cannot hide them.
+    """
+    import subprocess
+    import sys
+
+    modules = ["tests/benchmark/runner.py", "tests/benchmark/arms.py",
+               "tests/benchmark/isolation.py", "tests/benchmark/cluster.py"]
+    try:
+        proc = subprocess.run([sys.executable, "-m", "pyflakes", *modules],
+                              capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("pyflakes is not installed")
+    if "No module named" in (proc.stderr or ""):
+        pytest.skip("pyflakes is not installed")
+
+    undefined = [line for line in (proc.stdout or "").splitlines()
+                 if "undefined name" in line]
+    assert undefined == [], "\n".join(undefined)
+
+
+def test_backend_pins_are_spread_evenly_not_hashed_into_collisions():
+    """A pin has to be stable. It does not have to be arbitrary.
+
+    `sha256(key) % N` is balls-in-bins, and at the sizes this runs at it does
+    not spread. Measured on group 1 with 14 arms across 16 backends: it used
+    EIGHT of them — one drew three arms, several drew two, and half the fleet
+    drew nothing. The fleet reported it as `8/16 replica(s) active`,
+    `work 0.227 (IMBALANCED)`, and zero deferred requests while half the GPUs
+    sat idle: not a capacity problem, a distribution one.
+
+    Round-robin keeps the one property that was actually needed — the same
+    task returns to the backend holding its conversation — and adds the one
+    that was missing.
+    """
+    from collections import Counter
+
+    from tests.benchmark.arms import Arm
+
+    pins = [f"m@{i}" for i in range(16)]
+    tasks = [f"repo__repo-{n}" for n in range(7)]
+    seen = Counter()
+    for arm_name in ("claude-bare", "claude-phronix"):
+        arm = Arm()
+        arm.arm_name = arm_name
+        arm.pinned_models = pins
+        for task in tasks:
+            seen[arm._pin_index({"instance_id": task})] += 1
+
+    # 14 arms over 16 backends: one each, nothing doubled while a peer idles.
+    assert max(seen.values()) == 1, dict(seen)
+    assert len(seen) == len(tasks) * 2
+
+    # Stable: a retry must return to the backend that still holds the prefix.
+    arm = Arm()
+    arm.arm_name = "claude-bare"
+    arm.pinned_models = pins
+    once = arm._pin_index({"instance_id": tasks[0]})
+    assert once == arm._pin_index({"instance_id": tasks[0]})
+
+    # And the two arms of one task are still kept APART — they share no prefix,
+    # and one slot serving both makes each wait for the other.
+    other = Arm()
+    other.arm_name = "claude-phronix"
+    other.pinned_models = pins
+    assert other._pin_index({"instance_id": tasks[0]}) != once
+
+
+def test_agents_run_on_the_compute_node_that_holds_their_container(tmp_path):
+    """The allocation is for the whole run, not just for containers.
+
+    Agents were launched wherever the harness ran, which on this cluster is a
+    SHARED LOGIN NODE. Measured at 12 tasks: 60 `claude` processes and a load
+    average of 10.8 on 48 cores, while all six allocated compute nodes sat at
+    load 0.00 with zero containers. The ceiling on parallelism was a machine
+    outside the allocation that seventeen other people were also using.
+
+    Each task's agents now go to the node already holding its container, so
+    reasoning and test runs share a host, a page cache and a checkout.
+    """
+    from tests.benchmark.arms import remote_agent_command
+    from tests.benchmark.isolation import Runtime
+
+    # The runtime says where it is, rather than hiding it in an argv tuple.
+    remote = Runtime(name="podman", binary="/usr/bin/podman").with_remote("node42")
+    assert remote.host == "node42"
+
+    env = {"PATH": "/usr/bin", "KEEP": "a value with spaces",
+           "QUOTE": "it's quoted", "SSH_AUTH_SOCK": "/must/not/travel"}
+    argv = remote_agent_command(["claude", "-p", "fix the bug"],
+                                tmp_path, env, "node42", 1800, scratch=tmp_path)
+    assert argv[0] == "ssh" and "node42" in argv
+
+    # A file per LAUNCH: a fixed name is a race the moment two agents start
+    # from one directory, which the research fan-out does by design — the
+    # second writer would replace the first one's command and environment.
+    again = remote_agent_command(["claude", "-p", "other"], tmp_path, env,
+                                 "node42", 1800, scratch=tmp_path)
+    assert again[-1] != argv[-1]
+
+    # Read the script THIS argv names, rather than whatever is in the
+    # directory — there is deliberately more than one.
+    script = Path(argv[-1]).read_text()
+    # Carried, and quoted well enough to survive the remote shell.
+    assert "export KEEP='a value with spaces'" in script
+    assert "QUOTE=" in script and "quoted" in script
+    # Local-only names do NOT travel: an agent socket that means nothing there
+    # is worse than absent, because it fails as an auth error.
+    assert "SSH_AUTH_SOCK" not in script
+    # It lands in the right directory and bounds itself on the far side —
+    # killing ssh does not reliably kill what it started.
+    assert f"cd {tmp_path}" in script
+    assert "exec timeout" in script and "1860" in script
+
+    # And the runner puts the agent on the container's node, not somewhere else.
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert 'arm.agent_host = getattr(self._local.runtime, "host", "") or ""' in runner
+
+    # Every agent launch honours it; one that did not would quietly stay local.
+    arms_src = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    launches = arms_src.count("stream_opencode(") - 1      # minus the def
+    assert arms_src.count("host=self.agent_host") == launches, (
+        f"{launches} launch site(s), "
+        f"{arms_src.count('host=self.agent_host')} pass the host")
+
+
+def test_per_task_settings_do_not_leak_between_concurrent_tasks():
+    """One `Arm` object, many tasks at once — so per-task state cannot live on it.
+
+    The runner reuses an arm for every task that arm runs and runs many at
+    once in threads. A per-task value written onto the arm as a plain attribute
+    is a data race whose result looks plausible: the last task to start
+    overwrites it for every task already running.
+
+    Measured the first time agents were placed on compute nodes: 25 of them
+    landed on ONE node of five, two nodes got none, and fifteen stayed on the
+    login node — every task reading whichever host was written last. The
+    container runtime had always avoided this with a thread-local; these two
+    had not, and `pinned_for_env` was racing silently, sending a task's
+    conversation to another task's backend and destroying the prompt-cache
+    locality the pinning exists to create.
+    """
+    import threading
+
+    from tests.benchmark.arms import Arm
+
+    arm = Arm()
+    arm.agent_host = "node-a"
+    arm.pinned_for_env = "model@1"
+
+    seen = {}
+
+    def other_task():
+        # A second task starting must not see the first task's node...
+        assert arm.agent_host == ""
+        assert arm.pinned_for_env == ""
+        arm.agent_host = "node-b"
+        arm.pinned_for_env = "model@2"
+        seen["host"] = arm.agent_host
+        seen["pin"] = arm.pinned_for_env
+
+    thread = threading.Thread(target=other_task)
+    thread.start()
+    thread.join()
+
+    assert seen == {"host": "node-b", "pin": "model@2"}
+    # ...and must not have overwritten it either.
+    assert arm.agent_host == "node-a"
+    assert arm.pinned_for_env == "model@1"
+
+
+def test_research_fanout_agents_inherit_their_task_node():
+    """Placement has to survive the fan-out, or most of it never happens.
+
+    `_TASK_LOCAL` is thread-local — which is what stops concurrent tasks
+    overwriting each other — and that means a fresh worker thread starts with
+    nothing. Research fans out through six pools, so every one of THOSE agents
+    read an empty host and ran on the login node: placement worked for the
+    attempt and silently did not for the research around it, which is the
+    larger half of the work.
+    """
+    from tests.benchmark.arms import Arm, task_pool
+
+    arm = Arm()
+    arm.agent_host = "node-x"
+    arm.pinned_for_env = "model@9"
+
+    with task_pool(3) as pool:
+        seen = list(pool.map(lambda _: (arm.agent_host, arm.pinned_for_env),
+                             range(3)))
+    assert seen == [("node-x", "model@9")] * 3, seen
+
+    # Every fan-out in the arms module goes through it. A plain pool would
+    # strand its agents on whatever machine drove the run.
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("class Arm"):]
+    assert "ThreadPoolExecutor(max_workers=" not in body, (
+        "an agent fan-out builds a bare pool; its workers inherit no task")
+
+
+def test_kill_reaches_agents_on_the_compute_nodes():
+    """A kill that leaves work running is worse than no kill.
+
+    It reads as a clean slate. Once agents moved onto the allocated nodes the
+    process table stopped being local to the harness, and `kill.sh` reported
+    "all stopped" while the previous run's agents kept calling the fleet:
+    measured at 208 orphans across five nodes, the oldest 267s old, skewing
+    every number the next run produced.
+    """
+    script = Path("scripts/kill.sh").read_text(encoding="utf-8")
+    assert "agent_nodes()" in script
+    # Matched on the RUN PATH, never the binary name — an interactive session
+    # on the same machine has to survive this.
+    assert "/proc/[0-9]*/cmdline" in script
+    assert "remote agents reaped" in script
+    # Piped to `bash -s` rather than inlined: inlining needed four levels of
+    # escaping and silently matched nothing.
+    assert "bash -s" in script
+
+
+def test_the_container_reaper_cleans_every_node_and_every_store():
+    """Leftover containers exhaust the kernel keyring, and the next run dies.
+
+    Two independent defaults each made the reaper a no-op:
+
+    * it looped over `${BENCH_NODES:-$(hostname)}`, so it only ever cleaned the
+      machine `kill.sh` ran on — while the containers are on the COMPUTE nodes;
+    * it pruned the store that resolves on whichever host it ran on, but the
+      RUNNER resolves the store in its own process (login node, `/tmp`) and
+      hands those paths to podman over ssh, where the same call resolves to
+      `/l/ssd`. The reaper cleaned a store the run had never written to.
+
+    Measured after a day of starting and killing runs: ~110 leftover containers
+    on each of five nodes, the per-user keyring at 200/200, and every new
+    container dying with "unable to join session keyring: disk quota exceeded"
+    — an error naming neither containers nor keys, which reads like a full
+    disk and failed every task in seconds.
+    """
+    script = Path("scripts/kill.sh").read_text(encoding="utf-8")
+
+    # Cleans the run's nodes, not just this host.
+    assert "${BENCH_NODES:-$(agent_nodes) $(hostname)}" in script
+    # And every candidate store, so it does not matter which side resolved it.
+    assert "/tmp/$USER/phronix-images" in script
+    assert "/l/ssd/$USER/phronix-images" in script
+    # Reports what it removed, per store: a prune that silently does nothing
+    # is what let this run for a day.
+    assert "containers removed: $n ($S)" in script
+
+
+def test_recording_stages_get_a_hang_guard_not_a_work_budget():
+    """Recording is not exploring, so it cannot run away — and must not be cut.
+
+    `track`, `ensure_task_skill` and `snapshot_tracker` read what already
+    happened and write it down. Cutting one throws away the attempt, the
+    evaluation and the research that were paid for to produce its input.
+
+    They ran on `FINALIZE_BUDGET_S`, a 150s WORK budget, and hit it:
+
+        track>  KILLED at the 150s hard ceiling after 150s
+        track>  exited rc=-9: d":"0be2fb67-6a4c-46ea-b8bd-4a1907...
+        track>  the record is missing ## The problem, ## How it ...
+
+    Killed mid-write, leaving a truncated record, which then failed the shape
+    check and cost a second full pass to re-ask. The budget did not save time;
+    it spent it twice and lost the record in between.
+
+    A guard rather than no timeout at all: a wedged agent must still end.
+    """
+    from tests.benchmark.arms import PhronixArm
+
+    assert PhronixArm.RECORD_GUARD_S >= 900
+    assert PhronixArm.RECORD_GUARD_S > PhronixArm.FINALIZE_BUDGET_S
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # The stages that still invoke a recording agent get the guard.
+    # `ensure_task_skill` is absent on purpose: it no longer invokes an agent
+    # at all. Re-filing a skill is a directory move, not a judgement, and
+    # making it one made the pipeline depend on a model staying up — measured
+    # on sympy-19254, the re-file agent died on API retries (`exited rc=255`)
+    # and left a real diagnosis on disk under a name no reader asks for.
+    for name in ("def _fold_events(", "def snapshot_tracker(",
+                 "def _reshape_if_needed("):
+        body = source[source.index(f"    {name}"):]
+        body = body[:body.index("\n    def ", 10)]
+        assert "FINALIZE_BUDGET_S" not in body, (
+            f"{name} still runs on a work budget; it files, it does not explore")
+        assert "RECORD_GUARD_S" in body, f"{name} has no hang-guard"
+
+    # And `track` itself no longer runs a stage at all: it records an event and
+    # returns, which is the stronger form of "no budget". The cost of keeping
+    # the record is now amortised across the phases that produce it.
+    track = source[source.index("    def track(self, instance"):]
+    track = track[:track.index("\n    def ", 10)]
+    assert "standalone_stage" not in track
+
+
+def test_an_agent_cannot_install_into_the_benchmarks_own_virtualenv(tmp_path, monkeypatch):
+    """A task's source must never end up in the harness's site-packages.
+
+    The harness runs under its own virtualenv, so `dict(os.environ)` handed
+    every agent a `VIRTUAL_ENV` and put that venv's `bin` first on PATH — and
+    an agent exploring a Python repository runs `pip install -e .` as a matter
+    of course.
+
+    Measured: seven SWE-bench repos (django, flask, matplotlib, pylint, sphinx,
+    xarray, pytest) were editable-installed into the shared venv, shadowing the
+    real packages for everything that used it. The benchmark's own suite then
+    imported `_pytest` out of a task checkout and died with "required field
+    lineno missing from alias" — and one `.pth` pointed into a run from the
+    previous day, so it had been changing what every later task imported,
+    silently, across runs.
+    """
+    from tests.benchmark.isolation import isolated_env
+
+    monkeypatch.setenv("VIRTUAL_ENV", "/bench/venv")
+    monkeypatch.setenv("PATH", "/bench/venv/bin:/usr/bin:/bin")
+
+    env = isolated_env(tmp_path / "store", tmp_path / "cache")
+
+    assert "VIRTUAL_ENV" not in env
+    assert "/bench/venv/bin" not in env["PATH"].split(":")
+    assert "/usr/bin" in env["PATH"].split(":")      # the rest survives
+    # And an install attempted anyway fails where it can be seen, rather than
+    # succeeding into whatever site-packages happens to be writable.
+    assert env["PIP_REQUIRE_VIRTUALENV"] == "1"
+
+
+def test_the_tracker_cannot_go_looking_for_its_own_inputs():
+    """Remove what produces the behaviour, rather than instructing against it.
+
+    The tracker is handed the record's path, the evidence and the phase that
+    just ran; searching the filesystem is no part of rewriting one file it was
+    given. With `Grep` and `Glob` it searched anyway — measured on
+    scikit-learn-25570, the stage read `tracker.md` and then spent the rest of
+    its clock on "looking for files named like tracker.md", over and over,
+    until the hard ceiling killed it having written nothing. Research then ran
+    with no record at all (`fom=NONE approaches=0, called no research tools`),
+    so the loop cost the diagnosis as well as the record.
+
+    Raising the budget made it worse rather than better — the same loop, for
+    longer — which is the tell that the tools were the problem, not the clock.
+    """
+    import yaml
+
+    spec = yaml.safe_load(
+        Path("src/phronix/.phronix/agents/phronix-tracker.yaml").read_text())
+    tools = set(spec["tools"])
+
+    assert "Grep" not in tools and "Glob" not in tools
+    # It still has to read what it was handed and write the record.
+    assert {"Read", "Write"} <= tools
+    # And the things it was never allowed: running anything, editing source,
+    # or handing the job to a fresh session with the default toolset.
+    assert not ({"Bash", "Edit", "Agent", "Task"} & tools)
+
+
+def test_ssh_multiplexing_is_available_but_not_the_default():
+    """Multiplexing is opt-in, and this records why.
+
+    It was added to avoid `MaxStartups` — ten concurrent unauthenticated
+    connections — which cost about one failure in sixty. It trades that for
+    `MaxSessions`, ten multiplexed sessions per connection, and that refusal
+    does not queue and does not silently downgrade: it FAILS, and surfaces as
+    `isolation: could not start <image>`.
+
+    Sharding over several masters only moves the cliff — measured on one host
+    at 40 simultaneous commands, 4 masters gave 39/40 and 8 gave 36/40, thread
+    ids not spreading evenly over a small modulus. Retrying the refusal gives
+    40/40, so that is the mechanism and this stays off until a mux refusal
+    degrades instead of failing.
+    """
+    import os
+
+    from tests.benchmark.isolation import ssh_options
+
+    plain = ssh_options()
+    assert "ControlMaster=auto" not in plain
+    assert "BatchMode=yes" in plain
+
+    os.environ["PHRONIX_SSH_MUX"] = "1"
+    try:
+        muxed = ssh_options()
+        assert "ControlMaster=auto" in muxed
+        control = [o for o in muxed if o.startswith("ControlPath=")]
+        assert control, "no control socket path"
+        path = control[0].split("=", 1)[1]
+        # A unix socket: node-local, and short — the limit is about 100
+        # characters and a run directory alone can exceed it.
+        assert not path.startswith("/p/lustre"), path
+        assert len(path) < 90, len(path)
+    finally:
+        os.environ.pop("PHRONIX_SSH_MUX", None)
+
+    # Every ssh in the harness goes through the one options builder.
+    for name in ("tests/benchmark/arms.py", "tests/benchmark/isolation.py"):
+        source = Path(name).read_text(encoding="utf-8")
+        assert 'ssh", "-n", "-o", "BatchMode=yes"' not in source, (
+            f"{name} builds an ssh command that bypasses ssh_options()")
+
+
+def test_the_agent_binary_is_resolved_to_something_that_exists():
+    """A path that was valid a minute ago is not a path that exists.
+
+    The Claude binary was taken from the VS Code extension directory, newest
+    match first, unchecked. VS Code updates the extension in place and deletes
+    the old directory: measured live, the harness had baked
+    `anthropic.claude-code-2.1.246-.../native-binary/claude` into its command,
+    the extension became 2.1.247 mid-run, and every stage started afterwards
+    died instantly with `exited rc=127` — which names neither the binary nor
+    the version and reads like a broken agent.
+    """
+    import os
+
+    from tests.benchmark.arms import find_claude_bin
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("def find_claude_bin("):]
+    body = body[:body.index("\nclass ")]
+    # PATH first: a stable location that survives an extension update.
+    assert 'shutil.which("claude")' in body
+    assert body.index('shutil.which("claude")') < body.index("glob.glob")
+    # And every candidate is checked to be an executable FILE — the directory
+    # survived the update that removed the binary inside it, so the glob
+    # still matched.
+    assert "os.access(match, os.X_OK)" in body
+
+    resolved = find_claude_bin()
+    if resolved != "claude":
+        assert os.path.isfile(resolved) and os.access(resolved, os.X_OK), resolved
+
+
+def test_the_remote_wrapper_skips_environment_entries_a_shell_cannot_export(tmp_path):
+    """A bash FUNCTION in the environment corrupts the whole script.
+
+    Lmod exports `module` and `ml` as `BASH_FUNC_module%%` and `BASH_FUNC_ml%%`,
+    whose values are multi-line function bodies. `export BASH_FUNC_ml%%=...` is
+    not a valid identifier, so the export fails — and the body then runs on
+    past the failed line, so the shell reads `case "$-" in` and the rest of the
+    function as commands and the script is corrupted from there.
+
+    Measured: every `track` fold produced no record and no output whatsoever,
+    and the same function bodies surfaced as the tail of unrelated error
+    messages (`try 1: unset __lmod_sh_dbg;`), which reads like a broken agent
+    rather than a broken script.
+    """
+    from tests.benchmark.arms import remote_agent_command
+
+    env = {
+        "PATH": "/usr/bin",
+        "KEEP": "ordinary value",
+        "BASH_FUNC_module%%": "() {  echo hi\n}",     # exactly what Lmod exports
+        "BASH_FUNC_ml%%": "() {  eval x\n}",
+        "1BAD": "starts with a digit",
+        "has-dash": "not an identifier either",
+    }
+    argv = remote_agent_command(["true"], tmp_path, env, "node42", 30,
+                                scratch=tmp_path)
+    script = Path(argv[-1]).read_text()
+
+    assert "export KEEP=" in script
+    for bad in ("BASH_FUNC_module", "BASH_FUNC_ml", "1BAD", "has-dash"):
+        assert f"export {bad}" not in script, bad
+
+    # Every export line must be one a shell would accept.
+    for line in script.splitlines():
+        if line.startswith("export "):
+            name = line[len("export "):].split("=", 1)[0]
+            assert re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name), line
+
+
+def test_research_files_its_diagnosis_or_is_asked_again():
+    """A diagnosis nobody wrote down is a diagnosis the next try cannot use.
+
+    The pass was judged on its TRANSCRIPT — PROBLEM/APPROACH/ANSWER — and
+    nothing checked that the skill it was told to write exists. Measured on
+    matplotlib-26011: research read the record, the conversation and the issue,
+    reported `PROBLEM:`, called `skill_load` on a skill that was not there yet,
+    and stopped at 159s of its 300s having called no writing tool at all:
+
+        tools         research-2: no phronix tools called
+        search-skill  no skill covers this task; solving from scratch
+        attempt>      agent working on try 2 from scratch
+
+    So try 2 started over while the diagnosis sat in a transcript. And
+    `ensure_task_skill` does not cover it — that re-files a skill written under
+    the WRONG NAME, and here there was no skill at all.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("    def research_from_tracker("):]
+    body = body[:body.index("\n    def ", 10)]
+
+    # The pass checks its own output before returning — and checks for
+    # CONTENT, not mere existence: `skill_write` creates the scaffold, so a
+    # pass that named the skill and wrote nothing still left a file behind.
+    assert "_skill_has_content(store_root, skill)" in body
+    assert "FILE_DIAGNOSIS_PROMPT" in body
+    # Asked to FILE, not to diagnose again — the budget went on the diagnosis.
+    from tests.benchmark.arms import PhronixArm
+    prompt = " ".join(PhronixArm.FILE_DIAGNOSIS_PROMPT.split())
+    assert "Do not diagnose again" in prompt
+    assert "skill_write(name=" in prompt
+    # And a second failure is reported rather than looped on.
+    assert "is still empty" in body
+
+
+def test_a_run_records_whether_the_attempt_actually_used_the_skill():
+    """Offered and used are different things; only one says the store worked.
+
+    The trace announced `found X — the attempt solves with it` the moment the
+    lookup hit, which reports what the HARNESS did, not what the agent did. An
+    attempt that was handed a skill and ignored it, and one that read it and
+    applied it, produced identical lines — so the question the whole store
+    exists to answer could not be read off a run at all.
+    """
+    from tests.benchmark.metrics import Attempt
+
+    # Recorded per attempt, and `None` when nothing was offered — "not used"
+    # and "nothing to use" are different states.
+    assert Attempt(index=1).skill_loaded is None
+
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    body = runner[runner.index("    def _trace_skill_use("):]
+    body = body[:body.index("\n    def ", 10)]
+
+    # Measured against what THIS attempt retrieved, not the task's history —
+    # otherwise an earlier try's load counts for a later one.
+    assert "if name not in before" in body
+    # Both outcomes are traced. The silent one is the one that matters.
+    assert "loaded `" in body and "never loaded it" in body
+    assert '"loaded": True' in body and '"loaded": False' in body
+
+    # And the snapshot is taken BEFORE the attempt runs.
+    assert "retrieved_before = set(read_retrievals(retrieval_log))" in runner
+    assert (runner.index("retrieved_before = set(read_retrievals(retrieval_log))")
+            < runner.index("self._trace_skill_use("))
+
+
+def test_ssh_refusals_are_retried_rather_than_voiding_a_task():
+    """sshd refusing a connection is not the task failing.
+
+    Both of sshd's limits are hit at this concurrency and both are transient:
+    `MaxStartups` (ten concurrent unauthenticated connections) and, with
+    multiplexing on, `MaxSessions` (ten sessions per connection). Measured on
+    one host at 40 simultaneous container commands, plain ssh managed 35/40 and
+    multiplexed 39/40 — and every loss surfaced as
+
+        isolation: could not start docker.io/swebench/...:latest
+
+    which names an image and reads as a broken one. With the retry: 40/40.
+
+    Multiplexing is off by default for the same reason it was added and then
+    withdrawn: it trades `MaxStartups` for `MaxSessions`, and a mux refusal
+    FAILS rather than degrading to a direct connection.
+    """
+    from tests.benchmark.isolation import (SSH_RETRIES, _transient_ssh,
+                                           ssh_options)
+
+    # Refusals retry...
+    assert _transient_ssh("kex_exchange_identification: Connection closed")
+    assert _transient_ssh("mux_client_request_session: Session open refused by peer")
+    # ...and real failures do not, or a missing image would be retried four
+    # times before anyone was told.
+    assert not _transient_ssh("Error: no such image: docker.io/swebench/x:latest")
+    assert not _transient_ssh("")
+    assert SSH_RETRIES >= 2
+
+    # Off unless asked for.
+    assert "ControlMaster=auto" not in ssh_options()
+
+    # The retry wraps the ONE place container commands are run, so nothing
+    # reaches ssh by a path that does not retry.
+    source = Path("tests/benchmark/isolation.py").read_text(encoding="utf-8")
+    body = source[source.index("    def run(self, args: List[str]"):]
+    body = body[:body.index("\n    def available(")]
+    assert "for attempt in range(SSH_RETRIES)" in body
+    assert "_transient_ssh(result.stderr)" in body
+
+
+def test_refiling_a_skill_never_takes_another_tasks():
+    """Two tasks on one repository are two tasks, not one subject.
+
+    Strays were matched on a name STEM — `wanted.split("-")[0]`, so "pydata"
+    for `pydata-xarray-3364` — which matches every other pydata task in the
+    group. The task then merged a NEIGHBOUR's skill into its own and `rmtree`d
+    it. Measured in one run: `pydata-xarray-3364` and `pydata-xarray-4493` are
+    different tasks, each matched the other, 3364's skill was destroyed by
+    4493's re-file, and 4493's real instructions (about `dtypes.py` and
+    `GroupBy.__repr__`) were offered to 3364, whose bug is in `concat.py`.
+
+    The issue number is what makes two names the same task.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("    def ensure_task_skill("):]
+    body = body[:body.index("\n    def ", 10)]
+
+    # The CODE, not the comment that explains why it went.
+    assert 'stem = wanted.split' not in body, "still matching on a name stem"
+    assert "and stem in d.name" not in body
+    assert "def belongs(" in body
+
+    # The rule itself, checked rather than described.
+    def belongs(wanted: str, name: str) -> bool:
+        issue = (re.findall(r"\d+", wanted) or [""])[-1]
+        if name == wanted:
+            return False
+        if issue and issue in name:
+            return True
+        return not re.search(r"\d", name)
+
+    # Same issue, misnamed: merged.
+    assert belongs("pydata-xarray-3364", "pydata-xarray-3364-fix")
+    # A different task on the same repository: LEFT ALONE. This is the one
+    # that was destroying work.
+    assert not belongs("pydata-xarray-3364", "pydata-xarray-4493")
+    assert not belongs("sympy-sympy-19254", "sympy-sympy-24102")
+    # Named after the bug rather than the ticket: it cannot belong to another
+    # numbered task, so it is recovered rather than stranded.
+    assert belongs("sympy-sympy-19254", "sympy-mignotte-bound-fix")
+
+
+def test_research_is_not_satisfied_by_an_empty_skill(tmp_path):
+    """`skill_write` creates the scaffold, so existing proves nothing.
+
+    The check after a research pass asked whether the skill EXISTED. Creating a
+    subject writes the file with its headings, so a pass that named the skill
+    and wrote no blocks left `## Instructions` and `## Rules` empty and every
+    later check satisfied — the lookup reported `found ... — the attempt solves
+    with it`, and `skill-use` recorded tries 2 and 3 as having worked from it.
+
+    Measured on pydata-xarray-3364: `SKILL.md` 220 bytes, zero blocks, and a
+    `LESSONS.md` reading "Attempt to ignore missing variables ... failed –
+    agent produced no patch". Try 3 was revising an empty file and nothing said
+    so. Across that run, 6 of 11 stored skills were scaffolds.
+
+    Lessons deliberately do not count: a lesson is "the last attempt failed",
+    an instruction is what to do instead, and only the second is a diagnosis
+    the next attempt can apply.
+    """
+    from tests.benchmark.arms import PhronixArm
+
+    arm = PhronixArm.__new__(PhronixArm)
+    tasks = tmp_path / "capabilities" / "tasks"
+
+    def write(name: str, body: str, lessons: str = "") -> None:
+        home = tasks / name / name
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "SKILL.md").write_text(
+            f"---\nname: {name}\nsubject: {name}\ntype: skill\n---\n\n"
+            f"## Index\n\n| Label | Section | Covers |\n| --- | --- | --- |\n"
+            f"{body}\n## Rules\n\n## References\n")
+        if lessons:
+            (home / "LESSONS.md").write_text(lessons)
+
+    # The scaffold `skill_write` leaves behind, with a lesson beside it.
+    write("empty-one", "\n## Instructions\n",
+          "## Lessons\n\n### L1 — The last attempt failed\n\nIt produced no patch.\n")
+    assert not arm._skill_has_content(tmp_path, "empty-one")
+
+    # A real diagnosis.
+    write("filled-one",
+          "| `I1` | Instructions | Pad the degree tuple |\n\n## Instructions\n\n"
+          "### I1 — Pad the degree tuple\n\nIn `monomials.py`, sum the powers.\n")
+    assert arm._skill_has_content(tmp_path, "filled-one")
+
+    # And the pass re-asks on emptiness, not on absence.
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("    def research_from_tracker("):]
+    body = body[:body.index("\n    def ", 10)]
+    assert "_skill_has_content(store_root, skill)" in body
+    assert "is empty" in body
+
+
+def test_a_failed_evaluation_hands_research_the_lessons_and_the_record(tmp_path):
+    """A revision needs to know what has already been tried and failed.
+
+    That lived in two places research was never handed: the skill it is about
+    to rewrite, and the `LESSONS.md` beside it. The two files are one skill and
+    are retrieved separately — `skill_load` returns `SKILL.md` unless asked for
+    lessons BY NAME — so a reader had no way to know lessons existed.
+
+    Measured on pydata-xarray-3364: `SKILL.md` was an empty scaffold and the
+    one sentence describing what try 1 had attempted, and why it failed, sat
+    unread in `LESSONS.md`. Tries 2 and 3 both loaded that skill and got
+    nothing; research re-derived the problem from the tracker each time.
+    """
+    from tests.benchmark.arms import PhronixArm
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("    def research_from_tracker("):]
+    body = body[:body.index("\n    def ", 10)]
+
+    # The skill AND its lessons are attached, beside the record.
+    assert 'f"*/{skill}/SKILL.md"' in body
+    assert 'f"*/{skill}/LESSONS.md"' in body
+    assert "tracker," in body
+
+    # And the prompt tells it what they are for, and to write BOTH halves back.
+    prompt = " ".join(PhronixArm.TASK_RESEARCH_PROMPT.split())
+    assert "LESSONS.md" in prompt                   # attached, by name
+    assert "I7" in prompt                          # the method, in the skill
+    assert "skill_write_lesson" in prompt          # record this failure too
+    assert "BROKE" in prompt                       # name the regressions
+
+
+def test_a_skill_points_at_its_own_lessons(tmp_path, monkeypatch):
+    """One skill, two files, and only one of them was findable.
+
+    Writing a lesson now names it in the skill's `## References`, and loading
+    the skill returns the lesson TITLES — enough to decide whether to spend a
+    call on them, without the reader having to know they exist.
+    """
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PHRONIX_HOME", str(tmp_path / "home"))
+
+    from phronix.skills import load, write_block, write_lesson
+
+    write_block("demo-subject", "instruction", "Do the thing",
+                "Edit concat.py and sum the powers.")
+    write_lesson("demo-subject", "Ignoring missing variables broke 7 tests.",
+                 title="Ignoring missing variables")
+
+    skill_file = next(Path(tmp_path).rglob("demo-subject/SKILL.md"))
+    text = skill_file.read_text()
+    assert "LESSONS.md" in text.split("## References")[1]
+
+    found = load("demo-subject")
+    assert found["lessons"]["titles"] == ["Ignoring missing variables"]
+    assert "LESSONS.md" in found["lessons"]["load"]
+
+    # Written once, however many lessons follow.
+    write_lesson("demo-subject", "And a second one.", title="Second")
+    assert skill_file.read_text().count("LESSONS.md") == 1

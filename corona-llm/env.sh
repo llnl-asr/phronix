@@ -98,6 +98,24 @@ export FLEET_CORES_PER_SERVER=${FLEET_CORES_PER_SERVER:-5}
 export FLEET_GATEWAY_CORES=${FLEET_GATEWAY_CORES:-4}
 export FLEET_PROFILE=${FLEET_PROFILE:-corona}
 export FLEET_KEY=${FLEET_KEY:-sk-corona}
+
+# Whether the gateway streams from the BACKEND, or reads the whole reply and
+# re-chunks it to the client (`on` | `off`, default `on`).
+#
+# Both are supported because both fail in different places. Streaming is what
+# an agent wants — first token early, and a long turn visible as it happens.
+# But the client speaks the Anthropic protocol while llama.cpp speaks OpenAI,
+# and LiteLLM translates between them incrementally: on the text-to-tool_use
+# transition it has emitted a `content_block_delta` for an index it never
+# opened, and the client drops the turn with "API Error: Content block not
+# found". Measured on nemotron-3.5, one turn in roughly sixty task-arms.
+#
+# `off` sets `supports_native_streaming: false` on every backend entry, which
+# makes the proxy call llama.cpp without streaming and chunk the finished reply
+# back as SSE. The client still streams; there is simply no incremental block
+# sequence upstream left to get out of order. The cost is latency — nothing is
+# sent until the whole turn is generated.
+export FLEET_STREAMING=${FLEET_STREAMING:-on}
 export LLAMA_THREADS=${LLAMA_THREADS:-5}
 
 # gfx906 is not covered by llama.cpp's HIP flash-attention kernels, and `on`
@@ -113,7 +131,22 @@ export BENCH_PY=${BENCH_PY:-$LLM_ROOT/venv/bin/python}
 # Sizes are against 32 GB per card:
 #   gpt-oss-20b   ~12 GB  fits one GPU, 8 replicas per node
 #   gpt-oss-120b  ~63 GB  needs the whole node (GPUS_PER_SERVER=8)
-# The 30B-A3B Q8_0 models (~32 GB) do NOT leave room for KV on one card and are
-# deliberately absent rather than listed and broken.
+#   nemotron      ~19 GB  Q4_0, one GPU, ~11 GB left for KV
+#   ornith        ~21 GB  Q4_K_M, one GPU, ~9 GB left for KV
+#   muse-glimmer  ~16 GB  UD-Q4_K_XL, one GPU, ~15 GB left for KV
+#
+# The 30B Q8_0 builds Tuolumne serves are ~32 GB, which is the whole card here
+# with nothing left for KV, so corona takes a 4-bit quant of each instead of
+# listing a model that cannot hold a context.
+#
+# Q4_0 / Q4_K over the `UD-IQ2*` and `UD-IQ3*` builds, which are smaller: the
+# IQ quants carry a per-block lookup that is fast where there are matrix cores
+# to hide it and slow on gfx906, which has none. Prefill is what this fleet is
+# short of, so the quant is chosen for prefill rate, not for footprint.
 export MODEL_GPTOSS120=$LLM_ROOT/models/gpt-oss-120b/gpt-oss-120b-MXFP4.gguf
 export MODEL_GPTOSS20=$LLM_ROOT/models/gpt-oss-20b/gpt-oss-20b-MXFP4.gguf
+export MODEL_NEMOTRON=$LLM_ROOT/models/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf
+# Draft model for speculative decoding — see MTP handling in gpu-server.sh.
+export MODEL_NEMOTRON_MTP=$LLM_ROOT/models/nemotron/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf
+export MODEL_ORNITH=$LLM_ROOT/models/ornith/Ornith-1.5-35B-Q4_K_M.gguf
+export MODEL_MUSE=$LLM_ROOT/models/muse-glimmer/Muse-Glimmer-30B-UD-Q4_K_XL.gguf

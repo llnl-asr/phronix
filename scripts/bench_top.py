@@ -91,6 +91,25 @@ def human(seconds) -> str:
     return f"{s}s"
 
 
+def human_hms(seconds) -> str:
+    """45s | 12m30s | 2h05m30s — like `human`, but never drops the seconds.
+
+    `human` rounds an hour-long run to the minute, which is right for a column
+    that has to stay narrow. The run header is not that: it is the one place
+    somebody reads the elapsed time directly, and a run that has been going
+    "2h05m" for a minute at a time looks stalled.
+    """
+    try:
+        s = int(seconds or 0)
+    except (TypeError, ValueError):
+        return "-"
+    if s >= 3600:
+        return f"{s // 3600}h{s % 3600 // 60:02d}m{s % 60:02d}s"
+    if s >= 60:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s}s"
+
+
 def short(n) -> str:
     """A token count at a glance: 940, 12.5k, 243k, 1.6M."""
     try:
@@ -511,7 +530,13 @@ class Run:
             start = datetime.fromisoformat(self.manifest["created_at"]).timestamp()
         except (KeyError, ValueError, TypeError):
             start = min(stamps) if stamps else now
-        self.wall = max(0.0, (max(stamps) if stamps else now) - start)
+        # Measured to NOW while the run is live, and to the last write once it
+        # is not. `max(stamps) - start` is the span of the writing, which stops
+        # advancing the moment every agent is mid-turn — so a busy run's
+        # elapsed time froze exactly when it was working hardest.
+        last = max(stamps) if stamps else now
+        end = now if (self.age is not None and self.age < 180) else last
+        self.wall = max(0.0, end - start)
 
     @property
     def tasks(self):
@@ -533,8 +558,17 @@ class Run:
         # been written. The two are different — and one of them is a fault.
         if self.age is None:
             return "INACTIVE (nothing written yet)"
-        return (f"ACTIVE {human(self.age)}" if self.active
-                else f"INACTIVE {human(self.age)}")
+        # The number is the run's OWN elapsed time.
+        #
+        # It used to be the age of the last write, which reads as the run's
+        # age and is not: a healthy run mid-turn showed `ACTIVE 1s` however
+        # long it had been going, and the only real elapsed figure sat at the
+        # far end of the line as `wall`. Silence is still worth knowing, so it
+        # is named as silence, and only when there is some.
+        if self.active:
+            return f"ACTIVE {human_hms(self.wall)}"
+        return (f"INACTIVE {human_hms(self.wall)} "
+                f"(silent {human(self.age)})")
 
 
 # --------------------------------------------------------------------------
@@ -816,9 +850,12 @@ FILTERS = ("all", "running", "failed", "passed")
 
 
 class Top:
-    def __init__(self, screen, run_path: Path):
+    def __init__(self, screen, run_path: Path, pinned: bool = False):
         self.screen = screen
         self.run = Run(run_path)
+        #: True when the reader NAMED a run, which turns following off.
+        self.pinned = pinned
+        self._followed = 0.0
         self.open_arms = {arm.key for arm in self.run.arms}   # groups open
         self.open_tasks = set()
         #: Group keys already offered their default open/closed state.
@@ -898,8 +935,7 @@ class Top:
                 f"{run.manifest.get('model', '?')} "
                 f"({where})   "
                 f"{'fresh' if run.manifest.get('fresh') else 'reuse'}   "
-                f"tries<={run.manifest.get('max_tries', '?')}   "
-                f"wall {human(run.wall)}")
+                f"tries<={run.manifest.get('max_tries', '?')}")
         # Green when the run is writing, red when it is not. This is the first
         # thing anybody looks at and it is the one line that says whether what
         # follows is a live picture or an autopsy.
@@ -1407,9 +1443,48 @@ class Top:
         self.screen.clear()
         curses.doupdate()
 
+    #: How often to look for a run that started after this one, in seconds.
+    #:
+    #: Not every refresh: this stats the trace of a dozen run directories, and
+    #: the question it answers changes on the scale of whole runs.
+    FOLLOW_EVERY_S = 20
+
+    def follow_newest(self):
+        """Move to a run that started after the one on screen.
+
+        `top.sh` with no argument means "the current run", and it resolved that
+        once at startup — so killing a run and starting the next left the
+        screen pinned to the dead one, showing a finished run's final frame
+        while the new one was minutes in. Named a run explicitly and this does
+        nothing, because then the argument is the answer.
+        """
+        if getattr(self, "pinned", False):
+            return
+        now = time.time()
+        if now - getattr(self, "_followed", 0.0) < self.FOLLOW_EVERY_S:
+            return
+        self._followed = now
+        try:
+            newest = newest_run()
+        except OSError:
+            return
+        if newest is None or newest.resolve() == Path(self.run.path).resolve():
+            return
+        self.run = Run(newest)
+        # The open/selected state belonged to the OLD run's rows and none of
+        # its keys exist here; carrying it over selects nothing and silently
+        # collapses everything.
+        self.open_arms = {arm.key for arm in self.run.arms}
+        self.open_tasks, self._defaulted = set(), set()
+        self.selected_key = None
+        self.workers = Panels(newest)
+        self.repaint = True
+        self.message = f"followed the new run: {newest.name}"
+
     def loop(self):
         while True:
             if time.time() - self.last > REFRESH_S:
+                self.follow_newest()
                 self.run.reload()
                 self.last = time.time()
             # A frame that raises must not reach curses.wrapper: it would end
@@ -1501,7 +1576,7 @@ class Top:
 COLOURS = {}
 
 
-def start(screen, run_path):
+def start(screen, run_path, pinned=False):
     curses.curs_set(0)
     screen.nodelay(True)
     screen.timeout(int(REFRESH_S * 1000))
@@ -1522,7 +1597,7 @@ def start(screen, run_path):
         COLOURS["title"] |= curses.A_BOLD
         COLOURS["total"] |= curses.A_BOLD
         COLOURS["footer"] = curses.A_REVERSE
-    Top(screen, run_path).loop()
+    Top(screen, run_path, pinned).loop()
 
 
 def once(run_path: Path, panels=(), width: int = 0):
@@ -1540,6 +1615,7 @@ def once(run_path: Path, panels=(), width: int = 0):
     # to be set here too — a group's default open state included.
     top._defaulted = set()
     top.sort, top.filter, top.selected_key = 0, 0, None
+    top.pinned, top._followed = True, 0.0
     top.panels = set(panels)
     top.workers = Panels(run_path)
     if panels:
@@ -1611,7 +1687,7 @@ def main(argv):
         return 0
     if panels:
         os.environ["PHRONIX_TOP_PANELS"] = ",".join(sorted(panels))
-    curses.wrapper(start, run)
+    curses.wrapper(start, run, bool(args))
     return 0
 
 

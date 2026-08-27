@@ -124,7 +124,42 @@ _ROW = 0
 # from anything below it. Dropping from the BOTTOM keeps the identity of the
 # fleet and loses the tail of a table, which is the right way round.
 _HEIGHT = 0
+_WIDTH = 0
 _TRUNCATED = False
+
+
+def _clip(text, width):
+    """Cut *text* to *width* VISIBLE columns, leaving its colour codes intact.
+
+    The frame is painted by homing the cursor and overwriting, and that only
+    works while the frame is exactly as tall as the number of lines it prints.
+    A line longer than the window wraps, costs a second physical row that
+    nothing counted, and pushes the frame past the bottom — at which point the
+    terminal scrolls, `\033[H` homes onto a display shifted up by one, and the
+    top line is overwritten by the second. Measured: the `load` line wrapping
+    its trailing sparkline was enough to eat the gateway header every refresh.
+
+    Escape sequences occupy no columns, so they are copied through without
+    being counted; a reset is appended when anything was actually cut.
+    """
+    if not width:
+        return text
+    out, seen, index = [], 0, 0
+    while index < len(text):
+        char = text[index]
+        if char == "\033":
+            end = index + 1
+            while end < len(text) and text[end] not in "mK":
+                end += 1
+            out.append(text[index:end + 1])
+            index = end + 1
+            continue
+        if seen >= width:
+            return "".join(out) + ("\033[0m" if COLOUR else "")
+        out.append(char)
+        seen += 1
+        index += 1
+    return "".join(out)
 
 
 def print(*args, **kwargs):                      # noqa: A001 - deliberate
@@ -152,6 +187,8 @@ def print(*args, **kwargs):                      # noqa: A001 - deliberate
         _ROW += 1
         if COLOUR:
             end = "\033[K\n"
+            # One row per line, guaranteed — see `_clip`.
+            args = tuple(_clip(str(a), _WIDTH) for a in args)
     _stdout_print(*args, end=end, **kwargs)
 
 
@@ -217,28 +254,63 @@ class Keys:
                 return sys.stdin.read(1)
 
 
+#: How long to wait for a replica's metrics before counting a miss.
+#:
+#: This was 4s, and a replica does not answer promptly while it is prefilling:
+#: a 25k-token prompt occupies it for tens of seconds. Measured on an idle
+#: fleet every replica answered in under a second; under load the same fleet
+#: reported 22 of 24 at a 4s timeout and 24 of 24 at 10s.
+PROBE_TIMEOUT = 10
+
+#: Consecutive misses before a replica is called down.
+#:
+#: One miss is not a death. Declaring it on the first meant the display showed
+#: replicas "crashing and coming back" all through a run in which not one
+#: server process ever restarted — every one had the same uptime as the deploy
+#: — and the busiest replicas, the ones slowest to answer, looked the least
+#: healthy. Three consecutive misses is ~30s of silence, which is a fault.
+DOWN_STRIKES = 3
+
+#: Consecutive misses per replica, and the last metrics each one reported.
+_MISSES = {}
+_LAST = {}
+
+
 def fetch(server):
     url = f"http://{server['host']}:{server['port']}/metrics"
+    key = (server["host"], server["port"])
     out = {"server": server, "up": False, "metrics": {}}
     try:
-        with urllib.request.urlopen(url, timeout=4) as r:
+        with urllib.request.urlopen(url, timeout=PROBE_TIMEOUT) as r:
             for line in r.read().decode().splitlines():
                 if not line.startswith("llamacpp:"):
                     continue
-                key, _, val = line.partition(" ")
-                key = key.split(":", 1)[1]
-                if key in FIELDS:
-                    out["metrics"][key] = float(val)
+                name, _, val = line.partition(" ")
+                name = name.split(":", 1)[1]
+                if name in FIELDS:
+                    out["metrics"][name] = float(val)
         out["up"] = True
+        _MISSES[key] = 0
+        _LAST[key] = out["metrics"]
     except (urllib.error.URLError, OSError, ValueError) as e:
+        missed = _MISSES[key] = _MISSES.get(key, 0) + 1
         out["error"] = str(e)
+        # Busy, not dead, until it has been quiet for three probes. The last
+        # metrics are carried so the rates below do not read a live replica as
+        # having stopped and then restarted — a counter that vanishes and
+        # returns is a spike in every derived number.
+        if missed < DOWN_STRIKES:
+            out["up"] = True
+            out["metrics"] = dict(_LAST.get(key, {}))
+            out["stale"] = missed
     return out
 
 
 def gateway_ok(gw):
     try:
         with urllib.request.urlopen(
-                f"http://{gw['host']}:{gw['port']}/health/liveliness", timeout=4) as r:
+                f"http://{gw['host']}:{gw['port']}/health/liveliness",
+                timeout=PROBE_TIMEOUT) as r:
             return r.status == 200
     except Exception:
         return False
@@ -289,11 +361,26 @@ def _run_stamp(path):
 
 
 def load_cfg(path):
+    """The config, with its server list replaced by the fleet's real membership.
+
+    The records win over `cfg["servers"]` rather than merely filling in for an
+    empty one. `cluster.json` lists what the deploy ASKED for — NNODES x
+    GPUS_PER_NODE — and a deploy that lands short still writes the whole list,
+    so this displayed replicas that never registered as permanently down and
+    counted them in every "N/M up" and every fairness index. It is the same
+    intended-versus-registered mismatch `deploy.sh` fixed in
+    `rebuild_config_from_records`, which corrects the gateway the same way:
+    <run_dir>/nodes/*.json is written by each replica as it actually starts,
+    and is the only place that reflects the fleet that exists.
+
+    The config list stays as the fallback, for a run directory that is gone or
+    not yet readable — a stale list beats an empty display.
+    """
     with open(path) as f:
         cfg = json.load(f)
-    servers = [s for s in cfg.get("servers") or [] if s]
+    servers = read_node_records(cfg.get("run_dir", ""))
     if not servers:
-        servers = read_node_records(cfg.get("run_dir", ""))
+        servers = [s for s in cfg.get("servers") or [] if s]
     cfg["servers"] = servers
     return cfg
 
@@ -454,12 +541,16 @@ def footer():
 
 
 def render(cfg, rows, prev, dt):
-    global _ROW, _HEIGHT, _TRUNCATED
+    global _ROW, _HEIGHT, _WIDTH, _TRUNCATED
     _ROW = 0
     _TRUNCATED = False
     # Only bound the frame on a terminal. Piped output has no height and
     # truncating it would silently shorten a report someone is parsing.
-    _HEIGHT = shutil.get_terminal_size((80, 24)).lines if COLOUR else 0
+    size = shutil.get_terminal_size((80, 24))
+    _HEIGHT = size.lines if COLOUR else 0
+    # One column short of the width: writing INTO the last cell makes some
+    # terminals wrap eagerly, which is the behaviour this exists to prevent.
+    _WIDTH = (size.columns - 1) if COLOUR else 0
     gw = cfg["gateway"]
     live = prev is not None and dt > 0
     per = []

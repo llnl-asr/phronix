@@ -24,6 +24,7 @@ scripts/swe-agent-bench.sh --dry-run              # show what would run, start n
 scripts/swe-agent-bench.sh --list-models          # what this backend serves
 scripts/status.sh                                 # watch it
 scripts/research-progress.sh                      # is research producing candidates?
+scripts/try2.sh                                   # did the revision pass turn try 1's failures into try 2 passes?
 ssh <node> bash scripts/kill.sh                   # stop it
 ```
 

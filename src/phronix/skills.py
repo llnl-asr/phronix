@@ -528,6 +528,20 @@ def load(name: str, label: str = "", section: str = "",
 
     _log_retrieval("load", name, [str(e.get("skill")) for e in loaded if e.get("content")])
     result: Dict[str, Any] = {"status": "ok" if loaded else "not_found", "loaded": loaded}
+    # Point at the lessons whenever SKILL.md was what was asked for.
+    #
+    # They are a separate FILE, returned only when named, so a reader had to
+    # know to ask and none did. On pydata-xarray-3364 that was the whole of
+    # what the task had learned: an empty `SKILL.md` beside a `LESSONS.md`
+    # saying the previous attempt had tried ignoring missing variables and
+    # failed. Tries 2 and 3 both loaded the skill and never saw it.
+    if file == SKILL_FILE:
+        for entry in loaded:
+            found = get(str(entry.get("skill") or name))
+            pointer = _lessons_pointer(found) if found else {}
+            if pointer:
+                result.setdefault("lessons", pointer)
+                break
     if missing:
         result["missing"] = missing
         result["available"] = sorted(s["name"] for s in iter_skills())
@@ -547,7 +561,41 @@ def index_of(name: str) -> Dict[str, Any]:
         "description": skill["description"],
         "index": skill["index"],
         "has_lessons": skill["has_lessons_file"],
+        "lessons": _lessons_pointer(skill),
         "usage": "skill_load(name=..., label='R3') for one block.",
+    }
+
+
+def _lessons_pointer(skill: Dict[str, Any]) -> Dict[str, Any]:
+    """The skill's lessons, named, so a reader knows they are there.
+
+    `has_lessons` was a bare boolean, and lessons live in a SEPARATE file that
+    `skill_load` only returns when asked for it by name. So a reader had to
+    know to ask, and none did: an attempt loading a skill was handed the
+    instructions and never saw what the previous attempt had already tried.
+
+    Measured on pydata-xarray-3364, where it mattered most — `SKILL.md` was an
+    empty scaffold and every word the task had learned was in `LESSONS.md`
+    ("Attempt to ignore missing variables when concatenating ... failed"). Try
+    2 and try 3 both loaded that skill and got nothing, while the one useful
+    sentence sat unread beside it.
+
+    Titles rather than bodies: enough to tell a reader whether to spend a call
+    on them, and cheap enough to include every time.
+    """
+    if not skill.get("has_lessons_file"):
+        return {}
+    titles = [b.get("title") or b.get("label") or ""
+              for b in (skill.get("lesson_blocks") or [])]
+    titles = [t for t in titles if t]
+    if not titles:
+        return {}
+    return {
+        "count": len(titles),
+        "titles": titles[:8],
+        "load": f"skill_load(name={skill['name']!r}, file='LESSONS.md')",
+        "why": "what earlier attempts on this task already tried, and how each "
+               "failed — read before repeating one",
     }
 
 
@@ -990,6 +1038,42 @@ def write_block(skill: str, kind: str, title: str, body: str,
             "complexity_impact": _complexity_impact(slug)}
 
 
+def _link_lessons_from_skill(home: Path, slug: str) -> None:
+    """Name the lessons file inside SKILL.md, so a reader of one finds the other.
+
+    The two files are one skill and are retrieved separately: `skill_load`
+    returns `SKILL.md` unless asked for `LESSONS.md` by name. A reader had no
+    way to know there were lessons at all, and on pydata-xarray-3364 that was
+    everything the task had learned — an empty `SKILL.md` beside a lesson
+    saying what try 1 had attempted and why it failed, which tries 2 and 3
+    never saw.
+
+    Written into `## References`, which is where a skill already points at
+    things outside itself, and only once.
+    """
+    skill_file = Path(home) / SKILL_FILE
+    if not skill_file.is_file():
+        return
+    try:
+        text = skill_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    pointer = (f"- `skill_load(name=\"{slug}\", file=\"LESSONS.md\")` — what "
+               f"earlier attempts on this subject tried, and how each failed. "
+               f"Read it before repeating one.")
+    if "LESSONS.md" in text:
+        return
+    if "## References" in text:
+        head, _, tail = text.partition("## References")
+        text = f"{head}## References\n\n{pointer}\n{tail}"
+    else:
+        text = text.rstrip() + f"\n\n## References\n\n{pointer}\n"
+    try:
+        skill_file.write_text(text)
+    except OSError:
+        pass
+
+
 def write_lesson(skill: str, lesson: str, kind: str = "lesson", title: str = "",
                  description: str = "", layer: Optional[str] = None,
                  when: Optional[str] = None) -> Dict[str, Any]:
@@ -1041,6 +1125,7 @@ def write_lesson(skill: str, lesson: str, kind: str = "lesson", title: str = "",
     body = f"**{stamp}** — {clean}" if kind == "lesson" else clean
 
     path.write_text(upsert_block(text, BLOCK_KINDS[kind]["section"], label, heading, body))
+    _link_lessons_from_skill(path.parent, slug)
     _mark_dirty(f"skill_lesson:{slug}:{label}")
 
     return {"status": "ok", "action": action, "skill": slug, "label": label,
@@ -1051,12 +1136,37 @@ def write_lesson(skill: str, lesson: str, kind: str = "lesson", title: str = "",
 
 
 def _mark_dirty(reason: str) -> None:
+    _note_authored(reason.split(":")[1] if ":" in reason else "")
     try:
         from phronix.knowledge_graph import mark_dirty
 
         mark_dirty(reason)
     except Exception:
         pass  # retrieval degrades to the next hash sweep; never fail a write
+
+
+def _note_authored(slug: str) -> None:
+    """Record that THIS session wrote this skill.
+
+    `--fresh` shows a run only what it produced itself, and the register that
+    decides is `capabilities.session_authored` — which only `capability_new`
+    ever wrote to. Skills were missing from it, so tightening the fresh filter
+    over `capabilities/tasks/` would have hidden a run's own answer from its
+    own later tries, which is the mechanism the whole tracked pipeline runs
+    on: try 2 attempts with the skill research wrote after try 1.
+
+    Registered on the graph-notify path because every write route already
+    passes through it — create, define, block and lesson alike — so a route
+    added later is registered without anyone remembering to.
+    """
+    if not slug:
+        return
+    try:
+        from phronix.capabilities import note_session_authored
+
+        note_session_authored(slug)
+    except Exception:
+        pass                      # never fail a write over bookkeeping
 
 
 def _complexity_impact(skill: str) -> Dict[str, Any]:

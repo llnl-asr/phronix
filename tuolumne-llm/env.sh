@@ -15,6 +15,12 @@ export LLAMA_SRC=$LLM_ROOT/src/llama-cpp-turboquant
 export LLAMA_BUILD=$LLAMA_SRC/build-mi300a
 export LLAMA_SERVER=$LLAMA_BUILD/bin/llama-server
 
+# Whether the gateway streams from the BACKEND, or reads the whole reply and
+# re-chunks it to the client (`on` | `off`, default `on`). See corona-llm/env.sh
+# for the failure each side has; the switch lives on both clusters because the
+# translation it works around is the gateway's, not any one cluster's.
+export FLEET_STREAMING=${FLEET_STREAMING:-on}
+
 export MODEL_NEMOTRON=$LLM_ROOT/models/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0.gguf
 export MODEL_NEMOTRON_MTP=$LLM_ROOT/models/nemotron/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0.gguf
 export MODEL_MUSE=$LLM_ROOT/models/muse-glimmer/Muse-Glimmer-30B-Q8_0.gguf

@@ -28,13 +28,27 @@ effort: medium
 # see the tree cannot conclude from the tree that the task is already done —
 # a conclusion measured five times on the planner before it was given evidence
 # instead of a repository.
+# No `Grep`/`Glob`, so it cannot go looking for its own inputs.
+#
+# Everything it needs is ATTACHED — the record's path, the evidence, the phase
+# that just ran — and searching is not part of rewriting one file it was
+# handed. Given the tools it searched anyway: measured on
+# scikit-learn-25570, the stage read `tracker.md`, then spent the rest of its
+# clock on `looking for files named like tracker.md`, over and over, until the
+# hard ceiling killed it with nothing written. Research then ran with no
+# record (`fom=NONE approaches=0, called no research tools`), so the loop cost
+# the diagnosis as well as the record.
+#
+# Raising the budget made that worse rather than better — the same loop, for
+# longer — which is the tell that the tools were the problem and not the
+# clock. Same reasoning as the planner being handed evidence instead of a
+# repository: remove what produces the behaviour rather than instructing
+# against it.
 tools:
   - mcp__phronix__research_observe
   - mcp__phronix__research_notice
   - mcp__phronix__skill_load
   - Read
-  - Grep
-  - Glob
   - Write
 sections:
   - title: What you do

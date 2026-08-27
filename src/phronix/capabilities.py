@@ -68,6 +68,16 @@ def session_authored() -> Dict[str, str]:
     return dict(_SESSION_AUTHORED)
 
 
+def note_session_authored(name: str, path: str = "") -> None:
+    """Record something this session produced that is not a capability module.
+
+    Skills go through here. The register was written only by `capability_new`,
+    so under `--fresh` a skill this run wrote counted as somebody else's work.
+    """
+    if name:
+        _SESSION_AUTHORED.setdefault(name, path or name)
+
+
 def visible_files() -> Dict[str, Path]:
     """The capability modules this process may load and serve, by filename.
 
