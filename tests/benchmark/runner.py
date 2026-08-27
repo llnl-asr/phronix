@@ -428,6 +428,19 @@ def _error_tail(text: str, limit: int = 400) -> str:
         if size > limit:
             break
         kept.append(line)
+    # Always keep a line that NAMES A FILE.
+    #
+    # The exception line says what went wrong; only the file line says where,
+    # and "where" is what decides whether a broken testbed is the harness's
+    # fault or the patch's. Trimming by size dropped it whenever the traceback
+    # was long: the trace then read `cannot run pytest: IndentationError:
+    # expected an indented block` with no path, nothing could be blamed, and
+    # the task was aborted as an environment fault though its own patch had
+    # just mis-indented a file. Measured, 12 tasks across one night.
+    if not any(".py" in line for line in kept):
+        named = next((l.strip() for l in reversed(lines) if ".py" in l), "")
+        if named:
+            kept.append(named)
     body = "\n".join(reversed(kept))
     return f"{lead}\n{body}".strip() if lead else body
 
@@ -446,9 +459,18 @@ def _blamed_files(text: str) -> List[str]:
     words = [w.strip('",\'()[]') for w in (text or "").replace("\n", " ").split()]
     out = []
     for word in words:
+        # `sympy/core/function.py:3278:` — pytest's own traceback format is a
+        # RELATIVE path with a line number, which is neither an absolute
+        # `/testbed/` path nor a bare basename, so it matched nothing at all.
+        # Measured on sympy-18057: the patch put a `SyntaxError` in
+        # `sympy/core/function.py`, the traceback said so on every line, and
+        # the task was aborted as an environment fault with two tries unused.
+        word = word.rstrip(":")
+        if ":" in word and word.split(":")[0].endswith(".py"):
+            word = word.split(":")[0]
         if word.startswith("/testbed/"):
             out.append(word[len("/testbed/"):])
-        elif word.endswith(".py") and "/" not in word:
+        elif word.endswith(".py"):
             out.append(word)
     out.reverse()
     return out

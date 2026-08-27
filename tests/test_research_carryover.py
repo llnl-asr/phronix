@@ -7582,3 +7582,98 @@ def test_a_skill_points_at_its_own_lessons(tmp_path, monkeypatch):
     # Written once, however many lessons follow.
     write_lesson("demo-subject", "And a second one.", title="Second")
     assert skill_file.read_text().count("LESSONS.md") == 1
+
+
+def test_a_traceback_naming_a_relative_path_still_blames_the_patch():
+    """pytest names the culprit as `pkg/mod.py:3278:` — path AND line number.
+
+    `_blamed_files` captured absolute `/testbed/` paths and bare basenames, and
+    that shape is neither: it has slashes, so the basename branch skipped it,
+    and no `/testbed/` prefix, so the path branch skipped it too. Nothing was
+    blamed, so a patch that broke the module read as an ENVIRONMENT fault and
+    aborted the task with its remaining tries unused.
+
+    Measured on sympy-18057: the patch put a `SyntaxError` in
+    `sympy/core/function.py`, the traceback said so on every line, and the task
+    was thrown away after try 1 — the one failure a retry reliably fixes, and
+    the one the skill loop exists to learn from.
+    """
+    from tests.benchmark.runner import _blamed_files, _blames_patch
+
+    real = (
+        "RUNNER FAILED — no test produced a result; the runner did not start: "
+        "E   SyntaxError: invalid syntax\n"
+        "    from .function import (_coeff_isneg, expand_complex,\n"
+        "sympy/core/function.py:3278: in <module>\n"
+        "    from sympy.core.symbol import Dummy, Symbol")
+
+    assert "sympy/core/function.py" in _blamed_files(real)
+    assert _blames_patch(real, ["sympy/core/function.py"]) == "sympy/core/function.py"
+    # A patch elsewhere is NOT blamed — a false "the patch broke it" costs a
+    # retry, but it must not be handed out for free.
+    assert _blames_patch(real, ["sympy/polys/monomials.py"]) == ""
+
+    # The shapes that already worked still work.
+    conftest = ("ConftestImportFailure: SyntaxError: invalid syntax "
+                "(blueprints.py, line 1)")
+    assert _blames_patch(conftest, ["src/flask/blueprints.py"])
+    absolute = "  File \"/testbed/xarray/core/concat.py\", line 12"
+    assert _blames_patch(absolute, ["xarray/core/concat.py"])
+
+
+def test_an_error_tail_always_names_the_file_it_blames():
+    """The exception says what broke; only the file line says where.
+
+    "Where" is what decides whether a broken testbed is the harness's fault or
+    the patch's, and trimming by size dropped it whenever the traceback was
+    long. The trace then read `cannot run pytest: IndentationError: expected an
+    indented block` with no path — nothing to blame, so the task was aborted as
+    an environment fault although its own patch had just mis-indented a file.
+
+    Measured across one night: 12 tasks lost that way, every one of them a
+    patch error and every one the kind a retry reliably fixes.
+    """
+    from tests.benchmark.runner import _blames_patch, _error_tail
+
+    raw = "\n".join(
+        [f"noise line {i}" for i in range(40)]
+        + ['  File "/testbed/astropy/units/format/utils.py", line 12',
+           "    return x",
+           "IndentationError: expected an indented block"])
+
+    tail = _error_tail(raw)
+    assert "IndentationError" in tail                    # the what, first
+    assert "utils.py" in tail                            # and the where
+    assert _blames_patch(tail, ["astropy/units/format/utils.py"])
+
+    # It does not invent one when the output names no file at all.
+    bare = _error_tail("something went wrong\nand then stopped")
+    assert ".py" not in bare
+
+
+def test_the_batch_job_waits_for_the_run_it_started():
+    """`run-group.sh` returns when the run STARTS, not when it finishes.
+
+    It launches the runner with `nohup ... &` and exits as soon as it has a
+    pid. Treating that exit as completion made the batch script tear down the
+    fleet eleven seconds after starting the run:
+
+        [00:51:27] running: size=30 index=1 parallel=30
+        [00:51:38] run finished: .../claude-0827-005137
+        [00:52:17] batch group1 done
+
+    The run directory did not survive the cleanup that followed.
+    """
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+
+    # It reads the runner's pid out of the launch log and waits on it.
+    assert 'grep -E "^pid " "$rlog"' in batch
+    assert 'while kill -0 "$runner" 2>/dev/null; do' in batch
+    # And has a fallback for the case where no pid was printed.
+    assert 'pgrep -f "benchmark.cli run"' in batch
+    # The teardown must come AFTER the wait, or it kills what it waited for.
+    assert batch.index('while kill -0 "$runner"') < batch.index("scripts/kill.sh")
+
+    # `run-group.sh` really does background the runner — the premise above.
+    launcher = Path("scripts/run-benchmark.sh").read_text(encoding="utf-8")
+    assert "nohup" in launcher
