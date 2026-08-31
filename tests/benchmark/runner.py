@@ -244,9 +244,34 @@ class Ledger:
     by construction created none.
     """
 
+    #: Order recorded for a skill that predates this run.
+    #:
+    #: Below every real task order, so `created < order` holds for task 0 and
+    #: an inherited skill counts as reuse from the very first task. It is a
+    #: sentinel rather than 0 because 0 is a real task.
+    INHERITED = -1
+
     def __init__(self) -> None:
         self.created_by: Dict[str, int] = {}       # skill -> task order
         self.created_repo: Dict[str, str] = {}     # skill -> repo it was learned on
+
+    def record_inherited(self, skill: str, repo: str = "") -> None:
+        """A skill that existed BEFORE this run — learned in an earlier session.
+
+        Without this the reuse run measures nothing. `classify` skips any name
+        it has no creation record for, and the ledger is built per run, so a
+        skill written by the fresh run and loaded by the reuse run reads as
+        `created is None` and is dropped. `skills_reused` would come back 0
+        across the whole reuse arm — which is precisely the number the
+        fresh/reuse pair exists to produce, reported as if it were a result.
+
+        `repo` is usually unknown for an inherited skill, and unknown must not
+        be read as "a different repo": that would count every carried skill as
+        cross-repo reuse. Empty means unknown, and `classify` excludes it.
+        """
+        self.created_by.setdefault(skill, self.INHERITED)
+        if repo:
+            self.created_repo.setdefault(skill, repo)
 
     def record_creation(self, skill: str, order: int, repo: str) -> None:
         # First writer wins: a skill amended by a later task was still *learned*
@@ -263,15 +288,23 @@ class Ledger:
         shipped with the framework are excluded: they were not learned during the
         run, and counting them would make every arm look like it was learning.
         """
-        reused, cross = [], []
+        reused, cross, inherited = [], [], []
         for name in retrieved:
             created = self.created_by.get(name)
             if created is None or created >= order:
                 continue
             reused.append(name)
-            if self.created_repo.get(name) != repo:
+            if created == self.INHERITED:
+                inherited.append(name)
+            learned_on = self.created_repo.get(name)
+            # Unknown origin is not a different origin. An inherited skill
+            # usually has no repo recorded, and treating that as cross-repo
+            # would report every carried skill as generalising.
+            if learned_on and learned_on != repo:
                 cross.append(name)
-        return {"reused": sorted(set(reused)), "cross_repo": sorted(set(cross))}
+        return {"reused": sorted(set(reused)),
+                "cross_repo": sorted(set(cross)),
+                "inherited": sorted(set(inherited))}
 
 
 def _transcript_loaded(task_dir: Path, attempt_index: int, skill: str) -> bool:
@@ -1694,6 +1727,68 @@ class Runner:
             break
         return best
 
+    def inherited_skills(self) -> Dict[str, str]:
+        """Skills EARLIER runs recorded creating, mapped to the repo they came from.
+
+        Read from the previous runs' `results.jsonl` rather than by inspecting
+        the store, because the store cannot tell the two kinds of skill apart.
+        The carried layer holds both the framework's own skills — which shipped
+        and were never learned — and what earlier runs promoted into it, and
+        counting the framework's would make every arm look like it was
+        learning from its first task. A prefix does not separate them either:
+        the name is chosen by whichever agent wrote the skill.
+
+        `skills_created` is the precise answer. Each earlier run recorded, per
+        task, exactly what that task added, so the union over earlier runs is
+        the learned set and nothing else.
+        """
+        out: Dict[str, str] = {}
+
+        # Task ANSWERS in the carried layer are learned by definition.
+        #
+        # They are the other half, and they cannot be recovered from the
+        # earlier runs' `skills_created`: that column was empty for every task
+        # until the inventory bug was fixed, because it diffed only `skills`
+        # and a task answer is a directory under `capabilities/tasks`. Reading
+        # the layer directly recovers what those runs learned but never
+        # recorded. Nothing here ships with the framework — the framework's
+        # own tools are not task answers — so there is no risk of crediting a
+        # run with knowledge it was given.
+        try:
+            from phronix.layers import bundled_root
+            answers = Path(bundled_root()) / "capabilities" / "tasks"
+            if answers.is_dir():
+                for slug in answers.iterdir():
+                    if slug.is_dir():
+                        out.setdefault(slug.name, "")
+                        out.setdefault(f"tasks/{slug.name}", "")
+        except Exception:
+            pass                      # a layer that cannot be read is not fatal
+
+        runs = sorted(self.out.parent.glob("*/"),
+                      key=lambda c: c.stat().st_mtime, reverse=True)
+        for candidate in runs:
+            try:
+                if candidate.resolve() == self.out.resolve():
+                    continue
+            except OSError:
+                continue
+            for listing in candidate.glob("*/results.jsonl"):
+                try:
+                    lines = listing.read_text(encoding="utf-8").splitlines()
+                except OSError:
+                    continue
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue      # a torn last line: the job died writing it
+                    for name in (row.get("skills_created") or []):
+                        out.setdefault(name, str(row.get("repo") or ""))
+        return out
+
     def finished_already(self, source: Path, arm_name: str) -> Dict[str, Any]:
         """Instance ids the previous run RECORDED for this arm, with results.
 
@@ -2130,6 +2225,29 @@ class Runner:
                   f"{type(exc).__name__}: {exc}", flush=True)
 
         ledger = Ledger()
+        # Everything that already existed is credited to an earlier session.
+        #
+        # This is what makes the fresh/reuse pair measurable. `classify` drops
+        # any name with no creation record, and the ledger is per run, so a
+        # skill the fresh run wrote and this one loads would read as unknown
+        # and be dropped — `skills_reused` 0 across the arm, reported as a
+        # result rather than as blindness.
+        #
+        # Only for arms that read the carried layer. A fresh arm is entitled
+        # to a clean read and by construction inherits nothing, so seeding it
+        # would credit it with reuse it never had.
+        if getattr(arm, "uses_phronix", False) and not self.config.fresh:
+            for name, repo in self.inherited_skills().items():
+                ledger.record_inherited(name, repo)
+            if ledger.created_by:
+                print(f"  [{arm_name}] inherited {len(ledger.created_by)} "
+                      f"skill(s) from earlier sessions; loads of these count "
+                      f"as reuse", flush=True)
+            else:
+                print(f"  [{arm_name}] WARNING: reuse run, but nothing was "
+                      f"inherited — there is no earlier learning to reuse",
+                      flush=True)
+
         results: List[TaskResult] = []
         # Echo only when arms run serially; concurrent arms would interleave the
         # indented detail into unreadable soup. The file always gets everything.
@@ -2227,7 +2345,9 @@ class Runner:
                       f"{'PASS' if result.resolved else 'fail'} "
                       f"tries={result.tries} tok={result.tokens_total:,} "
                       f"new={len(result.skills_created)} "
-                      f"reused={len(result.skills_reused)}", flush=True)
+                      f"reused={len(result.skills_reused)}"
+                      f"(prior-run {len(result.skills_reused_prior_run)})",
+                      flush=True)
             return order, result
 
         if width == 1:
@@ -2796,6 +2916,7 @@ class Runner:
         classified = ledger.classify(retrieved, order, repo)
         result.skills_reused = classified["reused"]
         result.skills_reused_cross_repo = classified["cross_repo"]
+        result.skills_reused_prior_run = classified["inherited"]
 
         if arm.uses_phronix and not arm.store_readonly:
             snapshot_store(store_root, workdir / "store-after")
@@ -3771,8 +3892,14 @@ class Runner:
         Sequential runs are unaffected: with one task writing at a time the diff
         was already correct, and nothing here can remove a name it should keep.
         """
-        appeared = sorted(set(after.get("skills", []))
-                          - set(before.get("skills", [])))
+        # Skills AND capabilities. The task answer written to
+        # `capabilities/tasks/<slug>/` is the main thing a task learns, and
+        # diffing only `skills` reported the 30-task fresh run as having
+        # created nothing at all while its store gained 25 task answers.
+        appeared = sorted(
+            (set(after.get("skills", [])) - set(before.get("skills", [])))
+            | (set(after.get("capabilities", []))
+               - set(before.get("capabilities", []))))
         if not instance_id:
             return appeared
 

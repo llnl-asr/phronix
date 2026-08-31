@@ -23,7 +23,7 @@ source "$PROJECT/scripts/bench-root.sh"
 PBENCH=$(bench_root)
 
 SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch
-SIZE=30; INDEX=1; PARALLEL=30; MODEL=""; NAME=""
+SIZE=30; INDEX=1; PARALLEL=30; MODEL=""; NAME=""; SOURCE_LIST=""; HOSTED=""; REUSE=""; AFTER=""
 # Which cluster this batch is for. Everything that differs between them —
 # the fleet directory, the log root, the default model, the per-node shape —
 # hangs off this one variable, the same way `run-group.sh` already works.
@@ -51,6 +51,14 @@ while [ $# -gt 0 ]; do
     --name)     NAME="$2"; shift 2;;
     --fleet)    FLEET="$2"; shift 2;;
     --fleet-nodes) FLEET_NODES="$2"; shift 2;;
+    # A task list other than the full 300, e.g. the coverage sample.
+    --source)   SOURCE_LIST="$2"; shift 2;;
+    # A HOSTED run: no fleet, the allocation is only for containers.
+    --hosted)   HOSTED=1; shift;;
+    # Let the run READ what earlier runs learned, instead of starting clean.
+    --reuse)    REUSE=1; shift;;
+    # Do not start until JOBID has finished, however it finished.
+    --after)    AFTER="$2"; shift 2;;
     *) echo "unknown argument: $1" >&2; exit 2;;
   esac
 done
@@ -83,6 +91,9 @@ case "$FLEET" in
 esac
 FLEET_NODES=${FLEET_NODES:-$DEFAULT_FLEET_NODES}
 export PHRONIX_FLEET=$FLEET
+# `run-group.sh` takes the task list from SOURCE. Exported rather than passed
+# as a flag because that is the interface it already has.
+[ -n "$SOURCE_LIST" ] && export SOURCE=$SOURCE_LIST
 # Each cluster keeps its own notes: the numbers are not comparable
 # across them (different GPUs, different model, different shape).
 case "$FLEET" in
@@ -96,11 +107,18 @@ if [ -n "$SUBMIT" ]; then
     # `flux batch` runs this same script INSIDE the allocation, with the same
     # arguments minus `--submit`. One file, so the thing submitted and the
     # thing that runs cannot drift apart.
+    # `afterany`, not `afterok`: a fresh run that ends badly still leaves the
+    # skills it wrote, and the reuse run exists to read them. Waiting for
+    # success would discard the case worth measuring — what a failed pass
+    # taught the next one.
     job=$(flux batch -N "$NODES" -t "$WALL" -q "$QUEUE" --job-name="$NAME" \
+            ${AFTER:+--dependency=afterany:$AFTER} \
             --output="$out" \
             "$0" --size "$SIZE" --index "$INDEX" --parallel "$PARALLEL" \
                  --model "$MODEL" --name "$NAME" --time "$WALL" \
                  --fleet "$FLEET" --fleet-nodes "$FLEET_NODES" \
+                 ${SOURCE_LIST:+--source "$SOURCE_LIST"} \
+                 ${HOSTED:+--hosted} ${REUSE:+--reuse} \
                  2>&1 | tr -d '[:space:]')
     case "$job" in
       f*) echo "submitted $job   ($NODES nodes, $WALL, $QUEUE)"
@@ -158,11 +176,28 @@ fi
 say "fleet on $FLEET_NODES node(s): $FLEET_HOSTS"
 say "bench on: $BENCH_NODES"
 
-# ---- fleet ------------------------------------------------------------------
+# ---- fleet, unless this run is hosted ---------------------------------------
+#
+# A hosted run needs the allocation for evaluation CONTAINERS and nothing
+# else: the model is somebody else's problem, so deploying a fleet would take
+# minutes and every GPU to serve nothing.
+if [ -n "$HOSTED" ]; then
+    say "hosted run: no fleet; the allocation is for containers only"
+    BENCH_NODES=$nodes
+    ready="hosted"
+    dlog="(none)"
+else
+
 total=$((FLEET_NODES * REPLICAS_PER_NODE))
+# This job's OWN fleet directory, so concurrent jobs cannot overwrite each
+# other's `cluster.json`. Named for the job rather than the clock: two jobs
+# starting in the same second would collide on a timestamp.
+export RUNDIR=$LLM_ROOT/logs/run-$NAME-$(date +%m%d-%H%M%S)
+CLUSTER_JSON=$RUNDIR/cluster.json
 dlog=$LLM_ROOT/logs/deploy-$NAME-$(date +%H%M%S).log
-mkdir -p "$(dirname "$dlog")"
+mkdir -p "$(dirname "$dlog")" "$RUNDIR"
 say "deploying $MODEL across $FLEET_NODES node(s) -> $dlog"
+say "fleet config: $CLUSTER_JSON"
 NNODES=$FLEET_NODES "$LLM_DIR/deploy.sh" "$MODEL" > "$dlog" 2>&1 &
 deploy=$!
 # Wait for MOST of it, not all: one replica that never loads must not hold a
@@ -184,35 +219,98 @@ if [ "$up" -lt 4 ]; then
     say "fleet too small ($ready); stopping rather than measuring a starved run"
     exit 1
 fi
+fi   # end: not hosted
 
 # ---- the run ----------------------------------------------------------------
 rlog=$PBENCH/$NAME-launch.log
-say "running: size=$SIZE index=$INDEX parallel=$PARALLEL"
-"$PROJECT/scripts/run-group.sh" "$INDEX" "" --local --parallel "$PARALLEL" \
-    --size "$SIZE" --nodes "$BENCH_NODES" > "$rlog" 2>&1
-out=$(grep -E "^out " "$rlog" 2>/dev/null | awk '{print $3}')
-runner=$(grep -E "^pid " "$rlog" 2>/dev/null | awk '{print $3}')
-say "run started: ${out:-see $rlog} (runner ${runner:-unknown})"
 
-# WAIT for it. `run-group.sh` launches the runner with `nohup ... &` and
-# returns as soon as it has a pid, so its exit means "started", not
-# "finished". Treating the two as the same thing made this script tear the
-# fleet down eleven seconds after starting the run and report `batch done`:
+# Defined HERE, above its first use: bash resolves a function when it is
+# CALLED, so the supervisor loop below would have found nothing.
+seconds_of() {   # 90 | 90s | 30m | 2h | 1d -> seconds
+    case "$1" in
+      *d) echo $(( ${1%d} * 86400 ));;
+      *h) echo $(( ${1%h} * 3600 ));;
+      *m) echo $(( ${1%m} * 60 ));;
+      *s) echo $(( ${1%s} ));;
+      ''|*[!0-9]*) echo 0;;
+      *)  echo $(( $1 * 60 ));;      # bare number: flux reads it as minutes
+    esac
+}
+
+# The run is SUPERVISED, not launched once.
 #
-#     [00:51:27] running: size=30 index=1 parallel=30
-#     [00:51:38] run finished: .../claude-0827-005137
-#     [00:52:17] batch group1 done
+# A node failure ends whatever is running on it. Flux kills the enclosing job
+# when the node is gone outright, and nothing inside can catch that — but most
+# of what takes a run down is smaller: a node that stops accepting containers,
+# an ssh that will not connect, a runner that dies. Measured, one dead node
+# cost 105 in-flight tasks AND the ~500 task-arms the job had already
+# finished, because the resubmission started from nothing.
 #
-# The run directory never even survived the cleanup.
-if [ -n "$runner" ]; then
-    while kill -0 "$runner" 2>/dev/null; do sleep 60; done
-else
-    # No pid to wait on: fall back to watching for the runner process by name,
-    # and give it a moment to appear before deciding it never started.
-    sleep 60
-    while pgrep -f "benchmark.cli run" >/dev/null 2>&1; do sleep 60; done
-fi
-say "run finished: ${out:-see $rlog}"
+# So each pass runs on the nodes that are still answering, and `--resume auto`
+# carries forward everything earlier passes finished. A pass that dies costs
+# the tasks that were in flight during it, and nothing else.
+ATTEMPTS=${ATTEMPTS:-4}
+pass=0
+while [ "$pass" -lt "$ATTEMPTS" ]; do
+    pass=$((pass + 1))
+
+    # Only the nodes that answer, re-derived every pass: a node that died in
+    # the last pass must not be handed tasks in this one.
+    live=""
+    for h in $(printf '%s' "$BENCH_NODES" | tr ',' ' '); do
+        if timeout 20 ssh -n -o BatchMode=yes -o ConnectTimeout=8 "$h" true 2>/dev/null; then
+            live="${live:+$live,}$h"
+        else
+            say "pass $pass: $h is not reachable; leaving it out"
+        fi
+    done
+    if [ -z "$live" ]; then
+        say "no usable nodes left; stopping"
+        break
+    fi
+
+    say "pass $pass/$ATTEMPTS: size=$SIZE index=$INDEX parallel=$PARALLEL on $(printf '%s' "$live" | tr ',' '\n' | grep -c .) node(s)"
+    if [ -n "$HOSTED" ]; then
+        "$PROJECT/scripts/run-group.sh" "$INDEX" "" --subscription \
+            --parallel "$PARALLEL" --resume auto ${MODEL:+--model "$MODEL"} \
+            ${REUSE:+--reuse} \
+            --size "$SIZE" --nodes "$live" > "$rlog" 2>&1
+    else
+        "$PROJECT/scripts/run-group.sh" "$INDEX" "" --cluster "$CLUSTER_JSON" \
+            --parallel "$PARALLEL" --resume auto ${REUSE:+--reuse} \
+            --size "$SIZE" --nodes "$live" > "$rlog" 2>&1
+    fi
+    out=$(grep -E "^out " "$rlog" 2>/dev/null | awk '{print $3}')
+    runner=$(grep -E "^pid " "$rlog" 2>/dev/null | awk '{print $3}')
+    say "pass $pass started: ${out:-see $rlog} (runner ${runner:-unknown})"
+
+    # WAIT for it. `run-group.sh` returns as soon as it has a pid, so its exit
+    # means "started", not "finished".
+    if [ -n "$runner" ]; then
+        while kill -0 "$runner" 2>/dev/null; do sleep 60; done
+    else
+        sleep 60
+        while pgrep -f "benchmark.cli run" >/dev/null 2>&1; do sleep 60; done
+    fi
+
+    # Did it get through the list? `top.sh --once` reports what is left; a run
+    # with nothing running and nothing queued is done, however it ended.
+    left=$("$PROJECT/scripts/top.sh" "${out:-}" --once 2>/dev/null |
+           sed -n 2p | grep -oE "[0-9]+ run" | grep -oE "[0-9]+" || echo 0)
+    if [ "${left:-0}" -eq 0 ]; then
+        say "run finished: ${out:-see $rlog}"
+        break
+    fi
+    say "pass $pass ended with ${left} task-arm(s) unfinished; resuming"
+
+    # Out of wall clock is not a reason to start another pass.
+    limit_s=$(seconds_of "$WALL")
+    if [ "${limit_s:-0}" -gt 0 ] &&
+       [ $(( STARTED + limit_s - 600 )) -lt "$(date +%s)" ]; then
+        say "less than 10m of the allocation left; not starting another pass"
+        break
+    fi
+done
 
 # Hold the allocation for the rest of its window.
 #
@@ -225,17 +323,35 @@ say "run finished: ${out:-see $rlog}"
 # So the job sleeps out its own `-t`, less a margin to tidy up in. Anyone who
 # wants the nodes back sooner cancels the job, which is one command and an
 # explicit decision.
-seconds_of() {   # 90 | 90s | 30m | 2h | 1d -> seconds
-    case "$1" in
-      *d) echo $(( ${1%d} * 86400 ));;
-      *h) echo $(( ${1%h} * 3600 ));;
-      *m) echo $(( ${1%m} * 60 ));;
-      *s) echo $(( ${1%s} ));;
-      ''|*[!0-9]*) echo 0;;
-      *)  echo $(( $1 * 60 ));;      # bare number: flux reads it as minutes
-    esac
-}
-limit=$(seconds_of "$WALL")
+# ...unless somebody else is waiting for the nodes.
+#
+# The hold is right for ONE run: it keeps the fleet and containers alive to be
+# looked at, and time already granted cannot be got back. It is wrong the
+# moment there is a queue. Measured: a 300-task run finished in 2h05m of its
+# 24h and then sat on 64 idle nodes for the remaining 21h50m while two more
+# jobs of the same batch waited in SCHED — the hold that exists to avoid
+# wasting an allocation was wasting three.
+#
+# Only OUR jobs count. Cancelling ourselves because a stranger is queued would
+# hand the nodes to the scheduler, not to the work this is part of.
+queued=$(flux jobs -a --no-header -o "{name} {state}" 2>/dev/null |
+         awk '$2=="SCHED" || $2=="DEPEND"' | grep -c "^tuo-\|^bench-\|^corona-" || true)
+# How long a finished job keeps its nodes so the fleet and containers can be
+# looked at in place. Not the whole wall: idle nodes help nobody, and the
+# reason to over-ask for time is to be sure the run FINISHES, not to sit on
+# the surplus. Measured, that surplus was 21h50m of 64 idle nodes.
+HOLD_S=${HOLD_S:-1200}
+if [ "${queued:-0}" -gt 0 ]; then
+    say "$queued job(s) of this batch are waiting; releasing the nodes now"
+    limit=0
+else
+    limit=$(seconds_of "$WALL")
+    elapsed=$(( $(date +%s) - STARTED ))
+    if [ "$limit" -gt $(( elapsed + HOLD_S )) ]; then
+        say "run finished with $(( (limit - elapsed) / 60 ))m left; holding $(( HOLD_S / 60 ))m for inspection, then releasing"
+        limit=$(( elapsed + HOLD_S ))
+    fi
+fi
 if [ "${limit:-0}" -gt 0 ]; then
     margin=120
     left=$(( STARTED + limit - margin - $(date +%s) ))
@@ -247,7 +363,7 @@ fi
 
 # ---- tidy up, and leave a note ---------------------------------------------
 "$PROJECT/scripts/kill.sh" >/dev/null 2>&1
-"$LLM_DIR/stop.sh" >/dev/null 2>&1
+[ -z "$HOSTED" ] && "$LLM_DIR/stop.sh" >/dev/null 2>&1
 if [ -n "$out" ] && [ -d "$out" ]; then
     {
       summary=$(cd "$PROJECT" && scripts/top.sh "$out" --once 2>/dev/null |

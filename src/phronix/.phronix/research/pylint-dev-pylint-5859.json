@@ -1,0 +1,86 @@
+{
+  "achieved": null,
+  "approaches": [
+    {
+      "at": 1787113427.100159,
+      "attempts": 3,
+      "metrics": {},
+      "name": "(no files changed)",
+      "source": "benchmark attempt",
+      "summary": "attempted by editing (no files changed)",
+      "tools": []
+    }
+  ],
+  "attempts_log": [
+    {
+      "at": 1787113427.1001492,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    },
+    {
+      "at": 1787113455.200803,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    },
+    {
+      "at": 1787113483.7880151,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    },
+    {
+      "at": 1787113596.0519202,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    },
+    {
+      "at": 1787113624.3637094,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    },
+    {
+      "at": 1787113652.408541,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    }
+  ],
+  "chosen": null,
+  "fom": null,
+  "plan": [],
+  "score_history": [
+    {
+      "approach": null,
+      "at": 1787113414.1599596,
+      "best": null,
+      "measured_approaches": 0,
+      "pass": 1
+    },
+    {
+      "approach": null,
+      "at": 1787113442.4132617,
+      "best": null,
+      "measured_approaches": 0,
+      "pass": 2
+    },
+    {
+      "approach": null,
+      "at": 1787113470.9693713,
+      "best": null,
+      "measured_approaches": 0,
+      "pass": 3
+    }
+  ],
+  "slug": "pylint-dev-pylint-5859",
+  "topic": "pylint-dev__pylint-5859"
+}

@@ -65,6 +65,7 @@ REGISTRARS: List[str] = [
     "phronix.mcp_tools.tools.complexity_service:register",
     "phronix.mcp_tools.tools.profiling_service:register",
     "phronix.mcp_tools.tools.sync_service:register",
+    "phronix.mcp_tools.tools.conversation_service:register",
 ]
 
 

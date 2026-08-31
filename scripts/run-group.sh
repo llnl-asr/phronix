@@ -100,6 +100,7 @@ while [ $# -gt 0 ]; do
     # Passed through rather than interpreted: the default is `auto`, which
     # measures the fleet, and a group has no better information than that.
     --pipeline) EXTRA+=(--pipeline "$2"); shift 2;;
+    --resume)   EXTRA+=(--resume "$2"); shift 2;;
     --budget-scale) EXTRA+=(--budget-scale "$2"); shift 2;;
     --cluster)  CLUSTER="${2:-$PROJECT/$FLEET/cluster.json}"; shift 2;;
     --local)    CLUSTER=$PROJECT/$FLEET/cluster.json; shift;;
@@ -164,8 +165,17 @@ if [ "$INDEX" -lt 1 ] || [ "$INDEX" -gt "$GROUPS_AVAILABLE" ]; then
   exit 1
 fi
 
+# Written to a temporary file and renamed into place.
+#
+# The slice path is derived from `--size` and `--index` alone, so several runs
+# of the SAME slice — three models over the whole 300, say — all write
+# `size-300/group-01.txt` at once. The content is identical, which makes the
+# race invisible until a reader catches a half-written file and the run starts
+# on a truncated task list. `mv` within one directory is atomic, so a reader
+# sees either the old file or the whole new one.
 grep -v '^[[:space:]]*#' "$SOURCE" | grep '[^[:space:]]' |
-  sed -n "$(( (INDEX - 1) * SIZE + 1 )),$(( INDEX * SIZE ))p" > "$FILE"
+  sed -n "$(( (INDEX - 1) * SIZE + 1 )),$(( INDEX * SIZE ))p" > "$FILE.$$"
+mv -f "$FILE.$$" "$FILE"
 COUNT=$(grep -c . "$FILE")
 [ "$COUNT" -gt 0 ] || { echo "group $INDEX is empty"; exit 1; }
 

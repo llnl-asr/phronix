@@ -8403,3 +8403,56 @@ def test_a_resumed_result_round_trips_as_dataclasses_not_dicts():
     # them rather than raise on an unexpected keyword.
     assert "resolved" in row
     assert TaskResult.from_dict(row).instance_id == original.instance_id
+
+
+def test_a_reuse_run_credits_skills_learned_in_earlier_runs():
+    """The reuse half of a fresh/reuse pair must be able to SEE the fresh half.
+
+    `Ledger.classify` drops any skill it has no creation record for, and the
+    ledger is built per run. So a skill the fresh run wrote and the reuse run
+    loads reads as `created is None` and is dropped, and `skills_reused` comes
+    back 0 for the whole arm — reported as a result rather than as blindness.
+    That is exactly the number the pair is run to produce.
+
+    Framework skills must still be excluded: they shipped, they were not
+    learned, and counting them would make every arm look like it was learning
+    from its first task.
+    """
+    from tests.benchmark.runner import Ledger
+
+    ledger = Ledger()
+    ledger.record_inherited("pylint-discover-files-ignore", "pylint-dev/pylint")
+    ledger.record_inherited("sympy-degree-padding")        # origin unknown
+    ledger.record_creation("learned-here", 0, "pallets/flask")
+
+    out = ledger.classify(
+        ["pylint-discover-files-ignore", "sympy-degree-padding",
+         "learned-here", "phronix-diagnosis-pivot"],
+        order=4, repo="pallets/flask")
+
+    # Inherited skills count as reuse from the very first task, and are also
+    # reported separately: reuse WITHIN a run and reuse ACROSS runs are
+    # different claims.
+    assert "pylint-discover-files-ignore" in out["reused"]
+    assert "sympy-degree-padding" in out["reused"]
+    assert out["inherited"] == ["pylint-discover-files-ignore",
+                                "sympy-degree-padding"]
+    # Learned earlier in THIS run: reuse, but not prior-run reuse.
+    assert "learned-here" in out["reused"]
+    assert "learned-here" not in out["inherited"]
+    # Never recorded as created by anything: the framework's own. Excluded.
+    assert "phronix-diagnosis-pivot" not in out["reused"]
+
+    # Known different repo is cross-repo; UNKNOWN origin is not, or every
+    # carried skill would be reported as generalising across repositories.
+    assert out["cross_repo"] == ["pylint-discover-files-ignore"]
+
+
+def test_an_inherited_skill_counts_as_reuse_for_the_very_first_task():
+    """Order 0 is a real task, so the inherited sentinel must sit below it."""
+    from tests.benchmark.runner import Ledger
+
+    ledger = Ledger()
+    ledger.record_inherited("from-the-fresh-run")
+    assert ledger.INHERITED < 0
+    assert ledger.classify(["from-the-fresh-run"], order=0, repo="x")["reused"]

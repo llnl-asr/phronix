@@ -146,3 +146,245 @@ To pick up by hand from wherever it stopped:
 scripts/overnight.sh 5 10        # or whichever group is next
 ```
 
+
+### group1 — `claude-0827-005934`  (30 task(s), 8 node(s))
+
+```
+TOTAL  60 task(s)     6 pass   54 fail    0 run    10% of finished      6.2M tok   $174.89   [#########!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+```
+
+- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0827-005934`
+- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-group1-005640.log` (32/32 ready)
+- skills written: **32**   attempts that loaded one: **27**
+- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0827-005934 --once`
+
+### group 1 — `claude-0827-005934`  (30 tasks, 8 nodes, batch job)
+
+```
+TOTAL  60 task(s)   6 pass   54 fail   0 run   10% of finished   $174.89
+```
+
+The first COMPLETE group of the night: every task reached a verdict, none was
+cut off by an allocation ending. 52 minutes of run time inside a 60-minute
+pdebug allocation, fleet up in 2m41s.
+
+- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0827-005934`
+- batch log: `/p/lustre5/haridev/phronix-bench/batch-group1-0827-005618.log`
+- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0827-005934 --once`
+
+Errors, split by cause (`scripts/pipeline-errors.sh <run>`):
+
+```
+PIPELINE                                    MODEL
+  6  ssh command failed                      26  gave up without editing
+  4  testbed cannot run pytest
+  3  gateway error
+  3  runner never started
+  1  agent overflowed its context
+tasks touched by a pipeline fault: 11 of 30
+```
+
+## Groups 2-10 were NOT run
+
+They were driven by `scripts/overnight.sh`, which I stopped when group 1 was
+moved to a batch job, and did not restart. About five hours of queue time went
+unused. The full 300-task run below covers the same ground.
+
+## The full run
+
+`f3UkYD13pMvw` — 32 nodes, 24h, pbatch, all 300 tasks, 60 at a time.
+Submitted 07:35, queued behind whatever pbatch is running.
+
+```bash
+flux jobs -o "{id} {state} {t_remaining!F} {name}" | grep lite300
+tail -f /p/lustre5/haridev/phronix-bench/batch-lite300-0827-073546.log
+scripts/top.sh --once
+scripts/pipeline-errors.sh          # model faults vs harness faults
+```
+
+### tuo-g1 — `claude-0827-130119`  (30 task(s), 8 node(s))
+
+```
+TOTAL  60 task(s)     5 pass   45 fail   10 run    10% of finished     28.5M tok    $88.22   [########!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+```
+
+- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0827-130119`
+- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-tuo-g1-125807.log` (32/32 ready)
+- skills written: **26**   attempts that loaded one: **18**
+- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0827-130119 --once`
+
+
+---
+
+# Runs of the whole 300 — 2026-08-29
+
+## What has already run, and what it showed
+
+Both on 64 nodes, 256 replicas, `--parallel 120`, the same 300-task list.
+
+| | gpt-oss-120b | nemotron-3.5 |
+|---|---|---|
+| run | `claude-0829-012358` | `claude-0829-040235` |
+| result | 124 pass / 474 fail — **complete** | 196 pass / 299 fail / 105 unfinished |
+| wall | **2h05m** for all 300 | killed at 3h46m |
+| tokens / cost | 54.3M / $995 | 450.9M / $1998 |
+| ended because | finished | **a node died** — see below |
+
+```bash
+scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0829-012358 --once
+scripts/error-report.py /p/lustre5/haridev/phronix-bench/runs/claude-0829-012358
+```
+
+**The two are not comparable as they stand**: nemotron did not finish, and its
+196 passes are from 82% of the list. It was also the run whose pipeline faults
+outnumbered its model failures, so its numbers describe the harness more than
+the model.
+
+### The split
+
+| | gpt-oss-120b | nemotron-3.5 |
+|---|---|---|
+| PIPELINE | 274 | **1115** |
+| TESTBED | 13 | 5 |
+| MODEL | **1195** | 592 |
+
+gpt-oss is what a healthy run looks like: failures are 843 "target tests still
+failing" and 319 "no patch produced" — real attempts, wrong answers. Nemotron
+is the opposite, and two faults account for nearly all of it:
+
+* **563 stages killed at their ceiling** (196 research at 900s, 151 at 300s).
+  Cause found: `budget_scale = 0.5` in BOTH manifests — the *hosted* fallback.
+  The rate is read from `predicted_tokens_seconds`, which counts FINISHED
+  requests, so it reads 0 on a fleet deployed seconds ago — which is every
+  batch run. `measured_decode_rate()` returned nothing, nothing was read as
+  "no fleet, therefore hosted", and every budget was HALVED on the slowest
+  hardware. Now a configured-but-unmeasured fleet gets a generous 2.0 and is
+  not cached, so it re-measures once traffic exists.
+* **467 "phronix arm ran as a plain agent"** (against 7 for gpt-oss). NOT yet
+  explained. Phronix tools were being called — 261 calls, 175 skills written,
+  77 skill loads — so the framework was working; the flag is per stage, and
+  259 of them are `attempt-1`, where a fresh run has nothing to retrieve. The
+  open question is the `learn-1` and `research-2` ones. **Until this is
+  understood, treat nemotron's phronix-vs-bare comparison as unproven.**
+
+### Why nemotron stopped
+
+```
+exception type="exec" note="node failure on tuolumne1081 (rank 81)"
+```
+
+`tuolumne1081` was its gateway node, so Flux tore down the whole 64-node job
+and took 105 in-flight tasks with it. The server logs on that node end
+mid-work at 178 t/s with **no allocation error** — no `cudaMalloc failed`, no
+`out of memory` — so llama-server did not OOM; the process was killed. A HOST
+OOM-kill would look the same from the log side, and on MI300A the 128 GB is
+unified, shared by four replicas plus the co-located agents and containers, so
+it cannot be ruled out. `GPUS_PER_NODE=3` would leave a GPU's worth of headroom
+if it recurs.
+
+## Queued now, with the fixes above
+
+| model | job | wall |
+|---|---|---|
+| gpt-oss-120b | `f3V81KPSmb3M` | 5h |
+| nemotron-3.5 | `f3V81KzJxhRh` | 9h |
+| ornith-1.5 | `f3V81LbXudks` | 9h |
+| nemotron-super-49b | `f3V81MCJAo1q` | 9h |
+
+Walls are the measured time plus 30%, not the 24h the first pair asked for:
+gpt-oss took 2h05m, nemotron was on course for ~4h40m, and doubled budgets add
+roughly half again. A finished job now releases its nodes instead of sitting on
+them — the first pair wasted 21h50m of 64 idle nodes between them.
+
+### These runs survive a node failure
+
+Three layers, because the failure comes in three sizes:
+
+1. **`--resume auto`** — `results.jsonl` is written per task as it finishes, so
+   it was always a checkpoint; nothing read it. A resubmitted job now carries
+   forward what the dead one finished and re-runs only what was lost. Before
+   this, the resubmission repeated ~500 completed task-arms.
+2. **Supervised passes** — the run is retried up to 4 times inside its
+   allocation, each pass re-deriving which nodes still answer and resuming from
+   the last. A pass that dies costs its in-flight tasks and nothing else.
+3. **Per-task failover** — an isolation failure moves that task to another node
+   and does not count toward the abort; bad hosts are recorded process-wide and
+   new tasks round-robin over the survivors.
+
+## They are safe to run at the same time
+
+This needed fixing before queueing four of them, and the failure would have
+been silent:
+
+`deploy.sh` writes its fleet description to `$RUNDIR/cluster.json` and copies
+it to the shared `<fleet>/cluster.json`. That copy is last-writer-wins, and
+`run-group.sh --local` reads it — so the first job's tasks would have been sent
+to the **second** job's gateway. One fleet serving twice its load, the other
+idle, and the manifest naming the wrong gateway so the trace would not have
+shown it.
+
+Now: each job exports its own `RUNDIR` (named for the job, not the clock — two
+jobs starting in the same second would collide on a timestamp), `deploy.sh`
+honours it, and the run is pointed at that file with `--cluster` rather than
+`--local`. The shared copy stays for interactive use.
+
+The task-list slice was shared too: its path is derived from `--size` and
+`--index` alone, so four runs of the same 300 all wrote `size-300/group-01.txt`
+at once. Identical content makes that race invisible until a reader catches it
+half-written and starts on a truncated list. It is now written to a temporary
+file and renamed into place.
+
+## How to read them
+
+```bash
+scripts/top.sh --once          # follows the newest run by itself
+scripts/error-report.py        # pipeline / testbed / model, newest run
+scripts/error-report.py <run-dir> ...
+flux jobs -a | head
+```
+
+`error-report.py` splits failures three ways, because they read identically in
+a trace and point at completely different work:
+
+| | meaning |
+|---|---|
+| **PIPELINE** | ours — a harness bug, a moved binary, an ssh limit, a budget |
+| **TESTBED** | the SWE-bench image's own environment (e.g. sphinx's Jinja drift, astropy's conftest). Nothing in this repo fixes these |
+| **MODEL** | the benchmark working: the agent did not solve the task |
+
+Anything unrecognised is reported as UNCLASSIFIED rather than assumed to be a
+model failure — a fault the report does not know about is the one worth seeing.
+
+## What these runs are the first test of
+
+Four fixes went in today. Only the first is confirmed in production:
+
+1. **Images load from the PFS archive before the registry.** Container startup
+   pulled from Docker Hub first, always, while all 300 images sat archived on
+   `<data root>/images`. A group scheduled onto fresh nodes hit
+   `toomanyrequests: You have reached your unauthenticated pull rate limit` and
+   lost **all 60 task-arms in four minutes**, reported as `isolation: could not
+   start <image>` — which reads as a missing image, not a quota. **Confirmed:
+   the same group went from 60 image failures to 0.**
+2. **A patch that does not parse is a verdict, not a runner fault.** The code
+   assumed "a patch that breaks everything still makes the tests RUN" — false
+   when the patch is not valid Python. On django-14155 the agent wrote diff
+   markers into the source; the harness said `RUNNER FAILED`, which inflated the
+   pipeline count *and* told the attempt the runner broke rather than that its
+   own edit will not parse, so the next try had nothing to correct.
+3. **A failed ssh says why.** `CalledProcessError` renders the command and the
+   exit code only, so a container failure arrived as a hundred characters of
+   podman arguments — indistinguishable between sshd refusing, a missing image
+   and a full disk.
+4. **Budgets scale with measured decode**, bounded at 6x. Unscaled, 178 of one
+   corona run's 314 pipeline faults were stages killed at their ceiling.
+
+If any of 2-4 did not hold, `error-report.py` shows it directly: the same
+`tests could not run`, `ssh command failed` or `stage hit its ceiling` counts.
+
+
+
+## New Runs
+
+Fresh: /p/lustre5/haridev/phronix-bench/runs/claude-0831-151643
+

@@ -147,6 +147,9 @@ class TaskResult:
     skills_reused: List[str] = field(default_factory=list)
     #: Of those, the ones created while working on a DIFFERENT repository.
     skills_reused_cross_repo: List[str] = field(default_factory=list)
+    #: Of those, the ones learned in an EARLIER RUN rather than earlier in this
+    #: one. The number a fresh/reuse pair is run to produce.
+    skills_reused_prior_run: List[str] = field(default_factory=list)
 
     #: What the research pass did, when one ran: tools called, tokens, verdict.
     #: Its tokens are added to the task total below — research is part of the

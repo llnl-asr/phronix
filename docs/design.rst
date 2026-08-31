@@ -1216,6 +1216,201 @@ the model. Sampled against a live 12-unit run: 2, 9, 8, 7, 6 requests in
 flight. Tasks needed to fill a fleet is therefore ``capacity / (0.53 x arms)``,
 which is what ``--fill-fleet`` computes.
 
+Where the agents run
+--------------------
+
+The agents run on the **allocated compute nodes**, not on the machine driving
+the run. This is recent and it was not a tuning change: measured at twelve
+tasks, the driving host — a shared login node — carried 60 ``claude`` processes
+at load 10.8 on 48 cores while every allocated compute node sat at 0.00. The
+allocation was being used for containers and for nothing else, and the ceiling
+on parallelism was a machine outside it that seventeen other people were also
+using.
+
+Each task's agents are placed on the node that already holds its container, so
+its reasoning and its test runs share a host, a page cache and a checkout. The
+invocation travels as a generated script on the shared filesystem rather than
+an ssh command line, because the environment is dozens of variables including
+paths with spaces, and every one would otherwise survive two levels of shell
+splitting.
+
+Two properties of that environment are not optional:
+
+* **Only names a shell can export.** Lmod publishes ``module`` and ``ml`` as
+  ``BASH_FUNC_module%%``, whose values are multi-line function bodies. Those
+  are not valid identifiers, so the ``export`` fails — and the body then runs
+  on past the failed line, so the shell reads ``case "$-" in`` and the rest of
+  the function as commands. The script is corrupt from that point. Every
+  recording stage produced nothing and no output at all until this was
+  filtered.
+* **Per-task state must be thread-local.** One ``Arm`` object serves every task
+  that arm runs, concurrently. A per-task value written onto it as a plain
+  attribute is a data race whose result looks plausible: the last task to start
+  overwrites it for all the others. Measured on the first placement attempt, 25
+  agents landed on one node of five and fifteen stayed local. The model pin had
+  the same race silently, sending tasks to each other's backend and destroying
+  the prompt-cache locality the pinning exists to create.
+
+Fanned-out stages inherit the placement explicitly. A worker thread starts with
+empty thread-locals, so research — which fans out through six pools — ran every
+one of its agents on the driving host while the attempt was correctly placed.
+
+Per-agent decode is the number that decides
+-------------------------------------------
+
+Concurrency is not throughput. What decides whether an attempt finishes inside
+its budget is how fast **one** agent decodes, which is the replica's rate
+divided by the requests sharing it:
+
+======================  ==============  ==============
+shape                   per replica     per agent
+======================  ==============  ==============
+12 replicas x 4 slots   26 tok/s        7 tok/s
+20 replicas x 2 slots   26 tok/s        13.5 tok/s
+======================  ==============  ==============
+
+At 7 tok/s a twenty-turn attempt cannot finish in 1800 s, and sixty task-arms
+ran eighteen minutes with zero completions — not stuck, each crawling. More
+slots buy concurrency by dividing each agent's share, and an attempt that
+decodes too slowly produces nothing at all. So the fleet is sized for roughly
+**one concurrent request per replica**, and task parallelism follows from that
+rather than from the node count.
+
+The same arithmetic sets ``--parallel``: a task occupies about 0.53 slots and
+runs two arms, so 120 tasks against 256 replicas is approximately one each.
+
+Images come from the filesystem, not the registry
+-------------------------------------------------
+
+Container startup resolves an image **cache, then PFS archive, then registry**
+— in that order, with the registry last.
+
+Pulling first is the obvious implementation and it fails at scale. Every image
+is archived on the PFS by ``prefetch``, and the node-local podman store is a
+cache that a freshly scheduled node does not have. A group landing on new nodes
+therefore went to Docker Hub for thirty images at once, and Docker Hub rate
+limits unauthenticated pulls:
+
+.. code-block:: text
+
+    toomanyrequests: You have reached your unauthenticated pull rate limit
+
+That failed **all sixty task-arms of a group inside four minutes**, reported as
+``isolation: could not start <image>`` — which reads as a missing or broken
+image rather than as a quota. The archives were on the same filesystem the
+whole time.
+
+The benchmark's own environment is read-only
+--------------------------------------------
+
+The tasks *are* Python repositories, and an agent reproducing a bug installs
+the repository it is working on. It inherits the harness's environment, so
+``pip install -e .`` rewrote the harness's own ``site-packages``: seven
+SWE-bench repositories were editable-installed there, ``pytest`` was replaced by
+a task's 4.6.1 checkout and ``pluggy`` dragged to 0.13.1, and the benchmark's
+test suite could no longer start. One ``.pth`` pointed into the **previous
+day's** run, so it had been changing what every later task imported, silently,
+across runs.
+
+Two softer guards leak and should not be trusted. Dropping ``VIRTUAL_ENV`` and
+the venv from ``PATH`` is undone by the same function that puts node there; a
+``pip`` shim earlier on ``PATH`` never sees ``python -m pip`` or an absolute
+``bin/pip``. A read-only ``site-packages`` does not care how pip is spelled, the
+harness only reads at runtime, and an agent's install fails naming the
+directory.
+
+Surviving the machine
+---------------------
+
+A 64-node job meets hardware failure as a matter of course, and concurrent jobs
+meet each other. Both were silent before they were designed for.
+
+**Concurrent runs must not share state.** ``deploy.sh`` writes its fleet
+description to ``$RUNDIR/cluster.json`` and copies it to a shared path. That
+copy is last-writer-wins, so two jobs queued behind each other would send the
+first job's tasks to the **second** job's gateway: one fleet serving twice its
+load, the other idle, and the manifest naming the wrong gateway so the trace
+would not reveal it. Each job now owns a ``RUNDIR`` named for the job rather
+than the clock, and addresses its own fleet. The task-list slice had the same
+shape of bug — its path derives from ``--size`` and ``--index`` alone, so four
+runs of the same 300 wrote one file at once — and is now renamed into place.
+
+**Node failure is handled in three layers**, because it arrives in three sizes:
+
+============================  ==================================================
+failure                       response
+============================  ==================================================
+a task's container host       the task moves to another node and retries; the
+                              try does not count toward the abort, since a try
+                              that never ran on a working node is not evidence
+                              about the environment. Bad hosts are recorded
+                              process-wide and new tasks round-robin over the
+                              survivors.
+the run dies                  the batch job supervises up to four passes,
+                              re-deriving which nodes still answer each time
+a node dies outright          Flux kills the job; the resubmission resumes
+============================  ==================================================
+
+Resuming works because ``results.jsonl`` is written per task as it finishes —
+it was always a checkpoint, and nothing read it. ``--resume auto`` finds the
+newest incomplete run of the same task list and model, carries its results
+forward so the report covers the whole list, and skips those tasks. It tolerates
+the torn last line a killed job always leaves. Before this, a node failure cost
+105 in-flight tasks *and* the ~500 task-arms the job had already finished.
+
+Budgets are measured, and the fallback matters
+----------------------------------------------
+
+Stage budgets are calibrated against a model at roughly 1000 tok/s, so hardware
+that decodes at 13.5 needs them scaled. ``budget_scale`` measures the fleet and
+derives the multiplier — and its **fallback** turned out to matter more than the
+measurement.
+
+The rate is read from ``predicted_tokens_seconds``, which counts *finished*
+requests, so it reads 0 on a fleet deployed seconds ago — which is every batch
+run, because the job brings up the fleet and starts immediately. An unmeasurable
+rate was read as "no fleet, therefore hosted", which takes the hosted scale of
+0.5 and **halved every budget on the slowest hardware available**. Measured
+across two 300-task runs: ``budget_scale = 0.5`` in both manifests and 778
+stages killed at their ceiling, 563 of them research — the stage the next
+attempt depends on, so try 2 opened with "no skill covers this task".
+
+Two rules follow. A configured-but-unmeasured fleet is **not** hosted: it gets a
+generous multiplier and is not cached, so a later caller measures once traffic
+exists and the budgets correct themselves mid-run. And the tracked loop's
+multiplier is **bounded** separately, because that loop is sequential — research
+blocks the next attempt — so the 50x a very slow fleet computes would put one
+stage at four hours and the task would never reach try 2.
+
+Failures are classified before they are counted
+-----------------------------------------------
+
+Three kinds of failure read identically in a trace and point at completely
+different work, so ``error-report.py`` separates them:
+
+=========  =====================================================================
+PIPELINE   ours: a harness bug, a moved binary, an ssh limit, a budget
+TESTBED    the SWE-bench image's own environment — a repository's conftest, a
+           dependency that drifted. Nothing in this repository fixes these
+MODEL      the benchmark working: the agent did not solve the task
+=========  =====================================================================
+
+Anything unrecognised is reported as UNCLASSIFIED rather than assumed to be a
+model failure, because a fault the report does not know about is the one worth
+seeing.
+
+The distinction has teeth. A patch that does not parse stops the tests from
+running, which looks exactly like a runner that never started — and the code
+assumed "a patch that breaks everything still makes the tests RUN", which is
+false when the patch is not valid Python. Scoring it as a runner fault inflated
+the pipeline count *and* told the attempt the runner broke rather than that its
+own edit will not parse, so the next try had nothing to correct.
+
+The ratio is the diagnostic. A healthy run is model-dominated: one 300-task run
+measured 1195 model failures against 274 pipeline. A run where pipeline
+outnumbers model is measuring the harness, not the model, and its numbers should
+not be read as a result.
+
 Sampling: what the model was evaluated with
 -------------------------------------------
 
@@ -1269,3 +1464,20 @@ marketing.
 * **Cost.** Research plus parallel candidates plus a learning pass is several
   agent invocations per task. It buys measured knowledge instead of guesses, but
   the trade is real and the benchmark counts every token of it.
+* **An arm can report as phronix without having used it.** One 300-task run
+  logged 467 stages as "used NO phronix tools" against 7 for the same code on
+  another model. The framework was demonstrably working in that run — 261 tool
+  calls, 175 skills written, 77 skill loads — and most of the flagged stages are
+  the first attempt, where a fresh run has nothing to retrieve. The remainder is
+  unexplained. Until it is, that run's phronix-versus-bare comparison is not
+  evidence, and the flag cannot be read either as a fault or as noise.
+* **Only one of three node-failure layers is proven.** Per-task failover,
+  supervised passes and ``--resume auto`` are tested but have not yet caught a
+  real node failure; the only layer confirmed in production is the image
+  archive. A design that has not met the failure it was written for is a
+  hypothesis.
+* **The host-memory ceiling is unmeasured.** MI300A memory is unified, so four
+  replicas share 128 GB per node with the co-located agents and containers. A
+  node was lost mid-run with no allocation error in any server log — consistent
+  with a host OOM-kill and equally consistent with a hardware fault. Nothing
+  distinguishes them after the fact, and the headroom has never been measured.

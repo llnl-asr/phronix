@@ -102,7 +102,14 @@ for key in "${GPU_MODEL[@]}"; do
     [[ -f ${SOURCE[$key]:-} ]] || { echo "no weights for '$key': ${SOURCE[$key]:-unset}" >&2; exit 2; }
 done
 
-RUNDIR=$LLM_ROOT/logs/run-$(date +%Y%m%d-%H%M%S)
+# Overridable, so two deploys can run at once without sharing state.
+#
+# Everything a fleet owns hangs off this: the per-GPU node records, the server
+# logs, and its own `cluster.json`. A caller that sets RUNDIR gets a fleet that
+# is addressable on its own rather than through the shared copy below — which
+# is what makes two concurrent batch jobs safe. Unset, this is the timestamped
+# directory it always was.
+RUNDIR=${RUNDIR:-$LLM_ROOT/logs/run-$(date +%Y%m%d-%H%M%S)}
 mkdir -p "$RUNDIR/nodes"
 ln -sfn "$RUNDIR" "$LLM_ROOT/logs/latest"
 
@@ -446,6 +453,13 @@ print(json.dumps([f'{sys.argv[1]}@{i}' for i in range(int(sys.argv[2]))]))" \
   if python3 -c "import json,sys; json.load(open(sys.argv[1]))" \
        "$RUNDIR/cluster.json.tmp" 2>/dev/null; then
     mv "$RUNDIR/cluster.json.tmp" "$RUNDIR/cluster.json"
+    # The shared copy is a CONVENIENCE for interactive use (`status.sh`,
+    # `run-group.sh --local`), and it is last-writer-wins by construction.
+    # A batch job must therefore address its own fleet by `$RUNDIR/cluster.json`
+    # and never through here: two jobs deploying minutes apart would otherwise
+    # send the first job's tasks to the second job's gateway, so one fleet
+    # serves twice its load while the other sits idle — and the manifest
+    # records the wrong gateway, so the trace does not show it either.
     cp "$RUNDIR/cluster.json" "$LLM_SCRIPTS/cluster.json"
     return 0
   fi

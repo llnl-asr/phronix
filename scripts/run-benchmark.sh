@@ -78,8 +78,17 @@ while [ $# -gt 0 ]; do
     # along; the launcher parses with an allow-list, so a flag it does not name
     # is refused however well the CLI understands it.
     --no-carry) EXTRA+=(--no-carry); shift;;
-    --fresh)   FRESHNESS="--fresh"; shift;;
-    --reuse)   FRESHNESS="";        shift;;
+    --fresh)   FRESHNESS="--fresh";    shift;;
+    # `--no-fresh`, not the absence of `--fresh`.
+    #
+    # The CLI derives freshness from `--no-fresh` alone — `fresh=not
+    # args.no_fresh` — so `--fresh` is accepted and ignored, and omitting it
+    # leaves fresh TRUE. `--reuse` therefore produced a from-scratch run that
+    # reported itself as `fresh` in its own manifest: measured on the reuse
+    # half of a fresh/reuse pair, which is the one comparison the pair exists
+    # to make.
+    --reuse)   FRESHNESS="--no-fresh"; shift;;
+    --resume)            EXTRA+=(--resume "$2"); shift 2;;
     --budget-scale)      EXTRA+=(--budget-scale "$2"); shift 2;;
     --research-on-retry) EXTRA+=(--research-on-retry); shift;;
     # Research BEFORE the first attempt, not only after one has failed.
@@ -175,7 +184,11 @@ echo "model   : $MODEL"
 # before committing a budget should not disagree with what will run.
 echo "tasks   : $TASKS ($(grep -vc '^[[:space:]]*#' "$TASKS") task(s))"
 echo "node    : $NODE"
-echo "mode    : ${FRESHNESS:---reuse} ${EXTRA[*]:-}"
+case "$FRESHNESS" in
+  --no-fresh) MODE_SAYS="reuse (reads what earlier runs learned)";;
+  *)          MODE_SAYS="fresh (from scratch)";;
+esac
+echo "mode    : $MODE_SAYS ${EXTRA[*]:-}"
 echo "out     : $OUT"
 
 # Candidate racing stays OFF unless asked for.

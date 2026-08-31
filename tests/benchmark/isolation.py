@@ -1291,6 +1291,23 @@ def store_inventory(store_root: Path) -> Dict[str, List[str]]:
             out[kind] = []
         elif kind == "skills":
             out[kind] = sorted(p.name for p in base.iterdir() if p.is_dir())
+        elif kind == "capabilities":
+            # Task ANSWERS are directories, not files, and they are the whole
+            # learning signal.
+            #
+            # `capabilities/tasks/<slug>/` is where a task's solution is
+            # written, so a listing of files directly under `capabilities/`
+            # sees none of them. Measured on the 30-task fresh run: the store
+            # ended with 32 task answers and the run reported
+            # `skills_created = []` for every one of its tasks — the arm
+            # looked as though it had learned nothing, and a reuse run built
+            # on it would have had nothing to credit.
+            names = [p.stem for p in base.glob("*") if p.is_file()]
+            tasks = base / "tasks"
+            if tasks.is_dir():
+                names += [f"tasks/{p.name}" for p in tasks.iterdir()
+                          if p.is_dir()]
+            out[kind] = sorted(names)
         else:
             out[kind] = sorted(p.stem for p in base.glob("*") if p.is_file())
     memory = store_root / "memory"
