@@ -5236,6 +5236,12 @@ def test_budget_scale_is_explicit_measured_or_tuned(tmp_path, monkeypatch):
     # at 1.0 spends minutes per stage on agents that finished thinking long
     # before the clock did.
     monkeypatch.setattr(arms, "measured_decode_rate", lambda: None)
+    # HOSTED means no fleet at all. An unmeasurable rate alone no longer
+    # implies it: a local fleet reads 0 tok/s until it has served something,
+    # which is true of every batch run at t=0, and calling that "hosted"
+    # halved every budget on the slowest hardware we own. See
+    # `test_a_local_fleet_that_has_not_served_yet_is_not_mistaken_for_hosted`.
+    monkeypatch.setattr(arms, "has_local_fleet", lambda: False)
     arms._BUDGET_SCALE_CACHE["value"] = None
     hosted = arms.budget_scale()
     assert hosted == float(arms._tuned("research.hosted_budget_scale", 0.5))
@@ -6104,29 +6110,40 @@ def test_the_tracked_pipeline_is_a_loop_over_one_task_record():
     assert "Write it whether the task passed or not" in snap
 
 
-def test_research_reads_the_record_and_the_whole_conversation():
+def test_research_retrieves_the_conversation_instead_of_attaching_it():
     """Research must not repeat work the task has already done.
 
     The record is compacted by design — problem, approaches, what worked, what
-    did not — and compaction loses detail a diagnosis sometimes needs. So the
-    task's unabridged conversation goes in beside it: the record says what has
-    been tried, the conversation says exactly what was said when it was.
+    did not — and compaction loses detail a diagnosis sometimes needs. The
+    conversation holds that detail, but attaching it whole is what runs the
+    context window out: it is append-only, so it is largest exactly when the
+    window is tightest. So the record and a summary are attached, and the
+    conversation is RETRIEVED a turn at a time through the MCP tools.
     """
     from tests.benchmark.arms import ClaudePhronixArm as Arm
 
     prompt = " ".join(Arm.TASK_RESEARCH_PROMPT.split())
     # The REASON not to repeat prior work now lives in the skill (`I7`), and
-    # the prompt names the record and points at it. Prose in the prompt
-    # describing what an attached file says is what the length limit catches.
-    assert "{tracker}" in prompt and "I7" in prompt
-    assert "unabridged" in prompt
+    # the retrieval method in `I8`. The prompt points at both. Prose in the
+    # prompt describing what an attached file says is what the limit catches.
+    assert "{tracker}" in prompt and "I7" in prompt and "I8" in prompt
 
     source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
     research = source[source.index("    def research_from_tracker(self"):]
     # The whole method, not a byte window of its start: comments explaining
     # WHY an attachment is there are not a behaviour change.
     whole = research[:research.index("\n    def ", 10)]
-    assert 'Path(workdir).parent / "conversation.md"' in whole
+    # The unbounded file is not attached. Retrieval replaces it.
+    assert 'Path(workdir).parent / "conversation.md"' not in whole
+
+    # And the method it is retrieved by is written down where a method
+    # belongs: in the skill, not restated in the prompt.
+    skill = Path(
+        "src/phronix/.phronix/skills/phronix-task-research/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "### I8" in skill
+    for tool in ("conversation_outline", "conversation_search", "conversation_turn"):
+        assert tool in skill
 
 
 def test_the_record_is_organised_as_problem_approach_worked_and_not():
@@ -7677,3 +7694,712 @@ def test_the_batch_job_waits_for_the_run_it_started():
     # `run-group.sh` really does background the runner — the premise above.
     launcher = Path("scripts/run-benchmark.sh").read_text(encoding="utf-8")
     assert "nohup" in launcher
+
+
+def test_a_gateway_model_is_told_when_to_compact():
+    """The CLI cannot know a gateway model's context window.
+
+    Left to itself it sizes auto-compaction to the model's ADVERTISED limit,
+    and `gpt-oss-120b` is not a name it ships one for — so it never compacted,
+    and an agent that kept exploring hit the wall instead. Measured on
+    sphinx-10451: 215 steps in a single attempt, then `400
+    ContextWindowExceededError`, the whole try lost with no patch and no usable
+    transcript. Eight of one run's nineteen pipeline faults were this.
+
+    Only for a redirected endpoint: against real Anthropic models the default
+    knows the window better than a fixed number does, and forcing this would
+    compact a 200k context at half its size.
+    """
+    from tests.benchmark.arms import ClaudeArm
+
+    arm = ClaudeArm.__new__(ClaudeArm)
+
+    arm.provider, arm.base_url = "tuolumne", "http://tuolumne1016:4000/v1"
+    assert arm._is_redirected()
+
+    arm.provider, arm.base_url = "anthropic", "https://api.anthropic.com/v1"
+    assert not arm._is_redirected()
+    # An unset provider means "not chosen", which is Anthropic.
+    arm.provider, arm.base_url = "", "http://somewhere/v1"
+    assert not arm._is_redirected()
+
+    # The floor the CLI accepts is 100k; the models served here train to
+    # 131072, so this has to sit between the two.
+    assert 100_000 <= ClaudeArm.autocompact_tokens < 131_072
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert '"--autocompact", str(self.autocompact_tokens)' in source
+    assert "if self._is_redirected() and self.autocompact_tokens:" in source
+
+
+def test_a_failed_command_records_what_it_said():
+    """`CalledProcessError` prints the argv and swallows the reason.
+
+    Its `__str__` is the command and the exit status; stdout and stderr are on
+    the exception and are not shown. So the trace recorded
+
+        CalledProcessError: Command '['ssh', '-n', ... ]' returned non-zero
+        exit status 1
+
+    — a hundred characters of argv and not one word about the cause. Every
+    such failure had to be reproduced by hand to learn anything, and a
+    pipeline fault you cannot read is one you will not fix.
+    """
+    import subprocess
+
+    from tests.benchmark.runner import _error_tail
+
+    exc = subprocess.CalledProcessError(
+        1, ["ssh", "node", "podman", "run"],
+        output="", stderr="Error: OCI runtime error: no space left on device")
+
+    message = f"{type(exc).__name__}: {exc}"
+    said = _error_tail((getattr(exc, "stderr", "") or "")
+                       + (getattr(exc, "output", "") or ""), 300)
+    assert said and "no space left on device" in said
+
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert 'said = _error_tail(' in runner
+    assert 'attempt.error = f"{attempt.error} — {said}"' in runner
+
+
+def test_a_patch_that_does_not_parse_is_a_verdict_not_a_runner_fault():
+    """Zero passes and zero failures CAN be produced by a patch.
+
+    `_runner_failure` rests on the claim that "a patch that breaks everything
+    still makes the tests RUN". True of a patch that is merely wrong, false of
+    one that is not valid Python: the module cannot be imported, nothing is
+    collected, and the result looks exactly like a missing pytest.
+
+    Measured on django-14155 — the agent wrote diff markers into the file:
+
+        File "/testbed/django/urls/resolvers.py", line 68
+            +            return (
+        SyntaxError: invalid syntax
+
+    and the harness reported RUNNER FAILED. That is a model error dressed as a
+    harness fault: it inflates the pipeline count, and the attempt is told the
+    runner broke rather than that its own patch will not parse, so the next
+    try has nothing to correct.
+    """
+    from tests.benchmark.runner import _files_in_patch, patch_broke_the_source
+
+    patch = ("diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py\n"
+             "--- a/django/urls/resolvers.py\n"
+             "+++ b/django/urls/resolvers.py\n"
+             "@@ -60,6 +60,7 @@\n"
+             "+            return (\n")
+    assert _files_in_patch(patch) == ["django/urls/resolvers.py"]
+
+    broke = ('  File "/testbed/django/urls/resolvers.py", line 68\n'
+             "    +            return (\n"
+             "SyntaxError: invalid syntax")
+    assert "django/urls/resolvers.py" in patch_broke_the_source(broke, patch)
+
+    # A syntax error in a file the agent never touched IS a runner fault: the
+    # testbed is broken and the patch says nothing about it.
+    elsewhere = broke.replace("django/urls/resolvers.py", "django/db/models/query.py")
+    assert patch_broke_the_source(elsewhere, patch) == ""
+
+    # And a patch that is merely wrong still runs the tests.
+    assert patch_broke_the_source("2 failed, 3 passed", patch) == ""
+
+    # The verdict it produces has the SAME shape as every other verdict, so
+    # the feedback, the metrics and the ledger read it without special-casing.
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    block = source[source.index("        broken = patch_broke_the_source("):]
+    block = block[:block.index("        return _runner_failure(")]
+    for key in ("failure_detail", "output_tail", "fail_to_pass_total",
+                "pass_to_pass_total", "regressions"):
+        assert f'"{key}"' in block, key
+    # NOT flagged as a runner failure — the runner was fine.
+    assert '"runner_failed"' not in block
+
+
+def test_a_failed_ssh_says_why_not_just_which_command():
+    """`CalledProcessError` renders the command and the exit code, not the cause.
+
+    A container failure arrived in the trace as a hundred characters of podman
+    arguments and nothing about why — indistinguishable between sshd refusing
+    the connection, a missing image, and a full disk. The stderr tail is the
+    one thing that separates them, and it was carried on the exception where
+    nothing ever printed it.
+    """
+    import subprocess
+
+    from tests.benchmark.isolation import Runtime
+
+    runtime = Runtime(name="podman", binary="/bin/false").with_remote("nosuchhost-xyz")
+    try:
+        runtime.run(["ps"], check=True, timeout=20)
+    except subprocess.CalledProcessError as failure:
+        assert "Could not resolve hostname" in str(failure), str(failure)
+    else:
+        pytest.skip("that host unexpectedly resolved")
+
+
+def test_images_come_from_the_pfs_archive_before_the_registry():
+    """The registry is the last resort, not the first.
+
+    Every image is archived on the PFS by `prefetch`, and the node-local
+    podman store is a cache a fresh node does not have. The container session
+    pulled first regardless, so a group scheduled onto nodes that had not run
+    before went to Docker Hub for thirty images at once — and Docker Hub rate
+    limits unauthenticated pulls:
+
+        toomanyrequests: You have reached your unauthenticated pull rate limit
+
+    Measured: that failed ALL 60 task-arms of a group within four minutes,
+    surfacing as `isolation: could not start <image>`, which reads as a
+    missing or broken image rather than as a quota. The archives were on the
+    same filesystem the whole time.
+    """
+    from tests.benchmark.isolation import archive_for
+
+    source = Path("tests/benchmark/isolation.py").read_text(encoding="utf-8")
+    body = source[source.index("def ensure_image("):]
+    body = body[:body.index("\ndef ", 10)]
+    # Cache, then archive, then registry — in that order.
+    assert body.index('"image", "exists"') < body.index("archive_for(")
+    assert body.index("archive_for(") < body.index('"pull"')
+
+    # And the session uses it rather than pulling directly.
+    session = source[source.index("    def __enter__(self) -> Container:"):]
+    session = session[:session.index("\n    def ", 10)]
+    assert "ensure_image(" in session
+    assert '["pull", self.image]' not in session
+
+    # `_1776_` is how SWE-bench spells `__` in an image tag.
+    got = archive_for("docker.io/swebench/sweb.eval.x86_64.pallets_1776_flask-4992:latest")
+    if got is not None:                      # only where the archives exist
+        assert got.name == "pallets__flask-4992.tar"
+    # An image with no archive falls through rather than raising.
+    assert archive_for("docker.io/swebench/sweb.eval.x86_64.nosuch_1776_thing-1:latest") is None
+
+
+def test_concurrent_batch_jobs_do_not_share_a_fleet_config():
+    """Two jobs running together must not point at one another's fleet.
+
+    `deploy.sh` writes its fleet description to `$RUNDIR/cluster.json` and then
+    copies it to the shared `<fleet>/cluster.json`. That copy is a convenience
+    for interactive use and is last-writer-wins by construction — so a batch
+    job that reads it (`run-group.sh --local`) gets whichever fleet came up
+    most recently, not its own.
+
+    With two 300-task runs queued behind each other that is silent corruption:
+    the first job's tasks are sent to the second job's gateway, one fleet
+    serves twice its load while the other sits idle, and the manifest records
+    the wrong gateway so the trace does not show it either.
+    """
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+    deploy = Path("tuolumne-llm/deploy.sh").read_text(encoding="utf-8")
+    group = Path("scripts/run-group.sh").read_text(encoding="utf-8")
+
+    # The job owns a RUNDIR, named for the job rather than the clock: two jobs
+    # starting in the same second would collide on a timestamp.
+    assert "export RUNDIR=$LLM_ROOT/logs/run-$NAME-" in batch
+    # `deploy.sh` honours it instead of always inventing one.
+    assert "RUNDIR=${RUNDIR:-$LLM_ROOT/logs/run-$(date" in deploy
+    # And the run is pointed at THAT file, never the shared one.
+    assert '--cluster "$CLUSTER_JSON"' in batch
+    assert "CLUSTER_JSON=$RUNDIR/cluster.json" in batch
+    # The invocation itself, not the prose around it: `--local` is named in
+    # the comment that explains why it is not used.
+    invocation = [line for line in batch.splitlines()
+                  if "run-group.sh" in line and not line.lstrip().startswith("#")]
+    assert invocation, "bench-batch no longer calls run-group.sh"
+    assert not any("--local" in line for line in invocation)
+
+    # The task-list slice is shared too: its path comes from --size and --index
+    # alone, so several runs of the same slice write it at once. Renamed into
+    # place so a reader never sees it half-written.
+    assert 'mv -f "$FILE.$$" "$FILE"' in group
+
+
+def test_a_local_fleet_that_has_not_served_yet_is_not_mistaken_for_hosted():
+    """`budget_scale` halved every budget on every batch run.
+
+    The rate comes from `predicted_tokens_seconds`, which is the rate of
+    FINISHED requests — so it reads 0 on a fleet deployed seconds ago, which is
+    every batch run, because the job brings up the fleet and starts the run
+    immediately. `measured_decode_rate` then returns None, and None was read as
+    "no fleet, therefore hosted", which takes the hosted scale of 0.5.
+
+    Measured across two 300-task runs on 64 nodes: `budget_scale = 0.5` in both
+    manifests and 778 stages killed at their ceiling between them — 563 of them
+    research, the stage the next attempt depends on.
+    """
+    import json
+    import tests.benchmark.arms as arms
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("def budget_scale("):]
+    body = body[:body.index("\ndef ", 10)]
+    # Neutral, not hosted, when a fleet exists but cannot be measured yet...
+    assert "has_local_fleet()" in body
+    # ...and NOT cached, so a later caller measures once traffic exists and
+    # the budgets correct themselves mid-run.
+    assert body.index("has_local_fleet()") < body.index("hosted_budget_scale")
+
+    def scale_with(servers, tmp):
+        config = tmp / "cluster.json"
+        config.write_text(json.dumps({"servers": servers}))
+        os.environ["PHRONIX_CLUSTER"] = str(config)
+        os.environ["PHRONIX_BUDGET_SCALE"] = "auto"
+        arms._BUDGET_SCALE_CACHE["value"] = None
+        return arms.budget_scale()
+
+    import os
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp())
+    previous = os.environ.get("PHRONIX_CLUSTER"), os.environ.get("PHRONIX_BUDGET_SCALE")
+    try:
+        # A fleet is configured but has served nothing: GENEROUS, and uncached.
+        #
+        # Above 1.0 on purpose. The two errors are not symmetric: a budget
+        # that is too long costs wall-clock on a stage that would have
+        # finished anyway, while one that is too short throws the stage's work
+        # away and leaves the next attempt with no skill to start from.
+        unmeasured = scale_with([{"host": "nosuch", "port": 8050}], tmp)
+        assert unmeasured == float(
+            arms._tuned("research.local_unmeasured_budget_scale", 2.0))
+        assert unmeasured > 1.0
+        assert arms._BUDGET_SCALE_CACHE["value"] is None
+        # No fleet at all really is hosted, and keeps the hosted scale.
+        assert scale_with([], tmp) == 0.5
+    finally:
+        for name, value in zip(("PHRONIX_CLUSTER", "PHRONIX_BUDGET_SCALE"), previous):
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        arms._BUDGET_SCALE_CACHE["value"] = None
+
+
+def test_a_finished_batch_job_releases_nodes_when_its_siblings_are_queued():
+    """The hold is right for one run and wrong for a queue.
+
+    Holding keeps the fleet and containers alive to be looked at, and time
+    already granted cannot be got back. But measured on a 300-task run: it
+    finished in 2h05m of its 24h and then sat on 64 idle nodes for the
+    remaining 21h50m while two more jobs of the same batch waited in SCHED.
+    The hold that exists to avoid wasting an allocation was wasting three.
+    """
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+    assert "releasing the nodes now" in batch
+    # And even with nothing queued the hold is BOUNDED: over-asking for wall
+    # time should buy the run a margin to finish in, not a right to sit on
+    # idle nodes for the surplus.
+    assert "HOLD_S=${HOLD_S:-1200}" in batch
+    assert "then releasing" in batch
+    # Only OUR jobs count: cancelling because a stranger is queued would hand
+    # the nodes to the scheduler rather than to the work this is part of.
+    assert '"^tuo-\\|^bench-\\|^corona-"' in batch
+    hold = batch[batch.index("# ...unless somebody else is waiting"):]
+    assert hold.index("limit=0") < hold.index('limit=$(seconds_of "$WALL")')
+
+
+def test_a_failed_node_moves_the_task_instead_of_killing_it():
+    """A node that dies should cost one retry, not a task.
+
+    A task's container host was fixed for its lifetime, so a node that stopped
+    accepting containers took every task placed on it: both isolation attempts
+    were spent proving the same node was still dead, and the task aborted with
+    `environment unavailable`. Every later task round-robined onto that node
+    did the same.
+
+    Measured: a 64-node run lost 105 in-flight tasks when one node failed. Flux
+    kills the whole job when a node dies outright and nothing here can catch
+    that — but a node that is merely unreachable, out of disk, or has lost its
+    podman takes tasks down one at a time, and those are recoverable.
+    """
+    from tests.benchmark.isolation import Runtime
+    from tests.benchmark.runner import Runner
+
+    runner = Runner.__new__(Runner)
+    runner._runtimes = [Runtime(name="podman", binary="/x").with_remote(h)
+                        for h in ("n1", "n2", "n3", "n4")]
+    Runner._BAD_HOSTS.clear()
+    try:
+        # New tasks skip a node already known bad, and stay evenly spread over
+        # the survivors — a fixed modulus would keep sending every fourth task
+        # to the dead one.
+        assert [runner.runtime_for(i).host for i in range(4)] == ["n1", "n2", "n3", "n4"]
+        runner.note_bad_host("n2", "unreachable")
+        placed = [runner.runtime_for(i).host for i in range(6)]
+        assert "n2" not in placed
+        assert set(placed) == {"n1", "n3", "n4"}
+
+        # A task already on the bad node is MOVED rather than retried there.
+        moved = runner.another_runtime(runner._runtimes[1])
+        assert moved is not None and moved.host != "n2"
+
+        # And if every node looks bad — more often a transient than a truth —
+        # it still moves off the current one rather than refusing to place.
+        for host in ("n1", "n3", "n4"):
+            runner.note_bad_host(host)
+        anywhere = runner.another_runtime(runner._runtimes[0])
+        assert anywhere is not None and anywhere.host != "n1"
+    finally:
+        Runner._BAD_HOSTS.clear()
+
+    # The retry path does not count a try that never ran on a working node.
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    block = source[source.index("            except IsolationError as exc:"):]
+    block = block[:block.index("            except (ResearchCollapsed")]
+    assert "another_runtime(" in block
+    assert "isolation_failures -= 1" in block
+
+
+def test_a_cut_short_run_can_be_continued_instead_of_repeated(tmp_path):
+    """Results are already a checkpoint; this is what makes them read.
+
+    A node failure kills the whole Flux job. Measured: one dead node took 105
+    in-flight tasks — and the ~500 task-arms the job had ALREADY finished went
+    with it, because `run` deletes `results.jsonl` and starts from nothing. The
+    resubmission then repeated hours of completed work.
+
+    `append_result` writes one line per task as it finishes, so the file is a
+    checkpoint already. Resuming reads it, carries those results into the new
+    run so its report covers the whole list, and skips the tasks behind them.
+    """
+    import json
+
+    from tests.benchmark.runner import RunConfig, Runner
+
+    tasks = ["a__a-1", "b__b-2", "c__c-3"]
+    dead = tmp_path / "runs" / "claude-old"
+    (dead / "arm1").mkdir(parents=True)
+    (dead / "manifest.json").write_text(json.dumps({"tasks": tasks, "model": "m1"}))
+    (dead / "arm1" / "results.jsonl").write_text(
+        json.dumps({"instance_id": "a__a-1", "resolved": True}) + "\n"
+        + json.dumps({"instance_id": "b__b-2", "resolved": False}) + "\n"
+        + '{"instance_id": "c__c-3", "reso')          # died mid-write
+
+    new = tmp_path / "runs" / "claude-new"
+    new.mkdir(parents=True)
+    runner = Runner.__new__(Runner)
+    runner.out = new
+    runner.config = RunConfig(tasks=tasks, arms=["arm1"], model="m1",
+                              resume_from="auto")
+
+    source = runner.resume_source()
+    assert source is not None and source.name == "claude-old"
+
+    done = runner.finished_already(source, "arm1")
+    assert sorted(done) == ["a__a-1", "b__b-2"]
+    # The torn last line is dropped rather than crashing the resume — a job
+    # killed mid-write always leaves one.
+    assert "c__c-3" not in done
+
+    # `auto` will not continue a DIFFERENT experiment: same list and model, or
+    # the results file would be neither run's.
+    runner.config = RunConfig(tasks=tasks, arms=["arm1"], model="other",
+                              resume_from="auto")
+    assert runner.resume_source() is None
+
+    # And the batch job resumes by default, so a resubmission costs only what
+    # was actually lost.
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+    assert "--resume auto" in batch
+    # It also re-derives the live nodes each pass and retries, rather than
+    # launching once and losing everything to one bad node.
+    assert "ATTEMPTS=${ATTEMPTS:-4}" in batch
+    assert "is not reachable; leaving it out" in batch
+
+
+def test_the_plain_agent_alarm_needs_an_attempt_that_actually_worked():
+    """"Used no phronix tools" is only a finding if the attempt did something.
+
+    A phronix arm that runs, produces a patch and never consults what it knows
+    IS a serious state — its number is not a phronix number. But an attempt
+    that produced no patch never reached that state: it failed before there was
+    anything to record, and on a fresh task `search-skill` has already said
+    there is nothing to retrieve.
+
+    Raising it anyway turned one model failure into two findings, one of them
+    pointing at this repository. Measured on a 30-task run: 11 of 11 "phronix
+    unused" reports came from attempts that produced no patch, and they were
+    the only pipeline faults the run had.
+    """
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    at = source.index('"** this attempt used NO phronix "')
+    block = source[at - 1200:at]
+
+    # Gated on the attempt having produced something.
+    assert "produced" in block
+    assert "and produced:" in block
+    # Read from disk via `_patch_text`. `Attempt` has no `patch` field, and
+    # reading `attempt.patch` raised AttributeError on every evaluation turn
+    # of every run before it was noticed — the same bug twice would be
+    # careless.
+    assert "_patch_text(" in block
+    # Code lines only: the comment above it names `attempt.patch` precisely to
+    # explain why it is not used.
+    code = [l for l in block.splitlines() if not l.lstrip().startswith("#")]
+    assert not any("attempt.patch" in l for l in code)
+
+    from tests.benchmark.metrics import Attempt
+    assert "patch" not in Attempt.__dataclass_fields__
+
+
+def test_a_task_always_ends_a_pass_with_a_skill_even_when_nothing_worked(tmp_path, monkeypatch):
+    """The skill must EXIST whether or not anything worked.
+
+    It is what the next attempt looks up, what the next research pass reads
+    before it starts, and what a later run finds. "Nothing worked" is a fact
+    about the subject worth carrying, not an absence.
+
+    Measured across one 300-task run: 356 research passes, 65 attempts that
+    found a skill, and 489 that opened with "no skill covers this task;
+    solving from scratch". Research was asked for a skill and the request was
+    all that stood behind it — when a pass produced nothing, nothing noticed
+    until the task had ended.
+
+    Written by the HARNESS rather than by asking an agent again: a re-ask has
+    the same failure mode as the ask, and existence is the one property that
+    can be guaranteed without a model.
+    """
+    from tests.benchmark.arms import PhronixArm
+    from tests.benchmark.isolation import _has_substance
+
+    store = tmp_path / "store" / ".phronix"
+    store.mkdir(parents=True)
+    monkeypatch.setenv("PHRONIX_PROJECT_ROOT", str(store.parent))
+    monkeypatch.setenv("PHRONIX_HOME", str(tmp_path / "home"))
+
+    arm = PhronixArm.__new__(PhronixArm)
+    arm.arm_name = "claude-phronix"
+    instance = {"instance_id": "matplotlib__matplotlib-25079",
+                "repo": "matplotlib/matplotlib"}
+
+    said = []
+    name = arm.ensure_task_skill(instance, store, tmp_path / "task" / "attempt-1",
+                                 on_call=said.append)
+    assert name == "matplotlib-matplotlib-25079"
+    assert any("opened" in line and "empty" in line for line in said), said
+
+    written = list(store.rglob("SKILL.md"))
+    assert len(written) == 1, written
+    # Structurally real, so promotion keeps it rather than discarding it as an
+    # empty shell — see `_has_substance`.
+    assert _has_substance(written[0])
+
+    # It must not claim knowledge it does not have: a later pass reads this
+    # before deciding what to try.
+    text = written[0].read_text()
+    assert "Nothing is established" in text
+    assert "untried" in text
+
+    # Called again, it does not make a second one: one skill per task.
+    again = arm.ensure_task_skill(instance, store, tmp_path / "task" / "attempt-1")
+    assert again == name
+    assert len(list(store.rglob("SKILL.md"))) == 1
+
+    # And the runner asks for it after EVERY research pass, not only at the end.
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert runner.count("arm.ensure_task_skill(") == 2
+
+
+def test_harness_supplied_files_are_capped_before_a_stage_reads_them(tmp_path):
+    """Stay inside the model's window by not contributing to filling it.
+
+    The models here are trained to 131072 and the CLI compacts at 100k — its
+    floor — leaving ~31k for whatever the turn adds. One large file read can
+    exceed that alone: measured on pytest-5495, the agent read
+    `test_conftest.py, lines 1 to 2001` and the request came back
+    `400 ContextWindowExceededError`, killing the attempt outright.
+
+    The harness cannot cap what the AGENT chooses to read. It can stop handing
+    it unbounded files: `conversation.md` is every turn in full, appended and
+    never rewritten — correct for a durable record, and largest exactly when
+    the context is tightest.
+    """
+    from tests.benchmark.arms import PhronixArm
+
+    arm = PhronixArm.__new__(PhronixArm)
+
+    small = tmp_path / "conversation-summary.md"
+    small.write_text("x" * 5_000)
+    assert arm.capped(small) == small          # under budget: handed as-is
+
+    big = tmp_path / "conversation.md"
+    big.write_text("HEAD-MARKER\n" + "y" * 60_000 + "\nTAIL-MARKER")
+    trimmed = arm.capped(big)
+
+    assert trimmed != big
+    text = trimmed.read_text()
+    assert len(text) <= arm.ATTACH_BUDGET_B + 200
+    # Head AND tail: the head says what the task is and what was first tried,
+    # the tail says what just failed. Cutting either loses more than the middle.
+    assert "HEAD-MARKER" in text and "TAIL-MARKER" in text
+    assert "elided from the middle" in text
+    # The durable record is untouched.
+    assert big.stat().st_size == 60_024
+
+    # Research, which attaches the unabridged conversation, goes through it.
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    body = source[source.index("    def research_from_tracker("):]
+    body = body[:body.index("\n    def ", 10)]
+    assert "self.capped(p)" in body
+
+
+def test_a_byte_the_harness_cannot_decode_costs_that_byte_not_the_try():
+    """`text=True` decodes STRICTLY, and a repository under test has binary in it.
+
+    One undecodable byte in the agent's stdout raised UnicodeDecodeError inside
+    the read loop and took the whole try with it:
+
+        attempt-void try 3 did not run (UnicodeDecodeError: 'utf-8' codec
+        can't decode byte 0xac in position 7449808)
+    """
+    import subprocess
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    at = source.index("process = subprocess.Popen(launch")
+    call = source[at:at + 400]
+    assert 'errors="replace"' in call
+
+    # The behaviour itself, so this is not only a spelling check.
+    strict = subprocess.Popen(["printf", "\\xac"], stdout=subprocess.PIPE, text=True)
+    with pytest.raises(UnicodeDecodeError):
+        for _ in strict.stdout:
+            pass
+    lenient = subprocess.Popen(["printf", "\\xac"], stdout=subprocess.PIPE,
+                               text=True, errors="replace")
+    assert "".join(lenient.stdout) == "�"
+
+
+def test_the_conversation_is_retrieved_in_turns_not_handed_over_whole(tmp_path, monkeypatch):
+    """The record stays whole on disk; only the turn that is needed enters context.
+
+    `conversation.md` is every turn in full, appended and never rewritten —
+    right for a durable record, wrong to attach. It grows with the task and is
+    largest exactly when the context is tightest, and attaching it is what
+    produced `400 ContextWindowExceededError` mid-attempt on pytest-5495,
+    killing a try that had already run forty steps.
+
+    Head-and-tail truncation bounds the size but decides for the reader which
+    parts matter. Retrieval inverts that: the stage asks.
+    """
+    import json
+
+    from phronix.mcp_tools import register_all
+    from phronix.mcp_tools.tools import conversation_service
+
+    (tmp_path / "conversation.md").write_text(
+        "## turn 1 — attempt\nTried widening the dtype in concat.py\n\n"
+        "## turn 2 — evaluate\ntarget 0/2, regressions 0\n\n"
+        "## turn 3 — attempt\nTried casting in dtypes.py instead\n")
+
+    class Recorder:
+        def __init__(self):
+            self.fn = {}
+
+        def tool(self):
+            def register(function):
+                self.fn[function.__name__] = function
+                return function
+            return register
+
+    # Registered with the rest, so the server actually serves them.
+    served = Recorder()
+    assert not register_all(served)["failed"]
+    assert {"conversation_outline", "conversation_turn",
+            "conversation_search"} <= set(served.fn)
+
+    mcp = Recorder()
+    conversation_service.register(mcp)
+    monkeypatch.setenv("PHRONIX_TASK_DIR", str(tmp_path))
+
+    outline = json.loads(mcp.fn["conversation_outline"]())
+    assert [t["n"] for t in outline["turns"]] == [1, 2, 3]
+    # The outline is the CHEAP read: titles and sizes, no bodies.
+    assert all("text" not in t for t in outline["turns"])
+
+    # `-1` is what a revision pass wants: it says what just failed.
+    assert "dtypes.py" in json.loads(mcp.fn["conversation_turn"](-1))["text"]
+
+    # And the question a revision pass actually has — has this been tried?
+    hit = json.loads(mcp.fn["conversation_search"]("dtypes casting"))
+    assert [t["n"] for t in hit["turns"]] == [3]
+
+    # Without a task it reports unavailable rather than guessing: a
+    # conversation from the WRONG task is worse than none, because nothing in
+    # the text says which task it belongs to.
+    monkeypatch.delenv("PHRONIX_TASK_DIR")
+    assert json.loads(mcp.fn["conversation_outline"]())["status"] == "unavailable"
+
+    # The harness sets it per stage, and research no longer attaches the file.
+    arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert 'env["PHRONIX_TASK_DIR"]' in arms
+    body = arms[arms.index("    def research_from_tracker("):]
+    body = body[:body.index("\n    def ", 10)]
+    attach = body[body.index("attachments = ["):body.index(") if p.is_file()]")]
+    assert "conversation.md" not in attach
+    assert "conversation-summary.md" in attach
+
+
+def test_reuse_actually_turns_freshness_off():
+    """`--reuse` produced a from-scratch run that reported itself as fresh.
+
+    The CLI derives freshness from ONE flag — `fresh=not args.no_fresh` — so
+    `--fresh` is accepted and ignored, and omitting it leaves fresh True.
+    `run-benchmark.sh --reuse` cleared `--fresh` and passed nothing, which
+    changes nothing.
+
+    Measured on the reuse half of a fresh/reuse pair, which is the entire
+    comparison the pair exists to make: its header read `fresh` and its
+    manifest recorded `fresh = True`. The run could not read anything the
+    fresh run had learned, so "is it learning?" had no way to be answered yes.
+    """
+    from tests.benchmark.cli import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args(["run"]).no_fresh is False            # fresh
+    assert parser.parse_args(["run", "--fresh"]).no_fresh is False  # still fresh
+    assert parser.parse_args(["run", "--no-fresh"]).no_fresh is True
+
+    script = Path("scripts/run-benchmark.sh").read_text(encoding="utf-8")
+    assert 'FRESHNESS="--no-fresh"' in script
+    # And the banner says which mode plainly, rather than echoing a flag whose
+    # meaning is the opposite of how it reads.
+    assert "reuse (reads what earlier runs learned)" in script
+
+
+def test_a_resumed_result_round_trips_as_dataclasses_not_dicts():
+    """Resume must rebuild attempts, not hand JSON dicts back to the dataclass.
+
+    `TaskResult(**row)` type-checks and runs, and is wrong: `attempts` comes
+    back from JSON as plain dicts, so the field promises `Attempt`s and holds
+    dicts. Nothing notices until `to_dict` calls `asdict` on one, which is
+    inside `append_result` — the first thing resume does. The mix30-reuse run
+    died there sixty seconds in, both arms, `asdict() should be called on
+    dataclass instances`, zero tasks attempted.
+
+    So the round trip is the assertion: a row written by `to_dict` must come
+    back through `from_dict` as something `to_dict` can write again.
+    """
+    from tests.benchmark.metrics import Attempt, TaskResult
+
+    original = TaskResult(
+        instance_id="django__django-13551",
+        repo="django/django",
+        arm="claude-phronix",
+        order=3,
+        attempts=[Attempt(index=1), Attempt(index=2)],
+    )
+    row = json.loads(json.dumps(original.to_dict()))
+
+    rebuilt = TaskResult.from_dict(row)
+    assert [type(a) for a in rebuilt.attempts] == [Attempt, Attempt]
+    assert rebuilt.instance_id == original.instance_id
+    assert rebuilt.order == original.order
+    # The bug in one line: this is what append_result does next.
+    assert rebuilt.to_dict()["instance_id"] == "django__django-13551"
+
+    # Derived columns are written but are properties, so reading must drop
+    # them rather than raise on an unexpected keyword.
+    assert "resolved" in row
+    assert TaskResult.from_dict(row).instance_id == original.instance_id

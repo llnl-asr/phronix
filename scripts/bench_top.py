@@ -535,21 +535,117 @@ class Run:
         # advancing the moment every agent is mid-turn — so a busy run's
         # elapsed time froze exactly when it was working hardest.
         last = max(stamps) if stamps else now
-        end = now if (self.age is not None and self.age < 180) else last
+        # Same test the state uses, so a run cannot read ACTIVE with a frozen
+        # elapsed time.
+        end = now if self.active else last
         self.wall = max(0.0, end - start)
 
     @property
     def tasks(self):
         return [t for arm in self.arms for t in arm.tasks]
 
+    #: Silence after which a run is called INACTIVE, in seconds.
+    #:
+    #: The trace only ticks when an EVENT lands, and one agent turn is one
+    #: event. On a local fleet a turn is routinely several minutes — measured
+    #: on a live 30-task run, every task in flight and the runner healthy, the
+    #: newest trace write was 11m44s old. Three minutes therefore reported a
+    #: working run as dead, which is the same mistake the fleet view made when
+    #: it called a busy replica down for missing one probe.
+    #:
+    #: Taken from the run's OWN attempt budget rather than fixed here.
+    #:
+    #: An attempt is the longest a single stage may run, so silence shorter
+    #: than one attempt budget cannot distinguish "mid-turn" from "wedged" —
+    #: and a fixed number is wrong the moment the budget changes. Measured on a
+    #: live run: the job RUN for 40 minutes, every task in flight, and the
+    #: newest trace write 15m36s old. Three minutes, and then fifteen, both
+    #: called it dead.
+    QUIET_S = 1800
+
+    @property
+    def quiet_limit(self) -> float:
+        """Silence tolerated before INACTIVE, from the manifest where it says."""
+        try:
+            budget = float(self.manifest.get("timeout_s") or 0)
+        except (TypeError, ValueError):
+            budget = 0.0
+        # A margin over the budget: a stage that ends exactly on its ceiling
+        # still has to write the line that says so.
+        return max(self.QUIET_S, budget * 1.25)
+
     @property
     def active(self) -> bool:
-        """Whether anything wrote in the last three minutes.
+        """Whether anything wrote recently, or the runner is still alive.
 
-        A long fuse on purpose: the trace only ticks when an event lands, and a
-        single model turn on a busy fleet is minutes of silence.
+        The process is the direct signal and the trace is an inference from it,
+        so the process wins where both are available. It is only available when
+        this is watching a run on the same machine, which is the common case.
         """
-        return self.age is not None and self.age < 180
+        if self.finished:
+            return False
+        if self.runner_alive:
+            return True
+        return self.age is not None and self.age < self.quiet_limit
+
+    @property
+    def finished(self) -> bool:
+        """Has this run written its report — i.e. reached its end?
+
+        A definite terminal signal, and it has to be checked FIRST, because
+        the two live signals both say "active" for a run that is over. The
+        pid check needs a `trace.log`, which a run that died before its first
+        task never wrote, so it reports 0 and abstains; the silence threshold
+        then sees a directory touched fifteen minutes ago against a thirty
+        minute limit and calls it ACTIVE. That is exactly what mix30-reuse
+        did: both arms died sixty seconds in, and top showed `ACTIVE 14m42s`
+        over a run that had been dead the whole time.
+
+        `report.json` is written once, after the arms return — whether they
+        returned results or exceptions. So it means finished, not succeeded.
+        """
+        return (self.path / "report.json").exists()
+
+    @property
+    def runner_alive(self) -> bool:
+        """Is THIS run's runner process still going on this machine?
+
+        Its pid, not any runner's: several runs go at once on this cluster, and
+        `pgrep -f "benchmark.cli run"` would report every one of them alive
+        because a sibling was. The pid is in the trace — every line carries
+        `[<arm>:<pid>...]` — so it costs a read of one line.
+
+        False when the run is on another machine, which is correct: this
+        cannot know, and the silence threshold decides instead.
+        """
+        pid = self.runner_pid
+        if not pid:
+            return False
+        try:
+            os.kill(pid, 0)          # signal 0: does it exist and is it ours
+            return True
+        except (ProcessLookupError, ValueError):
+            return False
+        except PermissionError:
+            return True              # exists, owned by somebody else
+
+    @property
+    def runner_pid(self) -> int:
+        """The pid recorded in this run's trace, or 0."""
+        if getattr(self, "_runner_pid", None) is not None:
+            return self._runner_pid
+        self._runner_pid = 0
+        for trace in sorted(self.path.glob("*/trace.log")):
+            try:
+                with trace.open(encoding="utf-8", errors="replace") as handle:
+                    first = handle.readline()
+            except OSError:
+                continue
+            found = re.search(r"\[[^:\]]+:(\d+)", first)
+            if found:
+                self._runner_pid = int(found.group(1))
+                break
+        return self._runner_pid
 
     @property
     def state(self) -> str:
@@ -567,6 +663,10 @@ class Run:
         # is named as silence, and only when there is some.
         if self.active:
             return f"ACTIVE {human_hms(self.wall)}"
+        # A finished run is not silent, it is over, and saying "silent 14m"
+        # invites waiting for it to speak again.
+        if self.finished:
+            return f"DONE {human_hms(self.wall)}"
         return (f"INACTIVE {human_hms(self.wall)} "
                 f"(silent {human(self.age)})")
 

@@ -1037,6 +1037,24 @@ BUDGET_SCALE_BOUNDS = (0.2, 50.0)
 _BUDGET_SCALE_CACHE: Dict[str, Any] = {"value": None}
 
 
+def has_local_fleet() -> bool:
+    """Is a local fleet configured at all?
+
+    The distinction `measured_decode_rate` cannot make: it returns None both
+    when there is no cluster config (a hosted endpoint) and when there is one
+    whose replicas have not served anything yet (a fleet deployed seconds ago).
+    Those want opposite budgets, and conflating them halved every budget on
+    every batch run — see `budget_scale`.
+    """
+    try:
+        from .cluster import DEFAULT_CONFIG
+
+        config = Path(os.environ.get("PHRONIX_CLUSTER") or DEFAULT_CONFIG)
+        return bool(json.loads(config.read_text(encoding="utf-8")).get("servers"))
+    except Exception:
+        return False
+
+
 def measured_decode_rate() -> Optional[float]:
     """Tokens/second the fleet is actually decoding, or None if unknowable.
 
@@ -1081,6 +1099,35 @@ def measured_decode_rate() -> Optional[float]:
     return seen[len(seen) // 2]          # median: one slow replica is not the fleet
 
 
+#: The most the TRACKED pipeline's budgets are stretched for slow hardware.
+#:
+#: `budget_scale` is clamped at 50, which is right for the parallel research
+#: pipeline where a stage that overruns costs only itself. The tracked loop is
+#: sequential — research blocks the next attempt, a fold blocks research — so a
+#: 50x stretch would put a single stage at four hours and the task would never
+#: reach try 2.
+#:
+#: Six is derived from what a stage needs in TOKENS rather than seconds. A
+#: diagnosis is ~8-15k output tokens; at the 13.5 tok/s measured on corona that
+#: is 600-1100s against a 300s budget, so 4-6x is the range that lets it finish
+#: without letting it run away. Measured before this: 178 of one run's 314
+#: pipeline faults were stages killed at their ceiling, and research reported
+#: `no PROBLEM/APPROACH/ANSWER` — it had been cut off mid-diagnosis, so try 2
+#: began from scratch with no skill.
+TRACKED_SCALE_CAP = 6.0
+
+#: A hard ceiling on the record guard however slow the hardware is.
+#:
+#: A fold that needs longer than this is not slow, it is not converging, and
+#: the events stay queued for the next fold either way.
+RECORD_GUARD_MAX_S = 1800
+
+
+def tracked_budget_scale() -> float:
+    """`budget_scale`, bounded for the sequential loop. See TRACKED_SCALE_CAP."""
+    return max(1.0, min(TRACKED_SCALE_CAP, budget_scale()))
+
+
 def budget_scale() -> float:
     """Multiplier on every research stage budget, for THIS system.
 
@@ -1119,6 +1166,33 @@ def budget_scale() -> float:
             #
             # So hosted gets its own scale, below 1.0, rather than inheriting a
             # number derived for hardware it has nothing to do with.
+            if not rate and has_local_fleet():
+                # A local fleet that has not served anything YET.
+                #
+                # `predicted_tokens_seconds` is the rate of finished requests,
+                # so it reads 0 on a fleet deployed seconds ago — which is
+                # every batch run, because the job deploys the fleet and
+                # starts the run immediately. Treating that as "hosted" gave
+                # it the hosted scale of 0.5 and HALVED every budget on the
+                # slowest hardware in the fleet.
+                #
+                # Measured across two 300-task runs: `budget_scale = 0.5` in
+                # both manifests, and 778 stages killed at their ceiling
+                # between them — 563 of them research, which is the stage the
+                # next attempt depends on.
+                #
+                # GENEROUS for now, and NOT cached, so the next caller
+                # measures once traffic exists and the budgets correct
+                # themselves mid-run.
+                #
+                # Deliberately above 1.0 rather than merely neutral. The two
+                # errors are not symmetric: a budget that is too long costs
+                # wall-clock on a stage that would have finished anyway, while
+                # one that is too short throws the stage's work away entirely
+                # and, for research, leaves the next attempt with no skill to
+                # start from. A run that takes longer and finishes beats one
+                # that is fast and measures nothing.
+                return float(_tuned("research.local_unmeasured_budget_scale", 2.0))
             scale = (float(_tuned("research.hosted_budget_scale", 0.5))
                      if not rate else CALIBRATION_TOKENS_PER_S / rate)
             _BUDGET_SCALE_CACHE["value"] = max(
@@ -1372,7 +1446,16 @@ def stream_opencode(command: List[str], cwd: Path, env: Dict[str, str],
     if host:
         launch = remote_agent_command(command, cwd, env, host, timeout_s,
                                       scratch=root or cwd)
+    # `errors="replace"`, because `text=True` alone decodes STRICTLY.
+    #
+    # The agent's stdout is whatever the tools it ran printed, and a repository
+    # under test contains binary: one byte of it raised UnicodeDecodeError
+    # inside the read loop and took the whole try with it —
+    # `attempt-void try 3 did not run (UnicodeDecodeError: 'utf-8' codec can't
+    # decode byte 0xac in position 7449808)`. A byte the harness cannot decode
+    # must cost that byte, not the attempt.
     process = subprocess.Popen(launch, cwd=str(cwd), env=env, text=True,
+                               errors="replace",
                                stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -2445,6 +2528,12 @@ class Arm:
         env["PHRONIX_WRITE_LAYER"] = "project"
         if phase:
             env["PHRONIX_PHASE"] = phase
+        # Which task's conversation the `conversation_*` tools serve.
+        #
+        # Set per stage rather than per run: the record is per task, and a
+        # conversation from the wrong task is worse than none, because nothing
+        # in the text says which task it belongs to.
+        env["PHRONIX_TASK_DIR"] = str(Path(workdir).parent)
         if self.store_readonly:
             env["PHRONIX_BENCH_FROZEN"] = "1"
         import subprocess
@@ -2628,6 +2717,65 @@ there are several, merge them — one task, one skill.
             on_call(f"[skill] re-filed {len(found)} skill(s) into `{wanted}`")
         return True
 
+    def open_task_skill(self, instance: Dict[str, Any], store_root: Path,
+                        workdir: Path, on_call=None) -> str:
+        """Make sure this task HAS a skill, writing an empty one if it does not.
+
+        The skill must exist whether or not anything worked. It is what the
+        next attempt looks up, what the next research pass reads before it
+        starts, and what a later run finds — and "nothing worked" is a fact
+        about the subject worth carrying, not an absence.
+
+        Measured across one 300-task run: 356 research passes, 65 attempts that
+        found a skill, and 489 that opened with "no skill covers this task;
+        solving from scratch". Research was being asked for a skill and the
+        request was all that stood behind it: when the pass produced nothing,
+        nothing noticed until the task ended.
+
+        Written by the HARNESS, not by asking an agent again. A re-ask has the
+        same failure mode as the ask — the run above shows what that is worth —
+        and existence is the one property that can be guaranteed without a
+        model. The file is deliberately thin: a rule saying nothing is
+        established yet, which later passes replace as they learn something.
+        `skill_write` appends and reorganises, so an empty skill is a place to
+        put knowledge rather than something to be worked around.
+        """
+        topic = self.research_topic(instance)
+        wanted = self.task_skill_name(topic)
+
+        def create() -> Any:
+            from phronix import skills as skills_module
+
+            return skills_module.write_block(
+                wanted, "rule",
+                "Nothing is established about this subject yet",
+                "No attempt has produced a passing fix, and no diagnosis has "
+                "been recorded. Treat every approach as untried: there is no "
+                "ruled-out list here to trust, and nothing below has been "
+                "verified against the tests.\n\n"
+                f"Subject: `{topic}`. Replace this rule as soon as anything is "
+                "actually established — it exists so that the next pass has "
+                "somewhere to write, not because it says anything.",
+                description=f"What is known about {topic}. Nothing yet.")
+
+        try:
+            outcome = self._in_store(store_root, create) or {}
+        except Exception as exc:                  # a missing skill is not a failed task
+            if on_call:
+                on_call(f"[skill] could not open `{wanted}`: "
+                        f"{type(exc).__name__}: {exc}")
+            return ""
+        if str(outcome.get("status")) not in ("ok", "already_present"):
+            if on_call:
+                on_call(f"[skill] ** `{wanted}` still does not exist "
+                        f"({outcome.get('status')}) — the next attempt will "
+                        f"start from scratch")
+            return ""
+        if on_call:
+            on_call(f"[skill] nothing was recorded for this task; opened "
+                    f"`{wanted}` empty so the next pass has somewhere to write")
+        return wanted
+
     def ensure_task_skill(self, instance: Dict[str, Any], store_root: Path,
                           workdir: Path, on_call=None) -> str:
         """Make sure this task's skill exists under the name the reader uses.
@@ -2681,7 +2829,8 @@ there are several, merge them — one task, one skill.
         found = sorted(d.name for d in tasks.glob("*")
                        if d.is_dir() and belongs(d.name))
         if not found:
-            return ""
+            return self.open_task_skill(instance, store_root, workdir,
+                                        on_call=on_call)
         if on_call:
             on_call(f"[skill] this task's skill is filed as "
                     f"{', '.join(found)} — the lookup asks for `{wanted}`; "
@@ -2809,6 +2958,51 @@ there are several, merge them — one task, one skill.
                 return True
         return False
 
+    #: Most bytes of any one harness-supplied file a stage is handed.
+    #:
+    #: ~24 KB is roughly 6k tokens, so the whole attachment set stays well
+    #: inside the headroom compaction leaves. The models here are trained to
+    #: 131072 and the CLI compacts at 100k — its floor — which leaves ~31k for
+    #: everything the turn adds. One large file read can exceed that on its
+    #: own: measured on pytest-5495, the agent read `test_conftest.py, lines 1
+    #: to 2001` and the request came back
+    #: `400 ContextWindowExceededError`, killing the attempt outright.
+    #:
+    #: The harness cannot cap what the AGENT chooses to read, but it can stop
+    #: contributing to the problem.
+    ATTACH_BUDGET_B = int(_tuned("agent.attachment_budget_bytes", 24_000))
+
+    def capped(self, path: Path) -> Path:
+        """*path*, or a bounded copy of it beside it.
+
+        `conversation.md` is every turn in full, appended and never rewritten —
+        correct for a durable record and wrong to hand a model: it grows with
+        the task and is largest exactly when the context is tightest. This
+        keeps the record intact and gives the stage the head and the tail with
+        the middle marked as elided.
+
+        Head AND tail because both ends carry the information: the head says
+        what the task is and what the first attempt tried, the tail says what
+        just failed. Cutting either end loses more than cutting the middle.
+        """
+        try:
+            raw = Path(path).read_bytes()
+        except OSError:
+            return Path(path)
+        if len(raw) <= self.ATTACH_BUDGET_B:
+            return Path(path)
+        half = self.ATTACH_BUDGET_B // 2
+        head, tail = raw[:half], raw[-half:]
+        elided = len(raw) - len(head) - len(tail)
+        note = (f"\n\n... {elided:,} bytes elided from the middle; the full "
+                f"record is {Path(path).name} ...\n\n").encode()
+        trimmed = Path(path).with_suffix(".capped.md")
+        try:
+            trimmed.write_bytes(head + note + tail)
+        except OSError:
+            return Path(path)
+        return trimmed
+
     def research_from_tracker(self, instance: Dict[str, Any], store_root: Path,
                               workdir: Path, attempt_index: int = 1,
                               on_call=None) -> Dict[str, Any]:
@@ -2854,7 +3048,8 @@ there are several, merge them — one task, one skill.
         # no reader would look.
         skill = self.task_skill_name(topic)
         budget = int(self.RESEARCH_BUDGET_S
-                     * (self.RESEARCH_BUDGET_MULTIPLE ** max(0, attempt_index - 2)))
+                     * (self.RESEARCH_BUDGET_MULTIPLE ** max(0, attempt_index - 2))
+                     * tracked_budget_scale())
         if on_call:
             on_call(f"[research] diagnosing the open failure, {budget}s, "
                     f"writing into `{skill}`")
@@ -2886,9 +3081,16 @@ there are several, merge them — one task, one skill.
                                             f"*/{skill}/LESSONS.md")
                        for path in (Path(store_root) / "capabilities" /
                                     "tasks").glob(pattern)]
-        attachments = [str(p) for p in (
+        # The unabridged conversation is NOT attached.
+        #
+        # It is reachable instead through `conversation_outline`,
+        # `conversation_turn` and `conversation_search`, which return one turn
+        # at a time. The record is largest exactly when the context is
+        # tightest, and handing it over whole is what produced
+        # `400 ContextWindowExceededError` mid-attempt. The summary still is
+        # attached: it is bounded and it is the map.
+        attachments = [str(self.capped(p)) for p in (
             tracker,
-            Path(workdir).parent / "conversation.md",
             Path(workdir).parent / "conversation-summary.md",
             *skill_files,
         ) if p.is_file()]
@@ -5128,6 +5330,18 @@ are thin, build what they support and say what is unverified.
     #: A guard rather than no timeout at all: a wedged agent must still end.
     RECORD_GUARD_S = int(_tuned("research.record_guard_s", 900))
 
+    @property
+    def record_guard_s(self) -> int:
+        """`RECORD_GUARD_S`, stretched for slow hardware and then capped.
+
+        A property rather than a constant because the right number depends on
+        the fleet, which is not known at import: on corona the same fold that
+        fits in 900s against a 1000 tok/s model needs several times that at
+        13.5 tok/s, and on a hosted endpoint it needs less.
+        """
+        return int(min(RECORD_GUARD_MAX_S,
+                       self.RECORD_GUARD_S * tracked_budget_scale()))
+
     #: A much shorter guard for the correctors.
     #:
     #: They have no file tools and their input is a list someone else wrote, so
@@ -5437,9 +5651,10 @@ method; this message is only the input.
 
 Task: `{topic}`
 
-Attached, and all of it is input rather than description: the record
-`{tracker}`, the unabridged conversation, and the skill `{skill}` with its
-`LESSONS.md`. Read the record and the lessons before you diagnose — `I7`.
+Attached, and all input rather than description: the record `{tracker}`, a
+conversation summary, and `{skill}` with its `LESSONS.md`. Read the record and
+the lessons first — `I7`. The full conversation is retrieved a turn at a
+time — `I8`.
 
 Write BOTH: `skill_write` with the corrected fix, and `skill_write_lesson`
 with what just failed and the tests it BROKE.
@@ -8371,6 +8586,24 @@ class ClaudeArm(OpenCodeArm):
         env["ANTHROPIC_SMALL_FAST_MODEL"] = wanted
         return env
 
+    #: Compact at this many tokens when talking to a gateway model.
+    #:
+    #: The floor the CLI accepts is 100k and the models served here are trained
+    #: to 131072, so this leaves room for the turn that triggers it.
+    autocompact_tokens: int = int(_tuned("agent.autocompact_tokens", 100000))
+
+    def _is_redirected(self) -> bool:
+        """Is this talking to our own gateway rather than to Anthropic?
+
+        The same test `phronix_env` uses to decide whether to override
+        `ANTHROPIC_BASE_URL`, and for the same reason: the provider says
+        whether an endpoint was CHOSEN, while the URL cannot.
+        """
+        if str(self.provider or "").lower() in ("anthropic", "", "claude"):
+            return False
+        base = str(self.base_url or "")
+        return bool(base) and "anthropic.com" not in base
+
     @property
     def qualified_model(self) -> str:
         """Claude Code names models directly; there is no provider prefix."""
@@ -8408,6 +8641,22 @@ class ClaudeArm(OpenCodeArm):
                    "--model", model or self.qualified_model]
         if self.effort:
             command += ["--effort", self.effort]
+        # Compact before the window ends, rather than dying at it.
+        #
+        # Left to itself the CLI sizes its auto-compaction to the model's
+        # ADVERTISED context, and it has no way to know what a gateway model's
+        # really is: `gpt-oss-120b` is not a name it ships a limit for. So it
+        # never compacted, and an agent that kept exploring simply hit the
+        # wall — measured on sphinx-10451, 215 steps in one attempt and then
+        # `400 ContextWindowExceededError`, the whole try lost with no patch
+        # and no usable transcript. Eight of one run's nineteen pipeline
+        # faults were this.
+        #
+        # Only for a REDIRECTED endpoint. Against real Anthropic models the
+        # default knows better than this number does, and forcing it would
+        # compact a 200k window at half its size.
+        if self._is_redirected() and self.autocompact_tokens:
+            command += ["--autocompact", str(self.autocompact_tokens)]
         command += self._denial_flags(agent)
         if agent:
             # The agent's REAL definition, not just its name.

@@ -243,6 +243,36 @@ class TaskResult:
     def wall_s(self) -> float:
         return sum(a.wall_s for a in self.attempts)
 
+    @classmethod
+    def from_dict(cls, row: Dict[str, Any]) -> "TaskResult":
+        """Rebuild a result from a `results.jsonl` row.
+
+        The inverse of `to_dict`, and it exists because `**row` is not.
+        `attempts` round-trips through JSON as a list of plain dicts, so a
+        `TaskResult(**row)` holds dicts where the dataclass promises
+        `Attempt`s — which reads fine until something calls `asdict` on one
+        and gets `asdict() should be called on dataclass instances`. That is
+        what killed the resumed mix30-reuse run: both arms died inside
+        `append_result` sixty seconds in, before a single task was attempted,
+        because resume wrote the carried rows straight back out again.
+
+        Unknown keys are dropped rather than raising: `to_dict` deliberately
+        writes derived values (`resolved`, `tokens_total`, the cost columns)
+        that are properties here, and a reader from a newer run must not fail
+        on a column an older one did not have.
+        """
+        fields = cls.__dataclass_fields__
+        kept = {k: v for k, v in (row or {}).items() if k in fields}
+        attempts = kept.pop("attempts", None) or []
+        kept["attempts"] = [
+            a if isinstance(a, Attempt) else Attempt(**{
+                k: v for k, v in (a or {}).items()
+                if k in Attempt.__dataclass_fields__
+            })
+            for a in attempts
+        ]
+        return cls(**kept)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             **{k: v for k, v in asdict(self).items() if k != "attempts"},

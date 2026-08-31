@@ -256,7 +256,25 @@ class Runtime:
             # which reads as a broken image.
             time.sleep(SSH_RETRY_WAIT_S * (attempt + 1) + random.random())
         if check and result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, command,
+            # The REASON, in the exception's own text.
+            #
+            # `CalledProcessError` renders as the command and the exit code,
+            # so a failure arrived in the trace as a hundred characters of
+            # podman arguments and nothing about why — indistinguishable
+            # between sshd refusing the connection, a missing image and a
+            # full disk. The stderr tail is the one thing that separates them,
+            # and it was being carried on the exception where nothing printed
+            # it.
+            tail = " ".join((result.stderr or result.stdout or "").split())[-300:]
+            # Put it in `cmd`, because that is what `__str__` renders:
+            # `Command '<cmd>' returned non-zero exit status <n>`. Setting
+            # `args` or `strerror` changes the object and not the message
+            # anybody reads.
+            shown = command
+            if tail:
+                head = " ".join(str(part) for part in command[:6])
+                shown = f"{head} ... — {tail}"
+            raise subprocess.CalledProcessError(result.returncode, shown,
                                                 result.stdout, result.stderr)
         return result
 
@@ -392,9 +410,11 @@ class ContainerSession:
 
     def __enter__(self) -> Container:
         if self.pull:
-            # Best-effort: a cached image is fine and the run should not fail
-            # because the registry is briefly unreachable.
-            self.runtime.run(["pull", self.image], timeout=1800)
+            # Cache, then the PFS archive, then the registry. Best-effort at
+            # every step: a cached image is fine and the run should not fail
+            # because the registry is briefly unreachable — or, as measured,
+            # because Docker Hub is rate limiting us. See `ensure_image`.
+            ensure_image(self.runtime, self.image)
 
         args = ["run", "-d", "--rm=false", "--name", self.name]
         for host, guest in self.mounts.items():
@@ -1064,6 +1084,61 @@ def ssh_options(shard: Optional[int] = None) -> List[str]:
             "-o", "ControlMaster=auto",
             "-o", f"ControlPath={control}/%C-{shard % SSH_MASTERS}",
             "-o", f"ControlPersist={SSH_PERSIST_S}"]
+
+
+def archive_for(image: str) -> Optional[Path]:
+    """The PFS archive for a SWE-bench image, if one exists.
+
+    `sweb.eval.x86_64.pallets_1776_flask-4992` -> `pallets__flask-4992.tar`.
+    The `_1776_` is how SWE-bench spells `__` in an image tag.
+    """
+    from .paths import data_root
+
+    stem = image.rsplit("x86_64.", 1)[-1].split(":")[0]
+    if not stem:
+        return None
+    try:
+        found = Path(data_root(create=False)) / "images" / f"{stem.replace('_1776_', '__')}.tar"
+    except Exception:
+        return None
+    return found if found.is_file() else None
+
+
+def ensure_image(runtime: "Runtime", image: str, on_event=None) -> str:
+    """Make *image* available locally. Returns how: cached | archive | pull.
+
+    The registry is the LAST resort, not the first.
+
+    Every image is archived on the PFS by `prefetch`, and the node-local
+    podman store is a cache that a fresh node does not have. Pulling was tried
+    first regardless, so a group scheduled onto nodes that had not run before
+    went to Docker Hub for all thirty images at once — and Docker Hub rate
+    limits unauthenticated pulls:
+
+        toomanyrequests: You have reached your unauthenticated pull rate limit
+
+    Measured: that failed ALL 60 task-arms of a group inside four minutes,
+    reported as `isolation: could not start <image>`, which reads as a missing
+    or broken image rather than as a quota. The archives were on the same
+    filesystem the whole time.
+    """
+    present = runtime.run(["image", "exists", image], check=False, timeout=120)
+    if present.returncode == 0:
+        return "cached"
+
+    archive = archive_for(image)
+    if archive is not None:
+        if on_event:
+            on_event(f"loading {image.rsplit('.', 1)[-1]} from the archive")
+        loaded = runtime.run(["load", "-i", str(archive)], check=False, timeout=1800)
+        if loaded.returncode == 0:
+            return "archive"
+        if on_event:
+            on_event(f"archive load failed ({str(loaded.stderr)[-120:]}); "
+                     f"falling back to the registry")
+
+    runtime.run(["pull", image], check=False, timeout=1800)
+    return "pull"
 
 
 def warm_ssh(hosts: Sequence[str], timeout: int = 30) -> List[str]:

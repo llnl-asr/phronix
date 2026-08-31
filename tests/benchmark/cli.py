@@ -336,6 +336,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         base_url=args.base_url, api_key=getattr(args, "api_key", "") or "",
         max_tries=args.max_tries, timeout_s=args.timeout,
         isolation=args.isolation, fresh=not args.no_fresh, pull=not args.no_pull,
+        resume_from=getattr(args, "resume", "") or "",
         carry_root=("" if args.no_carry else (args.carry_root or default_carry_root())),
         max_spend_usd=float(getattr(args, "max_spend", 0.0) or 0.0),
         # Research is the fallback, not the opening move, unless asked.
@@ -739,6 +740,13 @@ def build_parser() -> argparse.ArgumentParser:
                           "reuse is the default because not paying twice for "
                           "research is the point of keeping it. What this run "
                           "finds is still synced back afterwards.")
+    run.add_argument("--resume", default="", metavar="RUN-DIR|auto",
+                     help="Continue a run that was cut short: its finished "
+                          "tasks are carried into this one's results and not "
+                          "re-run. `auto` finds the newest incomplete run of "
+                          "the same task list and model. A node failure kills "
+                          "the whole Flux job, so without this a resubmission "
+                          "repeats everything the dead job had finished.")
     run.add_argument("--session", default="",
                      help="Name this run's research session. Records go to "
                           ".phronix/research/sessions/<name>/ and are folded into "

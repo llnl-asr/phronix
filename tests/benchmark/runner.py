@@ -23,6 +23,7 @@ import os
 import re
 import shlex
 import shutil
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -89,6 +90,14 @@ class RunConfig:
     timeout_s: int = 1800
     isolation: str = "podman"
     fresh: bool = True
+    #: A previous run directory to continue, or "auto" to find one.
+    #:
+    #: A node failure kills the whole Flux job — measured, 105 in-flight tasks
+    #: lost with it — and every task it had already finished was thrown away
+    #: too, because a fresh run starts from an empty results file. The results
+    #: are written per task as they finish, so they are already a checkpoint;
+    #: this is what makes the next job READ it.
+    resume_from: str = ""
     #: Durable project layer that research is promoted into and seeded from.
     #: Empty disables carry-over entirely and every run starts from the bundled
     #: skeleton, which is what makes a run comparable to published numbers.
@@ -604,6 +613,60 @@ def _test_files(instance: Dict[str, Any], names: Iterable[str]) -> List[str]:
         return files
     return sorted({name.split("::", 1)[0] for name in names
                    if "::" in name and name.split("::", 1)[0]})
+
+
+def _files_in_patch(patch: str) -> List[str]:
+    """Paths a diff touches, as they appear inside the container."""
+    out = []
+    for line in (patch or "").splitlines():
+        if line.startswith("+++ ") and not line.startswith("+++ /dev/null"):
+            path = line[4:].strip()
+            for prefix in ("b/", "a/", "./"):
+                if path.startswith(prefix):
+                    path = path[len(prefix):]
+            if path:
+                out.append(path)
+    return out
+
+
+#: Errors that mean the SOURCE will not import, whatever the tests are.
+_UNPARSEABLE = ("SyntaxError", "IndentationError", "TabError")
+
+
+def patch_broke_the_source(output: str, patch: str) -> str:
+    """The file and reason if the agent's own patch will not parse. Else "".
+
+    `_runner_failure` exists for a runner that never started, and rests on the
+    claim that "a patch that breaks everything still makes the tests RUN".
+    That is true of a patch that is merely WRONG and false of one that is not
+    valid Python: the module cannot be imported, pytest collects nothing, and
+    zero-passes-zero-failures looks exactly like a missing pytest.
+
+    Measured on django-14155: the agent wrote diff markers into the file —
+
+        File "/testbed/django/urls/resolvers.py", line 68
+            +            return (
+        SyntaxError: invalid syntax
+
+    — and the harness reported RUNNER FAILED. That is a model error dressed as
+    a harness fault: it inflates the pipeline-fault count, and, worse, the
+    attempt is told the runner broke rather than that its patch does not
+    parse, so the next try has nothing to correct.
+
+    Only when the unparseable file is one the PATCH touched. A syntax error in
+    a file the agent never edited is the testbed's problem, and that really is
+    a runner fault.
+    """
+    if not any(marker in output for marker in _UNPARSEABLE):
+        return ""
+    touched = _files_in_patch(patch)
+    if not touched:
+        return ""
+    for path in touched:
+        if path in output:
+            reason = next((m for m in _UNPARSEABLE if m in output), "SyntaxError")
+            return f"{path} ({reason})"
+    return ""
 
 
 def _runner_failure(instance: Dict[str, Any], fail_to_pass: Sequence[str],
@@ -1323,6 +1386,37 @@ def evaluate(container: Any, instance: Dict[str, Any], patch: str,
     # three times over, and get cached as pre-existing breakage.
     ran = _django_any_test_ran(output) if django else _any_test_ran(output)
     if not passed_ids and not ran:
+        # The agent's own patch may be why nothing ran. See
+        # `patch_broke_the_source`: that is a VERDICT, not a runner fault, and
+        # the attempt has to be told which file will not parse so the next try
+        # can fix it.
+        broken = patch_broke_the_source(output, patch)
+        if broken:
+            if on_event:
+                on_event(f"verdict: not resolved — the patch does not parse: "
+                         f"{broken}")
+            why = (f"the patch does not parse: {broken}. Python could not "
+                   f"import the file, so no test ran. Check the edit wrote "
+                   f"SOURCE and not diff text — a line beginning with `+` or "
+                   f"`-` inside the file is the usual cause.")
+            # The SAME shape every other verdict returns, so the feedback,
+            # the metrics and the ledger all read it without special-casing.
+            # `runner_failed` is deliberately absent: the runner was fine.
+            return {
+                "resolved": False,
+                "patch_unparseable": broken,
+                "error": why,
+                "fail_to_pass_passed": 0,
+                "fail_to_pass_total": len(fail_to_pass),
+                "fail_to_pass_passing": [],
+                "fail_to_pass_failing": sorted(fail_to_pass),
+                "pass_to_pass_passed": 0,
+                "pass_to_pass_total": len(pass_to_pass),
+                "regressions": [],
+                "pre_existing_failures": [],
+                "failure_detail": why,
+                "output_tail": _error_tail(output, 600),
+            }
         return _runner_failure(
             instance, fail_to_pass, pass_to_pass,
             f"no test produced a result; the runner did not start: "
@@ -1522,11 +1616,126 @@ class Runner:
             return chosen
         return self._runtimes[0] if self._runtimes else None
 
-    def runtime_for(self, order: int):
-        """Round-robin, so consecutive tasks land on different nodes."""
+    #: Hosts whose containers would not start, shared by every task.
+    #:
+    #: A node that failed one task will fail the next: the point of recording
+    #: it is that the SECOND task does not have to discover it. Flux kills the
+    #: whole job when a node dies outright, which nothing here can catch — but
+    #: a node that is merely unreachable, out of disk, or has lost its podman
+    #: takes tasks down one at a time, and those are recoverable.
+    _BAD_HOSTS: set = set()
+    _BAD_HOSTS_LOCK = threading.Lock()
+
+    def note_bad_host(self, host: str, why: str = "") -> None:
+        if not host:
+            return
+        with self._BAD_HOSTS_LOCK:
+            first = host not in self._BAD_HOSTS
+            self._BAD_HOSTS.add(host)
+        if first:
+            print(f"  [nodes] {host} is not usable"
+                  + (f": {why[:120]}" if why else "")
+                  + " — tasks will be placed elsewhere", flush=True)
+
+    def another_runtime(self, current):
+        """A runtime on a DIFFERENT, not-known-bad node. None if there is none.
+
+        Re-placing the task is what makes a node failure survivable: the try
+        that failed on a dead node is retried on a live one instead of being
+        spent proving the node is still dead. Without this a task burned both
+        its isolation attempts on one host and gave up, and every later task
+        placed there did the same.
+        """
         if not self._runtimes:
             return None
-        return self._runtimes[order % len(self._runtimes)]
+        here = getattr(current, "host", "") or ""
+        with self._BAD_HOSTS_LOCK:
+            bad = set(self._BAD_HOSTS)
+        options = [r for r in self._runtimes
+                   if (getattr(r, "host", "") or "") not in bad
+                   and (getattr(r, "host", "") or "") != here]
+        if not options:
+            # Every node is suspect. Prefer any other node over this one:
+            # "all bad" is more often a transient than a truth.
+            options = [r for r in self._runtimes
+                       if (getattr(r, "host", "") or "") != here]
+        if not options:
+            return None
+        return random.choice(options)
+
+    def resume_source(self) -> Optional[Path]:
+        """The run directory this one continues, if any.
+
+        `auto` picks the newest run that used the SAME task list and model and
+        did not finish. Same list and model because a resumed run has to be
+        the same experiment: continuing a gpt-oss run into a nemotron one
+        would produce a results file that is neither.
+        """
+        want = str(self.config.resume_from or "").strip()
+        if not want:
+            return None
+        if want.lower() != "auto":
+            found = Path(want)
+            return found if found.is_dir() else None
+
+        mine = (sorted(self.config.tasks), str(self.config.model))
+        best = None
+        for candidate in sorted(self.out.parent.glob("*/"),
+                                key=lambda c: c.stat().st_mtime, reverse=True):
+            if candidate.resolve() == self.out.resolve():
+                continue
+            try:
+                manifest = json.loads((candidate / "manifest.json").read_text())
+            except (OSError, ValueError):
+                continue
+            if (sorted(manifest.get("tasks") or []), str(manifest.get("model"))) != mine:
+                continue
+            best = candidate
+            break
+        return best
+
+    def finished_already(self, source: Path, arm_name: str) -> Dict[str, Any]:
+        """Instance ids the previous run RECORDED for this arm, with results.
+
+        A recorded result is a finished task: `append_result` is called once
+        per task, after its verdict. Anything that was in flight when the job
+        died is simply absent, which is the correct answer — it has no result.
+        """
+        done: Dict[str, Any] = {}
+        listing = source / arm_name / "results.jsonl"
+        try:
+            for line in listing.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue          # a torn last line: the job died writing it
+                if row.get("instance_id"):
+                    done[row["instance_id"]] = row
+        except OSError:
+            return {}
+        return done
+
+    def runtime_for(self, order: int):
+        """Round-robin over the USABLE nodes, so consecutive tasks spread.
+
+        Nodes already known bad are skipped rather than handed a task that
+        will fail the same way. Round-robin over the survivors keeps the
+        spread even as nodes drop out, which a fixed modulus would not: with
+        one node of eight dead, `order % 8` still sends every eighth task to
+        it.
+        """
+        if not self._runtimes:
+            return None
+        with self._BAD_HOSTS_LOCK:
+            bad = set(self._BAD_HOSTS)
+        usable = [r for r in self._runtimes
+                  if (getattr(r, "host", "") or "") not in bad]
+        # Every node suspect is more often a transient than a truth, so fall
+        # back to the full list rather than refusing to place the task.
+        pool = usable or self._runtimes
+        return pool[order % len(pool)]
 
     def manifest(self) -> Dict[str, Any]:
         from phronix import __version__
@@ -1830,6 +2039,24 @@ class Runner:
         # previous attempt's file, which would double-count every task.
         results_path.unlink(missing_ok=True)
 
+        # ...unless this run is CONTINUING one that was cut short.
+        #
+        # Then the earlier results are copied in first, so the report covers
+        # the whole list rather than only what this job managed, and the tasks
+        # behind them are skipped below. Copied rather than referenced: the
+        # run directory has to stand on its own once the older one is cleaned
+        # up.
+        carried: Dict[str, Any] = {}
+        source = self.resume_source()
+        if source is not None:
+            carried = self.finished_already(source, arm_name)
+            for row in carried.values():
+                append_result(results_path, TaskResult.from_dict(row))
+            if carried:
+                print(f"  [{arm_name}] resuming {source.name}: "
+                      f"{len(carried)} task(s) already finished, skipping them",
+                      flush=True)
+
         # One store per arm. The frozen and full phronix arms must not share one:
         # the full arm's writes would then be visible to the control, and the
         # control would stop being a control.
@@ -1916,6 +2143,8 @@ class Runner:
                 print(f"  {prefix}[{order:3d}] {instance_id}  SKIPPED (not in dataset)",
                       flush=True)
                 continue
+            if instance_id in carried:
+                continue          # finished by the run this one continues
             planned.append((order, instance))
 
         # `--tasks-per-node` scales with the fleet; `--parallel-tasks` is a flat
@@ -2141,12 +2370,42 @@ class Runner:
             except IsolationError as exc:
                 attempt.error = f"isolation: {exc}"
                 isolation_failures += 1
+                # Move the task rather than retry into the same failure.
+                here = getattr(self._local.runtime, "host", "") or ""
+                self.note_bad_host(here, str(exc))
+                moved = self.another_runtime(self._local.runtime)
+                if moved is not None:
+                    self._local.runtime = moved
+                    arm.agent_host = getattr(moved, "host", "") or ""
+                    if tracer:
+                        tracer.event("nodes",
+                                     f"container failed on {here or 'this node'}; "
+                                     f"retrying on "
+                                     f"{getattr(moved, 'host', '?')}")
+                    # A try that never ran on a working node is not evidence
+                    # about the environment, so it does not count toward the
+                    # abort below.
+                    isolation_failures -= 1
             except (ResearchCollapsed, EnvironmentGone):
                 # Deliberately not swallowed: these are the failures that must
                 # end the run rather than become rows in the results.
                 raise
             except Exception as exc:  # a crashed attempt is data, not a dead run
+                # The exception's OWN text, plus what the failed command
+                # actually said.
+                #
+                # `CalledProcessError.__str__` gives the argv and the exit
+                # status and drops stdout/stderr, so the trace recorded
+                # `CalledProcessError: Command '['ssh', ...]' returned non-zero
+                # exit status 1` — a hundred characters of argv and not one
+                # word about the cause. Every such failure had to be
+                # reproduced by hand to learn anything, and most never were.
                 attempt.error = f"{type(exc).__name__}: {exc}"
+                said = _error_tail(
+                    (getattr(exc, "stderr", "") or "")
+                    + (getattr(exc, "output", "") or ""), 300)
+                if said:
+                    attempt.error = f"{attempt.error} — {said}"
             attempt.wall_s = round(time.time() - started, 1)
             if attempt.steps or attempt.resolved:
                 arm.tasks_without_environment = 0
@@ -2248,7 +2507,28 @@ class Runner:
                     workdir / f"attempt-{attempt_index}" / "opencode.jsonl") or 0
                 tracer.tools(f"learn-{attempt_index}",
                              workdir / f"attempt-{attempt_index}" / "learn.jsonl")
-                if arm.uses_phronix and not attempt.phronix_calls:
+                # The alarm is for an attempt that WORKED without the
+                # framework, not for one that did nothing at all.
+                #
+                # "A plain agent result under a phronix label" is a real and
+                # serious state: the arm ran, produced a patch, and never
+                # consulted what it knows, so its number is not a phronix
+                # number. But an attempt that produced no patch did not reach
+                # that state — it failed before there was anything to record,
+                # and on a fresh task `search-skill` has already said there is
+                # nothing to retrieve.
+                #
+                # Raising it anyway turned one model failure into two
+                # findings, one of them pointing at this repository: measured
+                # on a 30-task run, 11 of 11 "phronix unused" reports came
+                # from attempts that produced no patch, and they were the only
+                # pipeline faults the run had.
+                # `_patch_text`, not `attempt.patch`: `Attempt` has no such
+                # field, and reading it raised AttributeError on every
+                # evaluation turn of every run before it was noticed.
+                produced = bool(_patch_text(
+                    workdir / f"attempt-{attempt_index}").strip())
+                if arm.uses_phronix and not attempt.phronix_calls and produced:
                     tracer.event("tools", "** this attempt used NO phronix "
                                           "tools — it is a plain agent result "
                                           "under a phronix label")

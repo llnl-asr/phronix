@@ -25,10 +25,12 @@ it.
 | `I2` | Instructions | Keep what is established — a fix that regresses it is not a fix |
 | `I3` | Instructions | Do not re-try what is ruled out |
 | `I4` | Instructions | Write the fix into the solution skill, executably |
-| `I7` | Instructions | Read the lessons first, and write one back |
 | `I5` | Instructions | You are on a clock; an unfinished diagnosis is still worth writing |
 | `I6` | Instructions | Say the problem, the approach and the answer, as you go |
+| `I7` | Instructions | Read the lessons first, and write one back |
+| `I8` | Instructions | Retrieve the conversation a turn at a time; never read it whole |
 | `R1` | Rules | Diagnose the error, do not improve the area |
+
 
 ## Instructions
 
@@ -147,6 +149,18 @@ going in circles: the same `APPROACH` twice, with different words.
 
 If you finish without an `ANSWER`, say so in one — "ANSWER: could not confirm
 whether X or Y; next check is Z" is a result. Silence is not.
+
+### I8 — Retrieve the conversation a turn at a time; never read it whole
+
+The task record and the summary are attached. The FULL conversation is not, and must not be read whole: it is every turn appended and never rewritten, so it grows with the task and is largest exactly when the context is tightest. Reading it whole is what runs the window out — measured on pytest-5495, an attempt forty steps in added one 2000-line file and the request came back `400 ContextWindowExceededError`, killing the try with no patch.
+
+Use the tools instead, in this order:
+
+1. `conversation_outline()` — turn numbers, titles and sizes. Cheap; start here.
+2. `conversation_search("<symbol, file or approach>")` — answers the question a revision pass actually has: has this been tried already?
+3. `conversation_turn(-1)` — the most recent turn, which says what just failed. Negative numbers count from the end.
+
+Ask for a turn when the summary leaves you guessing. Do not ask for all of them: the point is that only the turn you need enters the context.
 
 ## Rules
 
