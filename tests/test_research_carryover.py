@@ -9741,3 +9741,56 @@ def test_a_runner_failure_with_a_patch_gets_one_more_try():
     # broke a file it touched is the clearest failed attempt there is.
     assert source.index("attempt.verdict[\"broke_testbed\"] = blamed") < source.index(
         "runner_failures += 1")
+
+
+def test_the_progress_block_is_written_into_the_run_store():
+    """Third instance of one confusion: a path resolved for the wrong process.
+
+    `write_block` resolves a skill's home through the layers of whoever calls
+    it, and the runner's layers are the checkout's. So the progress block
+    landed in `src/phronix/.phronix` — the packaged layer — while the trace
+    said `recorded 0 passing / 1 still failing into the skill` and the run's
+    own copy never gained it. After `retire_placeholder` and
+    `_skill_has_content`, this is the third place that mistake was made.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        skills.write_block("t", "instruction", "Use iter_lines", "b",
+                           description="d")
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    # The layers no longer point anywhere near this store: a layer-based
+    # write would go somewhere else entirely, which is the bug.
+    store = Path(root) / ".phronix"
+    arm = Arm.__new__(Arm)
+    target = store / "capabilities" / "skills" / "t" / "SKILL.md"
+
+    assert arm.record_partial_progress(
+        store, "t", {"fail_to_pass_passing": [], "regressions": [],
+                     "fail_to_pass_failing": ["test_a"]}, 1) is True
+    assert "What has been achieved" in target.read_text(encoding="utf-8")
+
+    assert arm.record_partial_progress(
+        store, "t", {"fail_to_pass_passing": ["test_a"], "regressions": [],
+                     "fail_to_pass_failing": []}, 2) is True
+    text = target.read_text(encoding="utf-8")
+    # Replaced, and the superseded measurement is gone.
+    assert "Measured after try 2" in text and "Measured after try 1" not in text
+    assert "Already passing (1 of 1)" in text
+    # One heading, and the label is STABLE across rewrites — a reference to it
+    # must not silently come to mean different content next try.
+    assert text.count(f"### R1 — {Arm.PROGRESS_TITLE}") == 1
+    # The other blocks survive.
+    assert "### I1 — Use iter_lines" in text

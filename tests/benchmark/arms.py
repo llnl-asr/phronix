@@ -2834,13 +2834,50 @@ there are several, merge them — one task, one skill.
         if attempt_index:
             lines.append(f"Measured after try {attempt_index}.")
 
+        # Written into THIS RUN'S store, by rendering the file directly.
+        #
+        # `write_block` resolves the skill's home through the layers of the
+        # process that calls it, and the runner's layers are the checkout's.
+        # So the progress block landed in `src/phronix/.phronix` — the
+        # packaged layer — while the trace said `recorded 0 passing / 1 still
+        # failing into the skill` and the run's own copy never gained it.
+        # Third instance of this exact confusion, after `retire_placeholder`
+        # and `_skill_has_content`: a path resolved for the wrong process.
+        home = self._skill_home_in(store_root, skill)
+        if home is None:
+            return False
+        body = "\n\n".join(lines)
         try:
-            result = skills_module.write_block(
-                skill, "rule", self.PROGRESS_TITLE, "\n\n".join(lines),
-                replace=True)
+            from phronix import skill_schema
+
+            parsed = skill_schema.parse_skill(Path(home))
+            existing = list(parsed.get("blocks") or [])
+            # Keep this block's OWN label across rewrites, so a reference to
+            # it does not silently point at different content next try.
+            mine = next((b for b in existing
+                         if str(b.get("title") or "") == self.PROGRESS_TITLE),
+                        None)
+            label = str((mine or {}).get("label") or "")
+            if not label:
+                used = [int(str(b.get("label") or "R0")[1:] or 0)
+                        for b in existing
+                        if str(b.get("label") or "").startswith("R")
+                        and str(b.get("label") or "R")[1:].isdigit()]
+                label = f"R{max(used or [0]) + 1}"
+            # Replaced, not appended: the skill says where the task IS.
+            blocks = [b for b in existing
+                      if str(b.get("title") or "") != self.PROGRESS_TITLE]
+            blocks.append({"kind": "rule", "title": self.PROGRESS_TITLE,
+                           "body": body, "label": label,
+                           "prefix": "R", "number": int(label[1:])})
+            (Path(home) / "SKILL.md").write_text(
+                skill_schema.render_skill(
+                    skill, str(parsed.get("description") or skill),
+                    str(parsed.get("subject") or skill), blocks),
+                encoding="utf-8")
         except Exception:
             return False
-        return bool(result) and result.get("status") in ("ok", "updated")
+        return True
 
     def retire_placeholder(self, store_root: Path, skill: str) -> bool:
         """Drop the "nothing is established" rule once something is.
