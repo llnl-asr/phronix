@@ -9477,3 +9477,46 @@ def test_an_empty_skill_is_a_miss_not_a_hit():
     # Cleared BEFORE the trace announces a hit, or the announcement lies.
     assert source.index("not arm._skill_has_content(") < source.index(
         "the attempt solves with it")
+
+
+def test_what_already_failed_reaches_the_attempt_not_only_research():
+    """Trying something new each time is the point, and it starts at try 1.
+
+    `feedback.md` says what the LAST TRY got wrong and dies with the run.
+    `LESSONS.md` is where a failed approach is written down so it is not paid
+    for twice — and it was attached to research and to nothing else. The
+    attempt, which is the thing that would retry a dead approach, never saw
+    it: a reuse run whose carried skill named the exact fix still spent 44
+    steps rediscovering the problem, with the earlier run's pitfalls sitting
+    unread beside it.
+    """
+    import tempfile
+
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    store = Path(tempfile.mkdtemp()) / ".phronix"
+    home = store / "capabilities" / "skills" / "sphinx-doc-sphinx-8595"
+    home.mkdir(parents=True)
+    (home / "SKILL.md").write_text("# s\n", encoding="utf-8")
+    (home / "LESSONS.md").write_text(
+        "# Lessons\n\n## Pitfalls\n\n### P1 — returning True, [] still "
+        "documents members\n\n" + "x" * 300, encoding="utf-8")
+    assert Arm._lessons_for(store, "sphinx-doc-sphinx-8595") is not None
+
+    # An EMPTY lessons file is worse than none: it costs an attachment and
+    # tells the reader nothing has been ruled out, which is a claim rather
+    # than an absence.
+    (home / "LESSONS.md").write_text("# Lessons\n", encoding="utf-8")
+    assert Arm._lessons_for(store, "sphinx-doc-sphinx-8595") is None
+    assert Arm._lessons_for(store, "") is None
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # Attached to the ATTEMPT, before the plan note, on every try.
+    assert "lessons = self._lessons_for(store_root," in source
+    assert "files += self.attachments([lessons])" in source
+    assert source.index("prompt += self.LESSONS_NOTE") < source.index(
+        "prompt += self.PLAN_NOTE.format(")
+    # A ruled-out approach is a RESULT, not a forbidden idea — saying so is
+    # what stops the note being read as a rule to obey blindly.
+    assert "it is a result" in Arm.LESSONS_NOTE
+    assert "Do not spend a step re-deriving one of them" in Arm.LESSONS_NOTE

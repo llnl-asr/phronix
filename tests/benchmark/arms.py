@@ -2805,6 +2805,44 @@ there are several, merge them — one task, one skill.
             return False
         return True
 
+    #: Told to the attempt when a lessons file comes with the skill.
+    LESSONS_NOTE = """
+
+`LESSONS.md` is attached: approaches that have already been tried on this
+subject and what each one cost. Do not spend a step re-deriving one of them.
+An entry there is not a forbidden idea — it is a result, and the reason to
+try something else unless you have a specific reason it was wrong.
+"""
+
+    @staticmethod
+    def _lessons_for(store_root: Path, skill: str) -> Optional[Path]:
+        """This skill's `LESSONS.md`, if it exists and says anything.
+
+        An empty lessons file is worse than none: it costs an attachment and
+        tells the reader that nothing has been ruled out, which is a claim
+        rather than an absence.
+        """
+        if not skill:
+            return None
+        try:
+            from phronix import skills as skills_module
+
+            home = skills_module.existing_home(skill)
+        except Exception:
+            home = None
+        candidates = []
+        if home is not None:
+            candidates.append(Path(home) / "LESSONS.md")
+        candidates += list(Path(store_root).glob(f"*/*/{skill}/LESSONS.md"))
+        candidates += list(Path(store_root).glob(f"*/*/*/{skill}/LESSONS.md"))
+        for path in candidates:
+            try:
+                if path.is_file() and len(path.read_text(errors="replace").strip()) > 200:
+                    return path
+            except OSError:
+                continue
+        return None
+
     def open_task_skill(self, instance: Dict[str, Any], store_root: Path,
                         workdir: Path, on_call=None) -> str:
         """Make sure this task HAS a skill, writing an empty one if it does not.
@@ -4512,6 +4550,25 @@ class OpenCodeArm(Arm):
             else:
                 prompt = TASK_PROMPT + RETRY_SUFFIX
                 files += self.attachments([feedback])
+
+        # What has already been RULED OUT, across runs.
+        #
+        # `feedback.md` says what the last try got wrong, and it dies with the
+        # run. `LESSONS.md` is where a failed approach is written down so it is
+        # not paid for twice, and it was attached to RESEARCH and to nothing
+        # else — so the attempt, which is the thing that would retry a dead
+        # approach, never saw it. Measured: a reuse run whose carried skill
+        # named the exact fix still spent 44 steps rediscovering the problem,
+        # with the pitfalls from the earlier run sitting unread beside it.
+        #
+        # Attached whenever the skill has one, on every try including the
+        # first: trying something new each time and recording what worked and
+        # what did not is the point, and it does not start at try 2.
+        lessons = self._lessons_for(store_root, getattr(self, "recalled_skill", "")
+                                    or (plan or {}).get("skill", ""))
+        if lessons is not None:
+            files += self.attachments([lessons])
+            prompt += self.LESSONS_NOTE
 
         if plan:
             prompt += self.PLAN_NOTE.format(name=plan.get("name", "?"),
