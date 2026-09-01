@@ -3032,6 +3032,74 @@ there are several, merge them — one task, one skill.
             return Path(path)
         return trimmed
 
+    #: One re-ask, then report. A check that loops is a budget with no bound.
+    CHECK_PROMPT = """\
+What you just filed has problems. Fix them; do not research anything new.
+
+{issues}
+
+Each line says where the problem is and what to do about it. Apply the moves,
+then stop. `layout_check` and `research_validate` will tell you if anything is
+still wrong.
+"""
+
+    def _enforce_checks(self, instance: Dict[str, Any], store_root: Path,
+                        workdir: Path, on_call=None) -> List[str]:
+        """Run the layout and schema checks; re-ask once if either fails.
+
+        Returns whatever is still wrong after the re-ask, so the trace can say
+        so rather than the run reporting a solution nothing can read.
+        """
+        issues = self._check_findings(store_root)
+        if not issues:
+            return []
+        if on_call:
+            on_call(f"[research] ** {len(issues)} filing problem(s) — "
+                    f"asking once for them to be fixed")
+        listing = "\n".join(f"- {line}" for line in issues[:12])
+        try:
+            self.standalone_stage(
+                instance, store_root, workdir,
+                self.CHECK_PROMPT.format(issues=listing),
+                timeout_s=self.RECORD_GUARD_S, agent=self.filer_agent_name,
+                phase="research", on_call=on_call)
+        except Exception as exc:
+            if on_call:
+                on_call(f"[research] ** could not ask for the fix: {exc}"[:180])
+        left = self._check_findings(store_root)
+        if left and on_call:
+            on_call(f"[research] ** {len(left)} problem(s) remain: "
+                    f"{left[0][:110]}")
+        return left
+
+    @staticmethod
+    def _check_findings(store_root: Path) -> List[str]:
+        """`layout_check` and `research_validate` against this run's store."""
+        found: List[str] = []
+        try:
+            from phronix.mcp_tools.tools.layout_service import _issues_for
+
+            for tree in ("capabilities", "research"):
+                for issue in _issues_for(Path(store_root), tree):
+                    found.append(f"{issue['path']}: {issue['problem']} "
+                                 f"-> {issue['fix']}")
+        except Exception:
+            pass                      # a check that cannot run is not a fault
+        try:
+            import json as _json
+
+            from phronix.mcp_tools.tools.schema_service import _check
+
+            subjects = (Path(store_root) / "research" / "skills")
+            for subject in sorted(subjects.glob("*/record.json")):
+                record = _json.loads(subject.read_text(encoding="utf-8"))
+                for issue in _check(record):
+                    found.append(f"{subject.parent.name}/{issue['where']}: "
+                                 f"{issue['problem']} -> {issue['fix']}")
+        except Exception:
+            pass
+        return found
+
     def research_from_tracker(self, instance: Dict[str, Any], store_root: Path,
                               workdir: Path, attempt_index: int = 1,
                               on_call=None) -> Dict[str, Any]:
@@ -3216,6 +3284,16 @@ there are several, merge them — one task, one skill.
             if on_call and not self._skill_has_content(store_root, skill):
                 on_call(f"[research] ** `{skill}` is still empty — try "
                         f"{attempt_index + 1} will load it and learn nothing")
+
+        # The two checks, RUN rather than requested.
+        #
+        # Both are wired into the research skill and were called zero times in
+        # every run that has them: an instruction to self-check competes with
+        # finishing, and finishing wins. The harness runs them instead, which
+        # is deterministic and costs nothing when the work is already right —
+        # the same post-hoc check plus one re-ask used for the empty skill
+        # above, and for the same reason.
+        self._enforce_checks(instance, store_root, workdir, on_call=on_call)
 
         return {
             "attempt": attempt_index,

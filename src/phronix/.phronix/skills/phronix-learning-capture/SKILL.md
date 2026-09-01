@@ -71,7 +71,13 @@ A tool written now is live within the minute: the MCP server re-scans capabiliti
 
 ### I5 — Report your own cycle, so the learner can improve
 
-End every cycle with `research_observe(topic="learning")`: what you wrote, what you found already covered, what you decided was too thin, and whether the graph lookup in `I2` actually found the block you later discovered by hand.
+**Say what you did about a tool for every finding, one line each.** `TOOL: <name>` when you built one, or `NO-TOOL: <why not>` when you did not — and "it is a fact, not a procedure" is a complete reason. Write these into the same observation.
+
+This exists because the alternative was measured. `I4` said *prefer a tool where the procedure is deterministic*, which leaves the default at prose — and prose is always the cheaper option in the moment. Across every run to date the learner built **zero** tools while writing lessons steadily, with `capability_new` available and never called. Not one finding was ever judged deterministic. A preference nothing records is a preference nothing follows.
+
+Stating the verdict does not force a tool. It forces the CHOICE to be made once per finding and be visible afterwards, so "no tool was ever right" and "the question was never asked" stop looking identical.
+
+End every cycle with `research_observe(topic="learning")`: the tool verdicts above, what you wrote, what you found already covered, what you decided was too thin, and whether the graph lookup in `I2` actually found the block you later discovered by hand.
 
 That last one is the point. The learner is subject to its own method, and its own behaviour has to arrive in the same stream as everything else or nothing can generalise about it. `phronix-learning-reconcile` reads these back and turns what repeats across cycles into blocks on this skill — so a way of capturing that keeps producing lessons nobody retrieves becomes a rule about what not to capture.
 

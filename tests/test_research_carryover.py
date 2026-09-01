@@ -9072,3 +9072,66 @@ def test_the_first_pass_of_a_batch_never_resumes_someone_elses_run():
     for line in batch.splitlines():
         if "run-group.sh" in line or "--parallel" in line:
             assert "--resume auto" not in line, line
+
+
+def test_the_filing_checks_are_run_by_the_harness_not_requested():
+    """An instruction to self-check competes with finishing, and finishing wins.
+
+    `layout_check` and `research_validate` were wired into the research skill
+    and called ZERO times in every run that had them. So the harness runs them
+    — deterministic, free when the work is already right, and the same
+    post-hoc check plus one re-ask already used when a diagnosis lands in an
+    empty skill.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    research = source[source.index("    def research_from_tracker(self"):]
+    research = research[:research.index("\n    def ", 10)]
+    # Run at the end of research, before the result is returned.
+    assert "self._enforce_checks(" in research
+
+    enforce = source[source.index("    def _enforce_checks(self"):]
+    enforce = enforce[:enforce.index("\n    @staticmethod", 10)]
+    # One re-ask, then report. A check that loops is a budget with no bound.
+    assert enforce.count("self.standalone_stage(") == 1
+    assert "left = self._check_findings(store_root)" in enforce
+    assert "problem(s) remain" in enforce
+
+    # Both checks, against this run's own store.
+    findings = source[source.index("    def _check_findings("):]
+    findings = findings[:findings.index("\n    def ", 10)]
+    assert "from phronix.mcp_tools.tools.layout_service import _issues_for" in findings
+    assert "from phronix.mcp_tools.tools.schema_service import _check" in findings
+    # A check that cannot run is not a fault: it must never cost the run.
+    assert findings.count("except Exception:") == 2
+
+    # And every line handed back names the move, not just the fault.
+    assert "-> {issue['fix']}" in findings
+    assert "{issues}" in Arm.CHECK_PROMPT
+    assert "do not research anything new" in Arm.CHECK_PROMPT
+
+
+def test_the_learner_states_a_tool_verdict_for_every_finding():
+    """Zero tools across every run, with capability_new available throughout.
+
+    `I4` said *prefer a tool where the procedure is deterministic*, which
+    leaves the default at prose — and prose is always cheaper in the moment.
+    Not one finding was ever judged deterministic. A preference nothing
+    records is a preference nothing follows.
+
+    The verdict does not force a tool. It forces the choice to be made once
+    per finding and be visible, so "no tool was ever right" and "the question
+    was never asked" stop looking identical.
+    """
+    skill = Path(
+        "src/phronix/.phronix/skills/phronix-learning-capture/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "TOOL: <name>" in skill and "NO-TOOL: <why not>" in skill
+    # Declining is legitimate and cheap to say, or the rule becomes pressure
+    # to build tools nobody needs.
+    assert "is a complete reason" in skill
+    assert "built **zero** tools" in skill
+    # It goes into the observation stream, where reconcile can generalise it.
+    assert 'research_observe(topic="learning")' in skill
