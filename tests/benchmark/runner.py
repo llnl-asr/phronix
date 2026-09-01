@@ -3123,6 +3123,32 @@ class Runner:
             #
             # Here nothing else will write before promotion, so what passes
             # here is what the next run inherits.
+            # Repair the mechanical faults before anything is promoted.
+            #
+            # A run corrupts its own skills as it writes them: an agent reads
+            # `### I1 — Title` and writes a block titled `I1 — Title`, which
+            # the same-point merge can no longer see as a duplicate. Repaired
+            # by hand once, the very next run put it back — three of sixteen
+            # carried skills, and psf-requests-3362 reached a reuse run with
+            # five instructions where it had three, two of them copies
+            # competing with its own diff.
+            #
+            # Here, because promotion is the moment a fault stops being this
+            # run's problem and becomes every later run's.
+            try:
+                from phronix.mcp_tools.tools.solution_service import repair_skill
+
+                home = arm._skill_home_in(
+                    store_root, arm.task_skill_name(arm.research_topic(instance)))
+                fixed = repair_skill(home) if home else []
+                if fixed and tracer:
+                    tracer.event("filing",
+                                 f"repaired the skill before promoting: "
+                                 f"{'; '.join(fixed[:3])}"[:200])
+            except Exception as exc:
+                if tracer:
+                    tracer.event("filing", f"repair did not run: {exc}"[:160])
+
             # A skill that has learned something must stop saying it has not.
             try:
                 topic = arm.research_topic(instance)

@@ -10039,3 +10039,33 @@ def test_the_mechanical_faults_in_a_skill_are_repaired_not_just_reported():
     remaining = {i["problem"] for i in check_skill(home)}
     assert any("carries no diff" in k for k in remaining), \
         "a missing patch must still be reported, not fabricated"
+
+
+def test_the_skill_is_repaired_before_it_is_promoted():
+    """A run corrupts its own skills as it writes them.
+
+    An agent reads the rendered `### I1 — Title` and writes a block titled
+    `I1 — Title`, which the same-point merge can no longer see as a duplicate.
+    Repaired by hand once, the very next run put it back — three of sixteen
+    carried skills, and psf-requests-3362 reached a reuse run holding five
+    instructions where it had three, two of them copies competing with its own
+    diff.
+
+    So the repair runs in the pipeline, at promotion: the moment a fault stops
+    being this run's problem and becomes every later run's.
+    """
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+
+    assert "from phronix.mcp_tools.tools.solution_service import repair_skill" in source
+    assert "fixed = repair_skill(home) if home else []" in source
+
+    # Before promotion, or the corrupted copy is what everything inherits.
+    assert source.index("repair_skill(home)") < source.index(
+        "promoted = promote_store(store_root, Path(promote_into))")
+    # And before the placeholder retirement, which re-renders the same file:
+    # repairing after it would leave the repair unwritten.
+    assert source.index("repair_skill(home)") < source.index(
+        "arm.retire_placeholder(store_root")
+    # A repair that cannot run never costs the task its promotion.
+    window = source[source.index("repair_skill(home)"):]
+    assert "except Exception as exc:" in window[:600]
