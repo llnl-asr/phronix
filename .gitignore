@@ -63,4 +63,4 @@ logs/
 #
 # (It used to be a symlink into `src/phronix/.phronix/learned/`. That directory
 # was never read by any layer — `CONTENT_DIRS` has no such kind — and is gone.)
-/.phronix
+.phronix

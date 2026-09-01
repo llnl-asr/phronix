@@ -3046,6 +3046,17 @@ class Runner:
             #
             # Here nothing else will write before promotion, so what passes
             # here is what the next run inherits.
+            # A skill that has learned something must stop saying it has not.
+            try:
+                topic = arm.research_topic(instance)
+                if arm.retire_placeholder(store_root, arm.task_skill_name(topic)):
+                    if tracer:
+                        tracer.event("filing",
+                                     "retired the placeholder rule — the skill "
+                                     "has real content now")
+            except Exception:
+                pass                  # never cost a task its promotion
+
             try:
                 left = arm._enforce_checks(
                     instance, store_root, workdir,

@@ -2757,6 +2757,54 @@ there are several, merge them — one task, one skill.
             on_call(f"[skill] re-filed {len(found)} skill(s) into `{wanted}`")
         return True
 
+    #: The placeholder a skill is opened with, matched to retire it later.
+    PLACEHOLDER_TITLE = "Nothing is established about this subject yet"
+
+    def retire_placeholder(self, store_root: Path, skill: str) -> bool:
+        """Drop the "nothing is established" rule once something is.
+
+        The placeholder exists so a skill always exists — a later pass needs
+        somewhere to write, and existence is the one property obtainable
+        without a model. It was meant to be replaced as soon as anything was
+        learned, and nothing enforced that.
+
+        Measured on `sphinx-doc-sphinx-8595`: the skill carried the exact
+        diff that had made the task PASS, under `I1`, and alongside it kept
+        `R1 — Nothing is established about this subject yet` and the
+        description `What is known about sphinx-doc__sphinx-8595. Nothing
+        yet.` The next run loaded it, ran 44 steps and 2.7M tokens, and
+        produced no patch. A skill that hands over the answer and twice tells
+        its reader nothing is known is worse than either alone, and the
+        description is the main retrieval signal.
+
+        Deterministic, because retiring a placeholder is not a judgement.
+        """
+        from phronix import skill_schema, skills as skills_module
+
+        home = skills_module.existing_home(skill)
+        if home is None or not (Path(home) / "SKILL.md").is_file():
+            return False
+        parsed = skill_schema.parse_skill(Path(home))
+        blocks = list(parsed.get("blocks") or [])
+        real = [b for b in blocks
+                if str(b.get("title") or "") != self.PLACEHOLDER_TITLE]
+        # Only when something real is actually there. An empty skill keeps
+        # its placeholder: that is what makes it a valid skill at all.
+        if len(real) == len(blocks) or not real:
+            return False
+        subject = str(parsed.get("subject") or skill)
+        described = str(parsed.get("description") or "")
+        if "Nothing yet" in described or not described.strip():
+            titles = ", ".join(str(b.get("title") or "") for b in real[:2])
+            described = f"What is known about {subject}: {titles}"[:300]
+        try:
+            (Path(home) / "SKILL.md").write_text(
+                skill_schema.render_skill(skill, described, subject, real),
+                encoding="utf-8")
+        except OSError:
+            return False
+        return True
+
     def open_task_skill(self, instance: Dict[str, Any], store_root: Path,
                         workdir: Path, on_call=None) -> str:
         """Make sure this task HAS a skill, writing an empty one if it does not.

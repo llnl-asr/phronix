@@ -9394,3 +9394,63 @@ def test_a_duplicate_tool_is_caught_across_categories():
 
     source = Path("src/phronix/capabilities.py").read_text(encoding="utf-8")
     assert 'for path in sorted(directory.rglob("*.py")):' in source
+
+
+def test_a_skill_that_learned_something_stops_saying_it_has_not():
+    """The placeholder was meant to be replaced, and nothing enforced it.
+
+    A task skill is opened with a "nothing is established" rule so that a
+    skill always EXISTS — the next pass needs somewhere to write, and
+    existence is the one property obtainable without a model.
+
+    Measured on `sphinx-doc-sphinx-8595`: the carried skill held the exact
+    diff that had made the task PASS, under `I1`, and kept alongside it
+    `R1 — Nothing is established about this subject yet` plus the description
+    "What is known about sphinx-doc__sphinx-8595. Nothing yet." The next run
+    loaded that skill, ran 44 steps and 2.7M tokens, and produced no patch.
+
+    A skill that hands over the answer and twice tells its reader nothing is
+    known is worse than either alone — and the description is the main
+    retrieval signal.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        arm = Arm.__new__(Arm)
+        store = Path(root) / ".phronix"
+        skills.write_block("sphinx-doc-sphinx-8595", "rule",
+                           Arm.PLACEHOLDER_TITLE, "nothing yet",
+                           description="What is known about it. Nothing yet.")
+
+        # An EMPTY skill keeps its placeholder: that is what makes it valid.
+        assert arm.retire_placeholder(store, "sphinx-doc-sphinx-8595") is False
+
+        skills.write_block("sphinx-doc-sphinx-8595", "instruction",
+                           "Handle empty __all__ in autodoc", "return False, []")
+        assert arm.retire_placeholder(store, "sphinx-doc-sphinx-8595") is True
+
+        text = (Path(skills.existing_home("sphinx-doc-sphinx-8595"))
+                / "SKILL.md").read_text(encoding="utf-8")
+        assert Arm.PLACEHOLDER_TITLE not in text
+        # The description names what is known, rather than denying it.
+        assert "Nothing yet" not in text
+        assert "Handle empty __all__" in text
+        # Idempotent: nothing left to retire on a second pass.
+        assert arm.retire_placeholder(store, "sphinx-doc-sphinx-8595") is False
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    # And it runs before promotion, so the next run inherits the corrected one.
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert source.index("arm.retire_placeholder(") < source.index(
+        "promoted = promote_store(store_root, Path(promote_into))")
