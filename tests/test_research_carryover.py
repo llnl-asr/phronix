@@ -9135,3 +9135,35 @@ def test_the_learner_states_a_tool_verdict_for_every_finding():
     assert "built **zero** tools" in skill
     # It goes into the observation stream, where reconcile can generalise it.
     assert 'research_observe(topic="learning")' in skill
+
+
+def test_the_inventory_counts_every_filed_directory_not_one_of_them(tmp_path):
+    """The same silent failure, twice, in the same function.
+
+    First it listed only FILES under `capabilities/`, so the 30-task run
+    reported `skills_created = []` for all 29 tasks while its store gained 32
+    task answers. That was fixed by naming `tasks/`. Then solutions moved to
+    `capabilities/skills/` and the count went to zero again — a run reporting
+    `created=0` with `promoted=20` in the row beside it.
+
+    Reading the list of filed directories, rather than naming one, is what
+    stops a third time.
+    """
+    from tests.benchmark.isolation import FILED_SUBDIRS, store_inventory
+
+    store = tmp_path / ".phronix"
+    (store / "capabilities" / "skills" / "psf-requests-3362").mkdir(parents=True)
+    (store / "capabilities" / "tools" / "pytest").mkdir(parents=True)
+    # The pre-flattening layout nests one level deeper and must still count.
+    (store / "capabilities" / "tasks" / "old-slug" / "old-name").mkdir(parents=True)
+
+    seen = set(store_inventory(store)["capabilities"])
+    assert "skills/psf-requests-3362" in seen
+    assert "tools/pytest" in seen
+    assert "tasks/old-slug/old-name" in seen
+
+    # Derived from the shared constant, so a new filed directory is counted
+    # the day it is added rather than the day someone notices it is not.
+    source = Path("tests/benchmark/isolation.py").read_text(encoding="utf-8")
+    assert "for sub in FILED_SUBDIRS:" in source
+    assert set(FILED_SUBDIRS) == {"skills", "tools", "tasks"}

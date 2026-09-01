@@ -1367,10 +1367,28 @@ def store_inventory(store_root: Path) -> Dict[str, List[str]]:
             # looked as though it had learned nothing, and a reuse run built
             # on it would have had nothing to credit.
             names = [p.stem for p in base.glob("*") if p.is_file()]
-            tasks = base / "tasks"
-            if tasks.is_dir():
-                names += [f"tasks/{p.name}" for p in tasks.iterdir()
-                          if p.is_dir()]
+            # EVERY filed directory, not one of them.
+            #
+            # This named `tasks/` alone, and when solutions moved to
+            # `capabilities/skills/` the count went back to zero — the same
+            # silent failure a second time, in the same function: a run
+            # reported `skills_created = []` for every task while its store
+            # filled up, and `promoted=20` sat in the row beside it saying
+            # otherwise. Reading the list of filed directories rather than
+            # naming one is what stops it happening a third time.
+            for sub in FILED_SUBDIRS:
+                home = base / sub
+                if not home.is_dir():
+                    continue
+                for entry in home.iterdir():
+                    if not entry.is_dir():
+                        continue
+                    if sub == TASK_CAPABILITY_SUBDIR:
+                        # The pre-flattening layout nests one level deeper.
+                        names += [f"{sub}/{entry.name}/{inner.name}"
+                                  for inner in entry.iterdir() if inner.is_dir()]
+                    else:
+                        names += [f"{sub}/{entry.name}"]
             out[kind] = sorted(names)
         else:
             out[kind] = sorted(p.stem for p in base.glob("*") if p.is_file())
