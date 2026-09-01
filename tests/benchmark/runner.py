@@ -1768,6 +1768,21 @@ class Runner:
                 continue
             if (sorted(manifest.get("tasks") or []), str(manifest.get("model"))) != mine:
                 continue
+            # A run that FINISHED is not a run to continue.
+            #
+            # `auto` exists for a job that died — a node lost, a wall clock
+            # hit — where the alternative is paying again for tasks already
+            # measured. A run that reached the end and wrote its report is a
+            # completed experiment, and continuing it merges two of them:
+            # measured on the 5-task pair, a deliberate re-run inherited the
+            # previous run's five rows, ran the same five tasks anyway, and
+            # left eight results for five tasks with `psf__requests-3362`
+            # recorded both resolved and unresolved.
+            #
+            # `report.json` is written once the arms return, so its presence
+            # is exactly the "did not finish" test this always claimed to make.
+            if (candidate / "report.json").is_file():
+                continue
             best = candidate
             break
         return best
@@ -2199,15 +2214,25 @@ class Runner:
         # behind them are skipped below. Copied rather than referenced: the
         # run directory has to stand on its own once the older one is cleaned
         # up.
-        carried: Dict[str, Any] = {}
+        # Named for what it holds, because the name was the bug.
+        #
+        # This was `carried`, and thirty lines later the SEEDED FILE LIST was
+        # also called `carried` — same function, same scope. The second
+        # assignment won, so the skip below tested an instance id for
+        # membership in a list of filenames, always missed, and every task the
+        # resume had just recorded a result for was run again. The run then
+        # held two rows per task: measured on the 5-task pair, eight results
+        # for five tasks, with `psf__requests-3362` recorded both resolved and
+        # unresolved.
+        already_done: Dict[str, Any] = {}
         source = self.resume_source()
         if source is not None:
-            carried = self.finished_already(source, arm_name)
-            for row in carried.values():
+            already_done = self.finished_already(source, arm_name)
+            for row in already_done.values():
                 append_result(results_path, TaskResult.from_dict(row))
-            if carried:
+            if already_done:
                 print(f"  [{arm_name}] resuming {source.name}: "
-                      f"{len(carried)} task(s) already finished, skipping them",
+                      f"{len(already_done)} task(s) already finished, skipping them",
                       flush=True)
 
         # One store per arm. The frozen and full phronix arms must not share one:
@@ -2320,7 +2345,7 @@ class Runner:
                 print(f"  {prefix}[{order:3d}] {instance_id}  SKIPPED (not in dataset)",
                       flush=True)
                 continue
-            if instance_id in carried:
+            if instance_id in already_done:
                 continue          # finished by the run this one continues
             planned.append((order, instance))
 
@@ -2538,7 +2563,6 @@ class Runner:
             attempt_index += 1
             attempt = Attempt(index=attempt_index)
             started = time.time()
-            skills_before = set(store_inventory(store_root).get("skills", []))
             arm.attempt_history = _attempt_history(workdir, attempt_index)
 
             try:
@@ -3042,13 +3066,30 @@ class Runner:
                 # started from nothing. `--fresh` is unaffected: it filters on
                 # READ, keeping the framework's own tools and hiding bundled
                 # task answers, so a from-scratch run still starts clean.
-                try:
+                # Into the packaged layer only when explicitly asked.
+                #
+                # `promote_root` now guarantees the "always promoted" half,
+                # and it writes outside the checkout, so this is no longer
+                # what makes a finding survive. What it still does is grow the
+                # installed package with every task of every run: measured
+                # today, a single 5-task run added five task answers to
+                # `src/phronix/.phronix` mid-run, left the working tree dirty,
+                # and failed the corrector that walks every bundled artifact
+                # because a promoted skill carried a 29-character description.
+                # An earlier bulk promotion into the same place broke seven
+                # tests and took the suite from 27s to 356s.
+                #
+                # Off by default, because a benchmark run should not edit the
+                # framework it is measuring.
+                if os.environ.get("PHRONIX_PROMOTE_TO_PACKAGE", "").strip().lower() in (
+                        "1", "true", "yes"):
+                  try:
                     into_src = promote_to_source(store_root)
                     if into_src.get("promoted") and tracer:
                         tracer.event("promoted",
                                      f"{len(into_src['promoted'])} file(s) into "
                                      f"{into_src.get('destination', 'the source tree')}")
-                except Exception as exc:
+                  except Exception as exc:
                     if tracer:
                         tracer.event("promote-failed", f"source tree: {exc}"[:200])
                 try:

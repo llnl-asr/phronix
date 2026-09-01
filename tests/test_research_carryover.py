@@ -6614,9 +6614,17 @@ def test_a_run_always_saves_into_the_source_tree_and_fresh_still_reads_clean(tmp
 
     Everything a run learned went to `/.phronix`, which is gitignored — so it
     lived exactly as long as the checkout it was learned in, and a clone
-    started from nothing. Promotion into the packaged layer fixes that, and
-    would quietly undo `--fresh` if reading were not filtered: a bundled entry
-    is visible to every run by construction.
+    started from nothing. `promote_root` fixes that: every run writes what it
+    learned there whatever its mode, and it sits outside the checkout.
+
+    Promotion into the PACKAGED layer was the first answer to the same
+    problem, and it is now opt-in. It never stopped being correct about
+    `--fresh` — a task answer lands under `tasks/` and the read filter hides
+    it — but it edits the framework the benchmark is measuring. Measured: one
+    5-task run added five answers to `src/phronix/.phronix` mid-run, left the
+    tree dirty, and failed the corrector that walks every bundled artifact on
+    a promoted 29-character description. A bulk promotion into the same place
+    broke seven tests and took the suite from 27s to 356s.
     """
     import os
 
@@ -6632,10 +6640,18 @@ def test_a_run_always_saves_into_the_source_tree_and_fresh_still_reads_clean(tmp
     assert "Never overwrite what the framework ships" in body
 
     runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
-    # Unconditional: not behind `--no-carry`, which targets the project layer.
-    call = runner[runner.index("into_src = promote_to_source(") - 700:
-                  runner.index("into_src = promote_to_source(")]
-    assert "`--fresh` and `--no-carry`" in call
+    # The unconditional save is the carry root, and it is NOT behind the read
+    # flags: `--fresh` and `--no-carry` both empty `carry_root`.
+    assert "promote_into = self.config.promote_root or self.config.carry_root" in runner
+    assert "promote_store(store_root, Path(promote_into))" in runner
+    # The packaged copy is the opt-in one, and defaults to off. Asserted by
+    # ORDER rather than by a byte window: a window around the call breaks
+    # whenever the comment above it is edited, which is not a behaviour change.
+    guard = runner.index('os.environ.get("PHRONIX_PROMOTE_TO_PACKAGE"')
+    assert guard < runner.index("into_src = promote_to_source(")
+    # A fragment that survives line-wrapping: the full sentence is split
+    # across two comment lines, so matching it whole tests the formatter.
+    assert "a benchmark run should not edit the" in runner
 
     # And the read side: a bundled TASK ANSWER is hidden from a fresh run,
     # while the framework's own tools stay — which is what `--fresh` means.
@@ -8631,3 +8647,63 @@ def test_a_promoted_capability_is_always_filed_where_fresh_can_hide_it():
     # The writer and the read filter must agree on the directory, or the
     # filter looks in a place nothing is written to.
     assert TASK_CAPABILITY_DIR == TASK_CAPABILITY_SUBDIR
+
+
+def test_a_finished_run_is_not_resumed_into():
+    """`auto` continues a job that DIED, not an experiment that ended.
+
+    The docstring always said "did not finish"; the code never tested it. So a
+    deliberate re-run of the same task list picked up the previous run's rows
+    — measured on the 5-task pair: eight results for five tasks, with
+    `psf__requests-3362` recorded both resolved and unresolved, and carried
+    rows showing `promoted=0` beside the new ones showing `promoted=11`. Two
+    experiments in one file, reported as one.
+
+    `report.json` is written once the arms return, so it is the test.
+    """
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    resume = source[source.index("    def resume_source(self)"):]
+    resume = resume[:resume.index("\n    def ", 10)]
+    assert 'if (candidate / "report.json").is_file():' in resume
+    assert "continue" in resume
+
+
+def test_the_resume_skip_is_not_shadowed_by_the_seed_list():
+    """Two locals called `carried` in one function, and the second won.
+
+    The resume recorded a result for every finished task and then ran them all
+    again, because the skip tested an instance id for membership in a list of
+    SEEDED FILENAMES. Both were named `carried`, thirty lines apart, same
+    scope. Nothing raised; the run just held two rows per task.
+
+    Named for what they hold, so the collision cannot come back.
+    """
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert "already_done: Dict[str, Any] = {}" in source
+    assert "if instance_id in already_done:" in source
+    # The seed list keeps the old name, and the two must not meet again.
+    assert "carried = seed_store(" in source
+    assert "if instance_id in carried:" not in source
+
+
+def test_task_results_have_exactly_one_from_dict():
+    """A second definition thirty lines down silently replaced the first.
+
+    Python keeps the LAST definition, so the careful one was dead code and the
+    live one was `Attempt(**a)` — which raises TypeError the moment a row
+    carries a column this build does not know, which is exactly what a resume
+    reads.
+    """
+    from tests.benchmark.metrics import Attempt, TaskResult
+
+    source = Path("tests/benchmark/metrics.py").read_text(encoding="utf-8")
+    assert source.count("    def from_dict(") == 1
+
+    # And the survivor is the tolerant one, on both levels.
+    row = json.loads(json.dumps(
+        TaskResult(instance_id="x", attempts=[Attempt(index=1)]).to_dict()))
+    row["a_column_from_a_newer_build"] = 1
+    row["attempts"][0]["an_attempt_column_too"] = 2
+    rebuilt = TaskResult.from_dict(row)
+    assert [type(a) for a in rebuilt.attempts] == [Attempt]
+    rebuilt.to_dict()

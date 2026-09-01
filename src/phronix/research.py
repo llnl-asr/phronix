@@ -1989,9 +1989,6 @@ def rank_approaches(topic: str) -> Dict[str, Any]:
             "refines": entry.get("refines", ""),
             # Whether a measured patch exists, never the patch itself.
             "change_patch": entry.get("change_patch", ""),
-            # The steps this approach runs. What makes it something the next
-            # attempt can fall back TO rather than read about.
-            "pipeline": entry.get("pipeline") or [],
             # The steps this approach runs. What makes it a candidate the next
             # attempt can actually fall back TO rather than read about.
             "pipeline": entry.get("pipeline") or [],

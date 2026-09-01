@@ -295,12 +295,6 @@ class TaskResult:
             "wall_s": round(self.wall_s, 1),
         }
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TaskResult":
-        attempts = [Attempt(**a) for a in data.get("attempts", [])]
-        known = {f for f in cls.__dataclass_fields__ if f != "attempts"}
-        return cls(attempts=attempts,
-                   **{k: v for k, v in data.items() if k in known})
 
 
 # ---------------------------------------------------------------------------
