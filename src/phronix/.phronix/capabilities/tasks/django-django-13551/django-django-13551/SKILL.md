@@ -1,6 +1,6 @@
 ---
 name: django-django-13551
-description: Fix token invalidation on email change in Django auth tokens
+description: The django-django-13551 subject.
 subject: django-django-13551
 type: skill
 ---
@@ -11,11 +11,6 @@ type: skill
 | --- | --- | --- |
 | `I1` | Instructions | Add email to password reset token hash |
 | `I2` | Instructions | Support custom email field names with get_email_field_name() |
-| `I3` | Instructions | Problem description |
-| `I4` | Instructions | Key idea |
-| `I5` | Instructions | Change `_make_hash_value` |
-| `I6` | Instructions | Constraints and rules |
-| `I7` | Instructions | Pitfalls and lessons |
 | `R1` | Rules | Convert None values to empty string before string concatenation |
 | `R2` | Rules | Handle None email values explicitly before string concatenation |
 | `R3` | Rules | Update docstring to document email as part of token invalidation |
@@ -29,46 +24,6 @@ Modify `PasswordResetTokenGenerator._make_hash_value()` in django/contrib/auth/t
 ### I2 — Support custom email field names with get_email_field_name()
 
 Call `user.get_email_field_name()` to get the actual field name rather than hardcoding 'email'. This ensures the fix works with custom user models that override the email field name. Use `getattr(user, email_field_name, '')` to safely retrieve the field value with a default empty string for missing attributes.
-
-### I3 — Problem description
-
-When a user changes their email address, previously issued password‑reset tokens remain valid, allowing a password reset with an outdated token.
-
-### I4 — Key idea
-
-Include the user's e‑mail address in the hash built by `PasswordResetTokenGenerator._make_hash_value()` so that a token is invalidated when the e‑mail changes.
-
-### I5 — Change `_make_hash_value`
-
-Edit `django/contrib/auth/tokens.py`:
-1. Retrieve the e‑mail safely: `email = getattr(user, 'email', '')`.
-2. Append `str(email)` to the return string of `_make_hash_value` (after existing components).
-3. Keep the original logic for other fields.
-
-Resulting method:
-```python
-def _make_hash_value(self, user, timestamp):
-    login_timestamp = '' if user.last_login is None else user.last_login.replace(microsecond=0, tzinfo=None)
-    email = getattr(user, 'email', '')
-    return (
-        str(user.pk) + user.password + str(timestamp) + str(login_timestamp) + str(email)
-    )
-```
-
-### I6 — Constraints and rules
-
-* Do not modify any other part of the file.
-* Preserve compatibility with custom user models that may lack an `email` attribute.
-* Ensure existing password‑reset functionality continues to work for unchanged e‑mail addresses.
-* All existing tests unrelated to this change must remain passing.
-
-### I7 — Pitfalls and lessons
-
-* Attempt 1 applied no diff, resulting in no fix.
-* Attempt 2 added the e‑mail to the hash but omitted the safe fallback for missing `email` fields, which could break custom user models.
-* Ensure the fallback (`getattr(user,'email','')`) is included to avoid AttributeError.
-* Verify with the specific auth test rather than the full Django suite to avoid unrelated failures.
-* Running the full test suite can expose missing third‑party dependencies; limit testing to the relevant module.
 
 ## Rules
 

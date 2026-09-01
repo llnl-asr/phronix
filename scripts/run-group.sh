@@ -280,8 +280,24 @@ EOF
 fi
 [ -n "$NODES" ] && echo "hosts   : $NODES"
 
+# `--reuse` has to bring a carry root with it, or it carries nothing.
+#
+# `--no-carry` gives each group its own store so a group that dies takes
+# nothing with it, and that is right for a fresh run. But it also empties
+# `--reuse` of meaning: the runner seeds earlier learning only when
+# `carry_root` is set, so `--reuse` alone left the store as bare as `--fresh`
+# and every reuse measurement came back zero. The two flags are one decision,
+# so they are made in one place.
+CARRY=(--no-carry)
+for arg in "${EXTRA[@]}"; do
+  if [ "$arg" = "--reuse" ]; then
+    CARRY=(--carry-root "$PBENCH/carry/.phronix")
+    echo "carry   : $PBENCH/carry/.phronix (what earlier runs learned)"
+    break
+  fi
+done
 CMD=("$PROJECT/scripts/run-benchmark.sh" --tasks "$FILE"
-     --parallel-tasks "$PARALLEL" --no-carry)
+     --parallel-tasks "$PARALLEL" "${CARRY[@]}")
 # A spend ceiling is for hosted models. On the local cluster the dollar figure
 # is notional — the GPUs are yours and nothing is billed — so a cap there would
 # stop a run over a number that means nothing.

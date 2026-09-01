@@ -3054,13 +3054,23 @@ def test_a_remembered_skill_is_tried_before_solving_from_scratch(tmp_path):
         return [{"name": "phronix-context-economy"},   # bundled: not a memory
                 {"name": "pylint-ignore-paths"}]       # learned: this one
 
+    import phronix.layers as layers_module
     import phronix.skills as skills_module
+    # `skill_dirs` is what `--fresh` filters on, and it reads the LAYERS on
+    # this machine — including the gitignored project layer. So this asserted
+    # logic but passed on ambient state: when that layer was emptied the test
+    # failed, having tested nothing about the code. The allowance is stated
+    # here instead.
     original, skills_module.search = skills_module.search, fake_search
+    was_dirs = layers_module.skill_dirs
+    layers_module.skill_dirs = lambda *a, **k: [
+        "phronix-context-economy", "pylint-ignore-paths"]
     try:
         arm._in_store = lambda root, fn, *a, **k: fn(*a, **k)
         got = arm.recalled_skill(tmp_path, {"repo": "pylint-dev/pylint"})
     finally:
         skills_module.search = original
+        layers_module.skill_dirs = was_dirs
 
     assert got == "pylint-ignore-paths"
     assert "pylint" in calls["query"]           # searched by subject, not id
@@ -3352,16 +3362,26 @@ def test_recall_reads_the_search_envelope_not_its_keys(tmp_path):
     arm = PhronixOpenCodeArm(model="m", provider="p")
     arm._in_store = lambda root, fn, *a, **k: fn(*a, **k)
 
+    import phronix.layers as layers_module
     import phronix.skills as skills_module
+    # `skill_dirs` is what `--fresh` filters on, and it reads the LAYERS on
+    # this machine — including the gitignored project layer. So this asserted
+    # logic but passed on ambient state: when that layer was emptied the test
+    # failed, having tested nothing about the code. The allowance is stated
+    # here instead.
     original = skills_module.search
     skills_module.search = lambda *a, **k: {
         "status": "ok", "query": "q", "count": 1,
         "results": [{"skill": "pylint-fixme-notes-regex-boundary",
                      "subject": "pylint-fixme-notes-regex-boundary"}]}
+    was_dirs = layers_module.skill_dirs
+    layers_module.skill_dirs = lambda *a, **k: [
+        "pylint-fixme-notes-regex-boundary"]
     try:
         got = arm.recalled_skill(tmp_path, {"repo": "pylint-dev/pylint"})
     finally:
         skills_module.search = original
+        layers_module.skill_dirs = was_dirs
 
     assert got == "pylint-fixme-notes-regex-boundary", got
 
@@ -4480,7 +4500,7 @@ def test_every_attempt_line_says_which_skill_it_is_working_from():
     assert len("solution-pylint-dev-pylint-7080") <= 40
 
 
-def test_a_capability_lists_with_what_it_says_it_does():
+def test_a_capability_lists_with_what_it_says_it_does(tmp_path):
     """A name alone cannot be chosen between; 63 of them cannot be read at all.
 
     `listing()` read the MODULE docstring, which is where the template puts a
@@ -4493,12 +4513,54 @@ def test_a_capability_lists_with_what_it_says_it_does():
     import textwrap
     from phronix.capabilities import listing
 
-    described = [r for r in listing() if r["description"]]
+    # Written here rather than read from whatever this machine's layers hold.
+    #
+    # The catalogue is a live directory: it was full of learned tools when
+    # this was written, and empty once carried knowledge moved out of the
+    # packaged layer and into the carry root. A test that asserts on ambient
+    # content passes or fails on the state of the box, not on the code — so
+    # the two shapes that matter are written out and the assertion is made
+    # against those.
+    import phronix.capabilities as caps
+
+    made = tmp_path / "capabilities"
+    made.mkdir(parents=True, exist_ok=True)
+    # The template's shape: a module docstring.
+    (made / "documented_module.py").write_text(textwrap.dedent('''
+        """Apply the normpath fix to the ignore check."""
+
+
+        def register(mcp):
+            @mcp.tool()
+            def apply_normpath_ignore_fix(where: str) -> str:
+                return where
+        ''').lstrip(), encoding="utf-8")
+    # What an agent actually writes: imports first, docstring on the function.
+    (made / "documented_function.py").write_text(textwrap.dedent('''
+        import os
+
+
+        def register(mcp):
+            @mcp.tool()
+            def grep_usage_sites(where: str) -> str:
+                """Find every call site of a symbol in the repository."""
+                return where
+        ''').lstrip(), encoding="utf-8")
+
+    was = caps.visible_files
+    caps.visible_files = lambda: {p.name: p for p in sorted(made.glob("*.py"))}
+    try:
+        rows = listing()
+    finally:
+        caps.visible_files = was
+
+    described = [r for r in rows if r["description"]]
     assert described, "no capability lists a description at all"
-    # The learned tools are the ones that were blank, and they are the point.
-    by_name = {r["name"]: r["description"] for r in listing()}
-    if "apply_normpath_ignore_fix" in by_name:
-        assert "normpath" in by_name["apply_normpath_ignore_fix"]
+    by_name = {r["name"]: r["description"] for r in rows}
+    # The module-docstring shape, which always worked.
+    assert "normpath" in by_name["documented_module"]
+    # The agent-written shape, which is the one that was coming back blank.
+    assert "call site" in by_name["documented_function"]
 
     # A function docstring, on a module that has none of its own.
     import re
@@ -8456,3 +8518,58 @@ def test_an_inherited_skill_counts_as_reuse_for_the_very_first_task():
     ledger.record_inherited("from-the-fresh-run")
     assert ledger.INHERITED < 0
     assert ledger.classify(["from-the-fresh-run"], order=0, repo="x")["reused"]
+
+
+def test_the_session_registry_separates_fresh_from_reuse(tmp_path, monkeypatch):
+    """Which tools a run was SERVED is the only thing that separates the modes.
+
+    Capabilities accumulate on disk across every run that ever executed, so
+    "which tools exist" answers the same for a fresh run and a reuse one. The
+    distinction is which of them this process was allowed to see, and that is
+    held in memory for the life of the MCP server rather than written down —
+    so it cannot be confused with the disk state it is describing.
+
+    Without this the modes were indistinguishable from inside a run, which is
+    how `--reuse` ran for weeks while seeding nothing and reporting nothing
+    wrong.
+    """
+    import phronix.capabilities as caps
+
+    monkeypatch.setenv(caps.FRESH_ENV, "1")
+    assert caps.session_only() is True
+    monkeypatch.setenv(caps.FRESH_ENV, "")
+    assert caps.session_only() is False
+
+    # The registry is in memory, and a skill this run wrote counts as its own.
+    monkeypatch.setattr(caps, "_SESSION_AUTHORED", {}, raising=False)
+    caps.note_session_authored("a-thing-this-run-wrote")
+    assert "a-thing-this-run-wrote" in caps.session_authored()
+    # A copy, so a caller cannot edit the registry by holding it.
+    caps.session_authored()["smuggled"] = "x"
+    assert "smuggled" not in caps.session_authored()
+
+    # Under --fresh, a task ANSWER from an earlier run is not served, while
+    # this session's own work still is.
+    monkeypatch.setenv(caps.FRESH_ENV, "1")
+    answer = tmp_path / "capabilities" / caps.TASK_CAPABILITY_DIR / "sympy-19254"
+    answer.mkdir(parents=True)
+    carried = answer / "apply_mignotte_fix.py"
+    carried.write_text("def register(mcp):\n    pass\n", encoding="utf-8")
+    mine = tmp_path / "capabilities" / "a-thing-this-run-wrote.py"
+    mine.write_text("def register(mcp):\n    pass\n", encoding="utf-8")
+
+    monkeypatch.setattr(caps, "capability_files",
+                        lambda: {p.name: p for p in
+                                 (tmp_path / "capabilities").rglob("*.py")},
+                        raising=False)
+    import phronix.layers as layers_module
+    monkeypatch.setattr(layers_module, "capability_files",
+                        lambda: {str(p.relative_to(tmp_path / "capabilities")): p
+                                 for p in (tmp_path / "capabilities").rglob("*.py")})
+    monkeypatch.setattr(layers_module, "which_layer", lambda p: "bundled")
+
+    visible = caps.visible_files()
+    names = {Path(n).stem for n in visible}
+    assert "a-thing-this-run-wrote" in names
+    # The earlier run's answer is filtered: this is what --fresh means.
+    assert "apply_mignotte_fix" not in names

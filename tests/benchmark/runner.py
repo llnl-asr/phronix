@@ -236,6 +236,38 @@ class EnvironmentGone(RuntimeError):
     """
 
 
+def _snapshot_task_solution(arm, instance: Dict[str, Any],
+                            store_root: Path, attempt_dir: Path) -> str:
+    """Copy this task's solution directory into the attempt that produced it.
+
+    Written to `attempt-N/solution/`, next to that attempt's patch and
+    transcript, so a run directory answers "what did try 2 know that try 1 did
+    not" by diffing two directories. The store keeps the merged, current
+    answer — that is what the next task should read — and this keeps the
+    history the merge necessarily discards.
+
+    Best effort: a missing solution is the normal case for a task whose
+    research produced nothing, and a failure to copy must never cost the run
+    an attempt.
+    """
+    try:
+        topic = arm.research_topic(instance)
+        name = arm.task_skill_name(topic)
+    except Exception:
+        return ""
+    source = Path(store_root) / "capabilities" / "tasks" / name
+    if not source.is_dir():
+        return ""
+    target = Path(attempt_dir) / "solution"
+    try:
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(source, target)
+    except OSError:
+        return ""
+    return str(target)
+
+
 class Ledger:
     """Which task created which skill, and what each task retrieved.
 
@@ -1744,26 +1776,34 @@ class Runner:
         """
         out: Dict[str, str] = {}
 
-        # Task ANSWERS in the carried layer are learned by definition.
+        # Everything in the CARRY ROOT is learned by definition.
         #
-        # They are the other half, and they cannot be recovered from the
-        # earlier runs' `skills_created`: that column was empty for every task
-        # until the inventory bug was fixed, because it diffed only `skills`
-        # and a task answer is a directory under `capabilities/tasks`. Reading
-        # the layer directly recovers what those runs learned but never
-        # recorded. Nothing here ships with the framework — the framework's
-        # own tools are not task answers — so there is no risk of crediting a
-        # run with knowledge it was given.
-        try:
-            from phronix.layers import bundled_root
-            answers = Path(bundled_root()) / "capabilities" / "tasks"
+        # The carry root, not the bundled layer. Bundled is the installed
+        # package: what ships with the framework, never learned, and counting
+        # it would make every arm look like it was learning from its first
+        # task. It is also the wrong place to put carried knowledge at all —
+        # migrating 351 answers into it broke seven tests that read the
+        # bundled layer through their own isolated fixtures, and timed out the
+        # corrector that walks every bundled artifact.
+        #
+        # This also recovers what earlier runs learned but never RECORDED:
+        # `skills_created` was empty for every task until the inventory bug
+        # was fixed, because it diffed only `skills` and a task answer is a
+        # directory under `capabilities/tasks`.
+        carry = self.config.carry_root
+        if carry:
+            root = Path(carry)
+            answers = root / "capabilities" / "tasks"
             if answers.is_dir():
                 for slug in answers.iterdir():
                     if slug.is_dir():
                         out.setdefault(slug.name, "")
                         out.setdefault(f"tasks/{slug.name}", "")
-        except Exception:
-            pass                      # a layer that cannot be read is not fatal
+            carried_skills = root / "skills"
+            if carried_skills.is_dir():
+                for skill in carried_skills.iterdir():
+                    if skill.is_dir():
+                        out.setdefault(skill.name, "")
 
         runs = sorted(self.out.parent.glob("*/"),
                       key=lambda c: c.stat().st_mtime, reverse=True)
@@ -2236,7 +2276,8 @@ class Runner:
         # Only for arms that read the carried layer. A fresh arm is entitled
         # to a clean read and by construction inherits nothing, so seeding it
         # would credit it with reuse it never had.
-        if getattr(arm, "uses_phronix", False) and not self.config.fresh:
+        if (getattr(arm, "uses_phronix", False)
+                and self.config.research_reuse and self.config.carry_root):
             for name, repo in self.inherited_skills().items():
                 ledger.record_inherited(name, repo)
             if ledger.created_by:
@@ -3374,6 +3415,17 @@ class Runner:
                         arm.ensure_task_skill(
                             instance, store_root, attempt_dir,
                             on_call=narrate)
+                        # Keep THIS try's solution beside this try.
+                        #
+                        # The store holds one directory per task, and every
+                        # try merges into it, so by the end it shows the
+                        # accumulated answer and not how it got there. Whether
+                        # try N fixed what try N-1 got wrong is the question
+                        # the retry budget exists to answer, and it cannot be
+                        # asked of a directory that only ever holds the latest
+                        # state. A copy per attempt makes the tries diffable.
+                        _snapshot_task_solution(
+                            arm, instance, store_root, attempt_dir)
                     except Exception as exc:
                         if tracer:
                             tracer.event("skill", f"could not re-file: {exc}")

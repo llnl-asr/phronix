@@ -8,6 +8,7 @@ session.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 
@@ -30,6 +31,49 @@ def register(mcp: Any) -> None:
             "count": len(capabilities),
             "capabilities": capabilities,
             "usage": "capability_new(name=..., description=..., source=...) to add one.",
+        }, indent=2)
+
+    @mcp.tool()
+    def capability_session() -> str:
+        """What THIS session has authored, and what it was allowed to see.
+
+        The provenance record for a run. Capabilities accumulate on disk across
+        every run that ever executed, so "which tools exist" cannot answer
+        whether a run started from scratch — the same directory answers yes to
+        every run. What separates a `--fresh` run from a `--reuse` one is which
+        of those tools it was served, and that lives in memory here: a registry
+        of what this process built, held for the life of the MCP server and
+        never written down.
+
+        Use it to check a claim about a run rather than to do work. `authored`
+        is this session's own output and is available in both modes; `carried`
+        counts what earlier runs left that this session can also call, and is
+        0 under `--fresh` by construction. A fresh run reporting carried > 0,
+        or a reuse run reporting carried == 0, means the mode did not take
+        effect and any learning number from it is meaningless.
+
+        Returns JSON: {status, fresh, authored: [...], authored_count,
+        carried_count, visible_count}.
+        """
+        from phronix.capabilities import (session_authored, session_only,
+                                          visible_files)
+
+        authored = session_authored()
+        visible = visible_files()
+        # Visible minus our own is what came from somewhere else.
+        mine = set(authored)
+        carried = [name for name in visible
+                   if Path(name).stem not in mine]
+        return json.dumps({
+            "status": "ok",
+            "fresh": session_only(),
+            "authored": sorted(authored),
+            "authored_count": len(authored),
+            "carried_count": len(carried),
+            "visible_count": len(visible),
+            "means": ("fresh: only this session's work plus the framework's "
+                      "own tools" if session_only() else
+                      "reuse: earlier runs' tools are served too"),
         }, indent=2)
 
     @mcp.tool()

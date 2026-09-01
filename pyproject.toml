@@ -75,10 +75,6 @@ where = ["src"]
     # the wheel rather than living only in a checkout. Its own subtree, so a
     # learned skill is still distinguishable from a bundled one — which is what
     # `--fresh` relies on to serve the framework's tools and nobody's answers.
-    ".phronix/learned/**/*.md",
-    ".phronix/learned/**/*.py",
-    ".phronix/learned/**/*.json",
-    ".phronix/learned/**/*.yaml",
     ".phronix/skills/**/*.yaml",
     ".phronix/agents/*.yaml",
     ".phronix/memory/*.md",

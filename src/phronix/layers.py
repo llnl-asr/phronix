@@ -38,6 +38,7 @@ bundled layer via a pull request, with a privacy scan in front of it.
 """
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 from dataclasses import dataclass
@@ -138,8 +139,18 @@ def project_store(start: Optional[Path] = None) -> Optional[Path]:
     return (root / ".phronix") if root else None
 
 
+@functools.lru_cache(maxsize=64)
 def _in_git_worktree(path: Path) -> bool:
     """True when *path* lives inside a git worktree.
+
+    Cached, because it forks `git` and the answer cannot change inside a
+    process: a directory does not enter or leave a worktree while phronix is
+    running. Uncached it was called once per catalogue ENTRY — every
+    `skill_load` walks the layers for each candidate — so the cost scaled with
+    how much the system had learned. Measured after 351 task answers were
+    migrated in: one `skills.load` forked 720 git subprocesses and took 8.3s,
+    against 0.1s before. That is paid on every load in every task, not only
+    in the tests where it was noticed.
 
     This is how we tell "phronix was cloned and installed editable" (writes to
     the bundled layer are tracked, reviewable and shippable) from "phronix was
