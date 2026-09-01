@@ -370,11 +370,24 @@ def new(
     # `capability_list` returned 195 flat names, which is not a list anyone
     # chooses from.
     #
-    # `category` when given; otherwise the topic, so a tool built while
-    # solving one task still lands somewhere meaningful.
-    group = category or topic
-    if group:
-        directory = tool_home(group, directory)
+    # Three homes, and the difference is who the tool is FOR.
+    #
+    # A categorised tool is shared work — `tools/<category>/` — and the next
+    # kind-of-work like this one calls it. A tool bound to a task and nothing
+    # else is part of that task's ANSWER, so it belongs beside the solution it
+    # implements, at `skills/<TaskName>/`, where the reader who loads the
+    # skill already is. Filing it at `tools/<task-slug>/` was the worst of
+    # both: shelved with the shared tools, findable only by the one task, so
+    # the catalogue grew without anything gaining a tool it could use.
+    #
+    # Uncategorised and unbound is `tools/general/` — honest about not knowing,
+    # and still somewhere the filter and the layout check can see.
+    if category:
+        directory = tool_home(category, directory)
+    elif topic:
+        directory = solution_home(topic, directory)
+    else:
+        directory = tool_home(DEFAULT_TOOL_CATEGORY, directory)
     directory.mkdir(parents=True, exist_ok=True)
     # The same procedure, already built, under another name.
     #

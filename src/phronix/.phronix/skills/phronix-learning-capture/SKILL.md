@@ -15,13 +15,16 @@ type: skill
 | `I4` | Instructions | Build a tool when the procedure is deterministic |
 | `I5` | Instructions | Report your own cycle, so the learner can improve |
 | `R0` | Rules | A skill that solves a problem must say how to solve it |
-| `R0c` | Rules | A solution skill is as specific as you can make it |
 | `R1` | Rules | Capture is additive; merging is the other tier's job |
-| `R2` | Rules | Write for the kind of work, not for the task |
+| `R2` | Rules | Write for the kind of work, not for the task — in a METHOD skill |
 | `R3` | Rules | Say what failed, not what to abandon |
 | `R4` | Rules | Write it small rather than not at all |
 | `R5` | Rules | Never block the pipeline |
+| `R6` | Rules | Never write into your own skills; the kind of work is the target |
+| `R7` | Rules | A tool is filed under the kind of work it belongs to |
 | `X1` | References | Where the two tiers divide |
+
+
 
 ## Instructions
 
@@ -62,7 +65,7 @@ Blocks are short by construction and rejected rather than truncated when they ar
 
 When the repeats describe *steps* rather than a fact — building a fixture in a given shape, probing a function's raw output, comparing two variants — that is a capability, not a lesson.
 
-`capability_list()` first, then `capability_new(name="probe_...")` if it is genuinely new. A tool is called; a lesson has to be read, interpreted and re-acted-on by every task that loads it. Prefer the tool wherever the procedure is deterministic.
+`capability_list()` first, then `capability_new(name="probe_...", category="<the kind of work you were handed>")` if it is genuinely new — the category is required, see `R7`. A tool is called; a lesson has to be read, interpreted and re-acted-on by every task that loads it. Prefer the tool wherever the procedure is deterministic.
 
 A tool written now is live within the minute: the MCP server re-scans capabilities on its refresh, so tasks already running pick it up without a restart.
 
@@ -159,6 +162,22 @@ Two things still deserve nothing: an observation that says only that a tool was 
 Research and attempts proceed while you run and nothing waits for you. No long analyses, no held locks, no rewriting a skill another stage is mid-way through reading.
 
 If a cycle runs out of time the observations are still on file and the next cycle sees them. Losing a cycle costs nothing; stalling a pass costs the run.
+
+### R6 — Never write into your own skills; the kind of work is the target
+
+The skill you were HANDED is not the skill you write to. `phronix-learning-capture` and `phronix-learning-reconcile` describe your job; they are not where a finding about `bash` or `tests` belongs.
+
+Measured across every run so far: the learner wrote `lesson phronix-learning-capture` and `lesson phronix-learning-reconcile` and nothing else. Every lesson it produced went into the description of its own method, where no task will ever look for it — the reader searching for how to parse subprocess output does not search the learner.
+
+The target is the KIND OF WORK you were handed: `bash`, `python`, `traversal`, `tests`, `patch`, `matching`, `config`, `git`, `measurement`, `tooling`. Write to that skill by name, and create it with `skill_write` if it does not exist yet — an absent skill is the normal state the first time a kind of work repeats, not a reason to fall back to your own.
+
+### R7 — A tool is filed under the kind of work it belongs to
+
+When you build a tool, pass `category=` — the same kind of work you were handed. `capability_new(name="probe_...", description=..., source=..., category="tests")` files it at `capabilities/tools/tests/probe_....py`.
+
+Without a category a tool is filed under whatever task happened to be running when you built it, and is then found by that task and by nothing else — which defeats the entire reason to write code instead of prose. The value of a tool is that the NEXT kind-of-work like this one calls it.
+
+You are the one caller that always knows the right category, because the kind of work is what you were handed.
 
 ## References
 

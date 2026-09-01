@@ -897,6 +897,18 @@ def _exclusive(path: Path):
 CORE_SKILL_PREFIX = "phronix-"
 
 
+#: Which tree a skill written now belongs in: "research" or (default) the
+#: task's own capabilities.
+SKILL_TREE_ENV = "PHRONIX_SKILL_TREE"
+
+
+def _slug_for_tree(slug: str) -> str:
+    """The directory name for *slug*, by the same rule both trees use."""
+    from phronix.capabilities import task_slug
+
+    return task_slug(slug)
+
+
 def is_core_skill(name: str) -> bool:
     """Is this the framework's own method, rather than one problem's answer?"""
     return str(name).startswith(CORE_SKILL_PREFIX)
@@ -921,6 +933,23 @@ def skill_home(slug: str, target: Any, subject: str = "") -> Path:
     if is_core_skill(slug):
         return target.dir("skills") / slug
     from phronix.capabilities import solution_home
+
+    # WHICH tree, decided by who is writing.
+    #
+    # `capabilities/` is what a task NEEDED — the solution, and the tools the
+    # learner builds from what repeats across tasks. `research/` is what was
+    # SEARCHED FOR, and a subject outlives the task that raised it. The two
+    # are the same shape and answer different questions, so a reader looking
+    # for "how does this project discover test files" must not have to guess
+    # which tree a run happened to file it under.
+    #
+    # Set by the harness around the research stage rather than inferred from
+    # the name: an agent picks the name, and no naming convention has survived
+    # contact with one yet.
+    if os.environ.get(SKILL_TREE_ENV, "").strip().lower() == "research":
+        from phronix.research import RESEARCH_DIR, subject_home
+
+        return subject_home(_slug_for_tree(slug), target.dir(RESEARCH_DIR))
 
     # `capabilities/skills/<TaskName>/`, one level.
     #

@@ -408,9 +408,14 @@ def task_skill_dirs(start: Optional[Path] = None) -> Dict[str, Path]:
     # invalidating over a directory name. Current layout is read LAST so it
     # wins where both exist.
     for layer in layers(start):
-        capabilities = layer.dir("capabilities")
-        for base, pattern in ((TASK_CAPABILITY_DIR, "*/*/SKILL.md"),
-                              (SOLUTION_DIR, "*/SKILL.md")):
+        # Both trees. `capabilities/` is what a task needed; `research/` is
+        # what was searched for. A reader asking "is there a skill for this"
+        # must not have to know which one a run happened to file it under.
+        trees = [layer.dir("capabilities"), layer.dir("research")]
+        for capabilities, (base, pattern) in [
+                (t, bp) for t in trees
+                for bp in ((TASK_CAPABILITY_DIR, "*/*/SKILL.md"),
+                           (SOLUTION_DIR, "*/SKILL.md"))]:
             root = capabilities / base
             if not root.is_dir():
                 continue

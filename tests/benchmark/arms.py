@@ -2544,6 +2544,19 @@ class Arm:
         env["PHRONIX_WRITE_LAYER"] = "project"
         if phase:
             env["PHRONIX_PHASE"] = phase
+        # Which TREE this stage's skills belong in.
+        #
+        # The research stage is investigating a SUBJECT, and a subject outlives
+        # the task that raised it — "how does this project discover test files"
+        # is asked by every task in the repository. Its findings go to
+        # `research/skills/<subject>/`. Everything else is working on the task
+        # at hand and writes to `capabilities/`, which is also where the
+        # learner files what repeats across tasks.
+        #
+        # Set by the harness rather than inferred from the skill's name: the
+        # agent picks the name, and no naming convention has survived contact
+        # with one yet.
+        env["PHRONIX_SKILL_TREE"] = "research" if phase == "research" else ""
         # Which task's conversation the `conversation_*` tools serve.
         #
         # Set per stage rather than per run: the record is per task, and a

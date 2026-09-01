@@ -4286,9 +4286,16 @@ def test_a_task_capability_is_filed_under_its_task(tmp_path, monkeypatch):
         topic="pylint-dev__pylint-7080")
 
     assert method["status"] == "ok" and bound["status"] == "ok"
-    assert Path(method["file"]).parent.name == "capabilities"
+    # Uncategorised and unbound: `tools/general/`, which is honest about not
+    # knowing and still somewhere the filter and the layout check can see.
+    # Never loose at the top of the tree — that is what defeated `--fresh`.
+    assert Path(method["file"]).parent.name == capabilities.DEFAULT_TOOL_CATEGORY
+    assert Path(method["file"]).parent.parent.name == capabilities.TOOL_DIR
+    # Bound to one task: beside the SOLUTION it implements, where the reader
+    # who loaded that skill already is — not shelved with the shared tools
+    # under a task-shaped category nothing else will ever look in.
     assert Path(bound["file"]).parent.name == "pylint-dev-pylint-7080"
-    assert Path(bound["file"]).parent.parent.name == capabilities.TOOL_DIR
+    assert Path(bound["file"]).parent.parent.name == capabilities.SOLUTION_DIR
 
     # An explicit category beats the topic: what the tool is about is a better
     # grouping than who first needed it.
@@ -8923,3 +8930,127 @@ def test_the_research_record_is_validated_against_what_a_later_run_needs():
         "src/phronix/.phronix/skills/phronix-task-research/SKILL.md"
     ).read_text(encoding="utf-8")
     assert "research_validate()" in skill and "layout_check()" in skill
+
+
+def test_a_capability_is_filed_by_who_it_is_for():
+    """Three homes, and the difference is who the tool is FOR.
+
+    A categorised tool is shared work and the next kind-of-work like this one
+    calls it. A tool bound to one task is part of that task's ANSWER and
+    belongs beside the solution it implements, where the reader who loads the
+    skill already is. Filing it at `tools/<task-slug>/` was the worst of both:
+    shelved with the shared tools, findable only by the one task, so the
+    catalogue grew without anything gaining a tool it could use.
+    """
+    import os
+    import tempfile
+
+    from phronix import capabilities
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        src = "def register(mcp):\n    return %r\n"
+        shared = capabilities.new("probe_run_subset", "run a subset",
+                                  source=src % "a", category="tests")
+        bound = capabilities.new("apply_mignotte_fix", "apply the fix",
+                                 source=src % "b", topic="sympy__sympy-19254")
+        neither = capabilities.new("probe_read_region", "read a region",
+                                   source=src % "c")
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    def where(result):
+        text = Path(result["file"]).as_posix()
+        return text[text.index("capabilities/"):]
+
+    assert where(shared) == "capabilities/tools/tests/probe_run_subset.py"
+    # Beside its solution, not shelved under tools/<task>/.
+    assert where(bound) == (
+        "capabilities/skills/sympy-sympy-19254/apply_mignotte_fix.py")
+    # Honest about not knowing, and still somewhere the filter can see.
+    assert where(neither) == "capabilities/tools/general/probe_read_region.py"
+
+
+def test_the_learner_writes_to_the_kind_of_work_not_to_itself():
+    """Measured across every run: the learner only ever wrote to its own skills.
+
+    `wrote lesson phronix-learning-capture` and `wrote lesson
+    phronix-learning-reconcile`, run after run, and not one capability in any
+    of them. Every lesson went into the description of the learner's own
+    method, where no task will look for it — the reader searching for how to
+    parse subprocess output does not search the learner.
+    """
+    skill = Path(
+        "src/phronix/.phronix/skills/phronix-learning-capture/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    # The target is the kind of work, and its own skills are named as wrong.
+    assert "phronix-learning-capture" in skill and "phronix-learning-reconcile" in skill
+    assert "The skill you were HANDED is not the skill you write to" in skill
+    # Creating the kind-of-work skill is the normal first case, not a fallback.
+    assert "an absent skill is the normal state" in skill
+
+    # And a tool it builds carries the category, which it is uniquely able to
+    # supply: the kind of work is exactly what it was handed.
+    assert 'category="<the kind of work you were handed>"' in skill
+    assert "capabilities/tools/tests/probe_" in skill
+
+
+def test_research_fills_the_research_tree_and_everything_else_fills_capabilities():
+    """Two trees, two writers, and the reader sees both.
+
+    `capabilities/` is what a task NEEDED: its solution, and the tools the
+    learner builds from what repeats across tasks. `research/` is what was
+    SEARCHED FOR, and a subject outlives the task that raised it — "how does
+    this project discover test files" is asked by every task in the repo, so
+    filing it under the first task to ask makes it findable by that one alone.
+
+    The tree is set by the HARNESS around the research stage, not inferred
+    from the skill's name: an agent picks the name, and no naming convention
+    has survived contact with one yet.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from phronix.layers import skill_dirs
+
+    root = tempfile.mkdtemp()
+    was = {k: os.environ.get(k) for k in
+           ("PHRONIX_PROJECT_ROOT", skills.SKILL_TREE_ENV)}
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        os.environ[skills.SKILL_TREE_ENV] = ""
+        skills.write_block("sympy-19254", "instruction", "Pad it", "b",
+                           description="the task's own answer")
+        os.environ[skills.SKILL_TREE_ENV] = "research"
+        skills.write_block("how-discovery-works", "instruction", "Walk it", "b",
+                           description="how this project discovers test files")
+        os.environ[skills.SKILL_TREE_ENV] = ""
+
+        assert (Path(root) / ".phronix" / "capabilities" / "skills"
+                / "sympy-19254" / "SKILL.md").is_file()
+        assert (Path(root) / ".phronix" / "research" / "skills"
+                / "how-discovery-works" / "SKILL.md").is_file()
+
+        # One lookup finds both: a reader must not have to know which tree a
+        # run happened to file a skill under.
+        found = skill_dirs()
+        assert "sympy-19254" in found
+        assert "how-discovery-works" in found
+    finally:
+        for key, value in was.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    # And the harness is what sets it, only around research.
+    arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert ('env["PHRONIX_SKILL_TREE"] = "research" if phase == "research" else ""'
+            in arms)

@@ -99,6 +99,9 @@ def _issues_for(root: Path, tree: str) -> List[Dict[str, str]]:
             skill_text = (solution / "SKILL.md").read_text(errors="replace")
         except OSError:
             skill_text = ""
+        # A `.py` beside the solution is that task's own fix, and belongs
+        # here: the reader who loads the skill already is. Only SHARED tools
+        # go to tools/<category>/.
         for helper in sorted(solution.glob("*.md")):
             if helper.name in ("SKILL.md", "LESSONS.md"):
                 continue
