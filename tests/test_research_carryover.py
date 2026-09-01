@@ -694,7 +694,9 @@ def test_sync_folds_a_session_into_the_common_folder(isolated_layers, monkeypatc
     assert result["synced"] == ["pylint-ignore"]
 
     common = isolated_layers["store"] / "research"
-    assert (common / "pylint-ignore.json").is_file()
+    # One directory per SUBJECT: the record sits beside the skill it produced,
+    # so a subject is one place rather than a file here and a skill elsewhere.
+    assert (common / "skills" / "pylint-ignore" / "record.json").is_file()
     assert (common / "sessions" / "run-alpha").is_dir()
 
     # A brand-new session with reuse now finds it via the common folder.
@@ -718,7 +720,8 @@ def test_sync_merges_rather_than_overwrites(isolated_layers, monkeypatch):
     research.sync_session("run-beta")
 
     common = json.loads(
-        (isolated_layers["store"] / "research" / "shared.json").read_text())
+        (isolated_layers["store"] / "research" / "skills" / "shared"
+         / "record.json").read_text())
     names = sorted(a["name"] for a in common["approaches"])
     assert names == ["approach-a", "approach-b"], names
 
@@ -739,9 +742,10 @@ def test_writes_never_land_outside_the_current_session(isolated_layers, monkeypa
     research.add_approach("shared", "approach-b", "does B", hypothesis="b")
 
     sessions = isolated_layers["store"] / "research" / "sessions"
-    alpha = json.loads((sessions / "run-alpha" / "shared.json").read_text())
+    alpha = json.loads(
+        (sessions / "run-alpha" / "skills" / "shared" / "record.json").read_text())
     assert [a["name"] for a in alpha["approaches"]] == ["approach-a"]
-    assert (sessions / "run-beta" / "shared.json").is_file()
+    assert (sessions / "run-beta" / "skills" / "shared" / "record.json").is_file()
 
 
 def test_reuse_is_the_default_and_fresh_is_explicit():
@@ -8809,3 +8813,59 @@ def test_a_repeated_phase_is_folded_once_with_a_count():
         "src/phronix/.phronix/skills/phronix-task-tracker/SKILL.md"
     ).read_text(encoding="utf-8")
     assert "Nothing appears twice" in skill
+
+
+def test_research_is_filed_by_subject_and_filtered_like_everything_else(
+        isolated_layers, monkeypatch):
+    """`research/` has the same shape as `capabilities/`, keyed differently.
+
+    A subject outlives the task that raised it — "how does this project
+    discover test files" is asked by every task in the repository — so filing
+    it under the first task to ask makes it findable by that one alone. The
+    record sits beside the skill it produced, so a subject is one directory
+    rather than a file here and a skill elsewhere.
+
+    And the isolation still holds: a fresh run sees none of it.
+    """
+    from phronix import research
+
+    _session(monkeypatch, "old-run")
+    research.add_approach("discover-files", "normalise-paths",
+                          "normalise before the check", hypothesis="paths differ")
+    research.sync_session("old-run")
+
+    common = isolated_layers["store"] / "research"
+    assert (common / "skills" / "discover-files" / "record.json").is_file()
+    # Never `research/record.json`: every subject's record shares a filename,
+    # so folding on the name alone would collapse a whole session into one
+    # file with each subject overwriting the last.
+    assert not (common / "record.json").exists()
+
+    # Fresh sees nothing; reuse sees the subject.
+    _session(monkeypatch, "new-run", reuse=False)
+    assert research.list_topics() == []
+    _session(monkeypatch, "new-run", reuse=True)
+    assert "discover-files" in research.list_topics()
+
+
+def test_a_record_written_by_an_older_run_is_still_read_and_still_written_to():
+    """The flat `<subject>.json` layout keeps working.
+
+    A research corpus is not worth invalidating over a directory name, and a
+    session that INHERITED a flat record has to keep writing to that file
+    rather than starting a second copy beside it under the new layout — two
+    records for one subject is the split-read failure, not a migration.
+    """
+    from phronix import research
+
+    source = Path("src/phronix/research.py").read_text(encoding="utf-8")
+    # Both readers and both writers go through the same candidate list.
+    assert "def _record_candidates(" in source
+    write = source[source.index("def _write_path("):]
+    write = write[:write.index("\ndef ", 10)]
+    assert "for candidate in _record_candidates(slug, root):" in write
+    assert "return candidate" in write
+
+    # And a flat glob would have stopped seeing anything, silently.
+    assert "def _records_under(" in source
+    assert 'found += sorted(root.glob("*.json"))' in source

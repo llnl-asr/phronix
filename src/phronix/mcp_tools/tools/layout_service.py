@@ -37,6 +37,16 @@ def _issues_for(root: Path, tree: str) -> List[Dict[str, str]]:
             # A loose file is the shape that defeats `--fresh`: the filter
             # keys on the directory, so anything at the top of the tree is
             # served to every from-scratch run for good.
+            # A flat `<subject>.json` is the pre-restructure record layout.
+            if tree == "research" and entry.suffix == ".json":
+                out.append({
+                    "path": f"{tree}/{name}",
+                    "problem": "a record loose at the top of the tree",
+                    "fix": f"move it to {tree}/{SOLUTION_DIR}/{entry.stem}/record.json "
+                           f"— one directory per subject, record beside the "
+                           f"skill it produced",
+                })
+                continue
             if entry.suffix == ".py":
                 out.append({
                     "path": f"{tree}/{name}",
@@ -46,6 +56,10 @@ def _issues_for(root: Path, tree: str) -> List[Dict[str, str]]:
                 })
             continue
         if name in (SOLUTION_DIR, TOOL_DIR, "sessions"):
+            continue
+        # `observations.jsonl` and its cursor are the always-on learner's
+        # INPUT, not filed content.
+        if tree == "research" and name in ("observations", "cursors"):
             continue
         out.append({
             "path": f"{tree}/{name}/",
@@ -57,10 +71,18 @@ def _issues_for(root: Path, tree: str) -> List[Dict[str, str]]:
     for solution in sorted((base / SOLUTION_DIR).glob("*")):
         if not solution.is_dir():
             continue
-        if not (solution / "SKILL.md").is_file():
+        # Under `research/` the RECORD is a legitimate artifact on its own:
+        # a subject can be investigated and written down before it has
+        # produced a skill. Under `capabilities/` it cannot — a task's
+        # solution is the skill.
+        has_record = (solution / "record.json").is_file()
+        if not (solution / "SKILL.md").is_file() and not (
+                tree == "research" and has_record):
             out.append({
                 "path": f"{tree}/{SOLUTION_DIR}/{solution.name}/",
-                "problem": "no SKILL.md, so no reader will find it",
+                "problem": ("nothing in it — no SKILL.md and no record"
+                            if tree == "research" else
+                            "no SKILL.md, so no reader will find it"),
                 "fix": "write the solution with skill_write; helper notes sit "
                        "beside it and are LINKED from SKILL.md",
             })

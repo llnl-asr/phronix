@@ -141,6 +141,74 @@ REUSE_ENV = "PHRONIX_RESEARCH_REUSE"
 #: Where per-session folders live, under the common research folder.
 SESSIONS_DIR = "sessions"
 
+#: One SUBJECT's research: `research/skills/<subject>/`.
+#:
+#: The same shape `capabilities/` uses, and for the same reason — but keyed on
+#: what was SEARCHED FOR rather than on the task at hand. A subject outlives
+#: the task that raised it: "how does this project discover test files" is
+#: asked by every task in the repository, and filing it under the first one to
+#: ask makes it findable by that one alone.
+#:
+#: The record lives beside the skill it produced rather than in a flat file
+#: elsewhere, so a subject is one directory: what was concluded, and the
+#: working record behind it.
+SOLUTION_DIR = "skills"
+
+#: Deterministic tools built while researching: `research/tools/<category>/`.
+TOOL_DIR = "tools"
+
+#: The record's filename inside a subject directory.
+RECORD_FILE = "record.json"
+
+
+def subject_home(slug: str, root: Path) -> Path:
+    """`<research>/skills/<subject>` — one subject's directory."""
+    return Path(root) / SOLUTION_DIR / slug
+
+
+def _records_under(root: Path) -> List[Path]:
+    """Every record under *root*, both layouts, current first.
+
+    A flat `root.glob("*.json")` stopped seeing anything the moment records
+    moved into `skills/<subject>/record.json`, and it would have stopped
+    silently — a reader that finds no records reports "nothing researched"
+    rather than an error, which is the same shape as a genuinely empty store.
+    """
+    found: List[Path] = []
+    subjects = root / SOLUTION_DIR
+    if subjects.is_dir():
+        try:
+            found += sorted(p / RECORD_FILE for p in subjects.iterdir()
+                            if (p / RECORD_FILE).is_file())
+        except OSError:
+            pass
+    try:
+        found += sorted(root.glob("*.json"))
+    except OSError:
+        pass
+    return found
+
+
+def _record_subject(path: Path) -> str:
+    """The subject a record belongs to, under either layout.
+
+    Named `_record_subject`, not `_subject_of`: this file already had a
+    `_subject_of(record, topic)` eight hundred lines down, and defining a
+    second one shadowed it — Python keeps the last definition, so every caller
+    of the original got a one-argument function and a TypeError.
+    """
+    return (path.parent.name if path.name == RECORD_FILE else path.stem)
+
+
+def _record_candidates(slug: str, root: Path) -> List[Path]:
+    """Where this subject's record may be, current layout first.
+
+    The flat `<root>/<slug>.json` is what every store written before the
+    restructure holds, and it is still read: a research corpus is not worth
+    invalidating over a directory name.
+    """
+    return [subject_home(slug, root) / RECORD_FILE, Path(root) / f"{slug}.json"]
+
 
 def _research_home() -> Path:
     """The common research folder: the shared, checked-in one."""
@@ -219,9 +287,9 @@ def _search_roots() -> List[Path]:
 def _find_record(slug: str) -> Optional[Path]:
     """The nearest existing file for this slug across the search roots."""
     for root in _search_roots():
-        candidate = root / f"{slug}.json"
-        if candidate.is_file():
-            return candidate
+        for candidate in _record_candidates(slug, root):
+            if candidate.is_file():
+                return candidate
     return None
 
 
@@ -237,7 +305,14 @@ def _record_path(topic: str) -> Path:
     bound = os.environ.get(TOPIC_ENV, "").strip()
     slug = _slug(bound or topic)
     existing = _find_record(slug)
-    return existing if existing is not None else _root() / f"{slug}.json"
+    if existing is not None:
+        return existing            # keep a record where it already is
+    # New records go to the current layout: one directory per subject.
+    # No mkdir here: computing a path is a READ, and creating the directory
+    # left an empty `research/skills/<subject>/` behind for every subject
+    # anything merely asked about — five of them in the packaged layer, which
+    # the layout check then reported as subjects with no content.
+    return subject_home(slug, _root()) / RECORD_FILE
 
 
 def _write_path(topic: str) -> Path:
@@ -253,7 +328,19 @@ def _write_path(topic: str) -> Path:
     leaving the source untouched.
     """
     bound = os.environ.get(TOPIC_ENV, "").strip()
-    return _root() / f"{_slug(bound or topic)}.json"
+    slug = _slug(bound or topic)
+    root = _root()
+    # An existing record stays where it is, whichever layout wrote it — a
+    # session that inherited a flat record must keep writing to that file, not
+    # start a second copy beside it under the new layout.
+    for candidate in _record_candidates(slug, root):
+        if candidate.is_file():
+            return candidate
+    # No mkdir here: computing a path is a READ, and creating the directory
+    # left an empty `research/skills/<subject>/` behind for every subject
+    # anything merely asked about — five of them in the packaged layer, which
+    # the layout check then reported as subjects with no content.
+    return subject_home(slug, root) / RECORD_FILE
 
 
 #: When set, every research call is bound to this topic regardless of the key
@@ -316,12 +403,9 @@ def resolve_topic(hint: str) -> str:
     candidates = []
     seen_stems = set()
     for root in _search_roots():
-        try:
-            paths = list(root.glob("*.json"))
-        except OSError:
-            continue
+        paths = _records_under(root)
         for path in paths:
-            stem = path.stem
+            stem = _record_subject(path)
             if stem in seen_stems:
                 continue
             seen_stems.add(stem)
@@ -368,6 +452,9 @@ def load(topic: str) -> Dict[str, Any]:
 
 def _save(record: Dict[str, Any]) -> Path:
     path = _write_path(record["topic"])
+    # The WRITE creates the directory, because a write is the only thing that
+    # should. The path builders no longer do.
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8")
     return path
@@ -2502,12 +2589,20 @@ def sync_session(session: str = "") -> Dict[str, Any]:
         return {"status": "empty", "session": name, "reason": "no such session"}
 
     synced: List[str] = []
-    for path in sorted(folder.glob("*.json")):
+    for path in _records_under(folder):
         try:
             incoming = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        target = home / path.name
+        # Folded into the SUBJECT's directory, never `home/record.json`.
+        #
+        # `home / path.name` was right when a record was `<slug>.json` and is
+        # catastrophic now: every subject's record is named `record.json`, so
+        # the whole session would fold into one file, each subject overwriting
+        # the last.
+        subject = _record_subject(path)
+        target = subject_home(subject, home) / RECORD_FILE
+        target.parent.mkdir(parents=True, exist_ok=True)
         record = incoming
         if target.is_file():
             try:
@@ -2517,7 +2612,7 @@ def sync_session(session: str = "") -> Dict[str, Any]:
                 record = incoming
         try:
             target.write_text(json.dumps(record, indent=2), encoding="utf-8")
-            synced.append(path.stem)
+            synced.append(subject)
         except OSError:
             continue
 
@@ -4008,8 +4103,5 @@ def list_topics() -> List[str]:
     """Every topic with a research record, by slug, across the search roots."""
     found = set()
     for root in _search_roots():
-        try:
-            found.update(p.stem for p in root.glob("*.json"))
-        except OSError:
-            continue
+        found.update(_record_subject(p) for p in _records_under(root))
     return sorted(found)
