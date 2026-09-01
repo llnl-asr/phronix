@@ -9167,3 +9167,34 @@ def test_the_inventory_counts_every_filed_directory_not_one_of_them(tmp_path):
     source = Path("tests/benchmark/isolation.py").read_text(encoding="utf-8")
     assert "for sub in FILED_SUBDIRS:" in source
     assert set(FILED_SUBDIRS) == {"skills", "tools", "tasks"}
+
+
+def test_a_pair_runs_both_halves_in_one_allocation():
+    """Two jobs cannot run a fresh/reuse pair honestly.
+
+    The reuse half must start from what the fresh half learned, so it has to
+    run after it — and a second job queues. On a contended queue that means
+    the halves land hours apart on different nodes, or the second never runs:
+    measured, a chained reuse job sat in DEPEND until its fresh half's
+    allocation expired, and a separately-submitted pair was cancelled before
+    the second half started, three times over.
+
+    One allocation, two ordered phases, the fleet deployed once and shared.
+    """
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+
+    assert "--pair)     PAIR=1; shift;;" in batch
+    # Ordered and not interchangeable: reuse reads what fresh promoted.
+    assert 'PHASES="fresh reuse"' in batch
+    assert "for phase in $PHASES; do" in batch
+    # The phase decides the flag, so the fresh half cannot inherit --reuse.
+    assert 'if [ "$phase" = "reuse" ]; then REUSE=1; else REUSE=""; fi' in batch
+    # Each phase gets its own run name, built from the ORIGINAL name — not
+    # from the previous phase's, which would compound.
+    assert "BASE_NAME=$NAME" in batch
+    assert 'NAME="${BASE_NAME}-${phase}"' in batch
+    # And the flag reaches the job that actually runs inside the allocation.
+    assert "${PAIR:+--pair}" in batch
+    # A reuse phase with no room measures nothing; the fresh result still
+    # counts, so the pair stops rather than starting a half it cannot finish.
+    assert "stopping after the $phase phase" in batch

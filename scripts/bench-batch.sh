@@ -22,7 +22,7 @@ PROJECT=/usr/WS2/haridev/phronix
 source "$PROJECT/scripts/bench-root.sh"
 PBENCH=$(bench_root)
 
-SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch
+SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch; PAIR=""
 SIZE=30; INDEX=1; PARALLEL=30; MODEL=""; NAME=""; SOURCE_LIST=""; HOSTED=""; REUSE=""; AFTER=""
 # Which cluster this batch is for. Everything that differs between them —
 # the fleet directory, the log root, the default model, the per-node shape —
@@ -57,12 +57,17 @@ while [ $# -gt 0 ]; do
     --hosted)   HOSTED=1; shift;;
     # Let the run READ what earlier runs learned, instead of starting clean.
     --reuse)    REUSE=1; shift;;
+    # Fresh then reuse, one allocation, in that order.
+    --pair)     PAIR=1; shift;;
     # Do not start until JOBID has finished, however it finished.
     --after)    AFTER="$2"; shift 2;;
     *) echo "unknown argument: $1" >&2; exit 2;;
   esac
 done
 NAME=${NAME:-bench-${SIZE}x${INDEX}}
+# Kept because `--pair` renames per phase, and the second phase must not build
+# its name from the first phase's name.
+BASE_NAME=$NAME
 
 # Per-cluster defaults. Read from the fleet's own env.sh rather than repeated
 # here, so a cluster that changes its paths changes them in one place.
@@ -118,7 +123,7 @@ if [ -n "$SUBMIT" ]; then
                  --model "$MODEL" --name "$NAME" --time "$WALL" \
                  --fleet "$FLEET" --fleet-nodes "$FLEET_NODES" \
                  ${SOURCE_LIST:+--source "$SOURCE_LIST"} \
-                 ${HOSTED:+--hosted} ${REUSE:+--reuse} \
+                 ${HOSTED:+--hosted} ${REUSE:+--reuse} ${PAIR:+--pair} \
                  2>&1 | tr -d '[:space:]')
     case "$job" in
       f*) echo "submitted $job   ($NODES nodes, $WALL, $QUEUE)"
@@ -250,6 +255,30 @@ seconds_of() {   # 90 | 90s | 30m | 2h | 1d -> seconds
 # carries forward everything earlier passes finished. A pass that dies costs
 # the tasks that were in flight during it, and nothing else.
 ATTEMPTS=${ATTEMPTS:-4}
+
+# `--pair` runs fresh and then reuse inside ONE allocation.
+#
+# Two jobs cannot do this honestly. The reuse half has to start from what the
+# fresh half learned, so it must run after it — and a second job queues, which
+# on a contended queue means the pair is hours apart on different nodes, or
+# the second never runs at all. Measured: a chained reuse job sat in DEPEND
+# until its fresh half's allocation expired, and a pair submitted separately
+# was cancelled before the second half started, three times over.
+#
+# One allocation, two phases, the fleet deployed once and shared. The phases
+# are ordered and not interchangeable: reuse reads what fresh promoted.
+PHASES="fresh"
+[ -n "$PAIR" ] && PHASES="fresh reuse"
+[ -z "$PAIR" ] && [ -n "$REUSE" ] && PHASES="reuse"
+
+for phase in $PHASES; do
+if [ -n "$PAIR" ]; then
+    say "=== phase: $phase ==="
+    # The phase decides the flag; the batch-level --reuse does not apply when
+    # pairing, or the fresh half would read what it is supposed to be without.
+    if [ "$phase" = "reuse" ]; then REUSE=1; else REUSE=""; fi
+    NAME="${BASE_NAME}-${phase}"
+fi
 pass=0
 while [ "$pass" -lt "$ATTEMPTS" ]; do
     pass=$((pass + 1))
@@ -320,6 +349,17 @@ while [ "$pass" -lt "$ATTEMPTS" ]; do
         say "less than 10m of the allocation left; not starting another pass"
         break
     fi
+done
+
+# Out of wall clock is a reason to skip the REUSE half rather than start it
+# with no room: a reuse phase cut off halfway measures nothing and the fresh
+# half's result is still worth having.
+limit_s=$(seconds_of "$WALL")
+if [ -n "$PAIR" ] && [ "${limit_s:-0}" -gt 0 ] &&
+   [ $(( STARTED + limit_s - 900 )) -lt "$(date +%s)" ]; then
+    say "less than 15m left; stopping after the $phase phase"
+    break
+fi
 done
 
 # Hold the allocation for the rest of its window.
