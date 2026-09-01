@@ -9054,3 +9054,21 @@ def test_research_fills_the_research_tree_and_everything_else_fills_capabilities
     arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
     assert ('env["PHRONIX_SKILL_TREE"] = "research" if phase == "research" else ""'
             in arms)
+
+
+def test_the_first_pass_of_a_batch_never_resumes_someone_elses_run():
+    """Resume is for a pass that lost a node, not for pass one.
+
+    On pass 1 there is nothing of ours to continue, and `auto` will happily
+    continue somebody ELSE's unfinished run. Measured: a fresh 5-task batch
+    picked up a cancelled run's five rows, skipped every task, and wrote a
+    report over results it had never measured — its trace held one line, and
+    the numbers looked entirely plausible.
+    """
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+    assert 'RESUME=()' in batch
+    assert '[ "$pass" -gt 1 ] && RESUME=(--resume auto)' in batch
+    # And no unconditional `--resume auto` survives on the run lines.
+    for line in batch.splitlines():
+        if "run-group.sh" in line or "--parallel" in line:
+            assert "--resume auto" not in line, line

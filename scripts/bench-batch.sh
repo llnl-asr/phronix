@@ -270,14 +270,24 @@ while [ "$pass" -lt "$ATTEMPTS" ]; do
     fi
 
     say "pass $pass/$ATTEMPTS: size=$SIZE index=$INDEX parallel=$PARALLEL on $(printf '%s' "$live" | tr ',' '\n' | grep -c .) node(s)"
+    # Resume only from pass 2 on, and only within THIS batch.
+    #
+    # Resume exists so a pass that lost a node does not pay again for the
+    # tasks already measured. On pass 1 there is nothing of ours to continue,
+    # and `auto` will happily continue somebody ELSE's unfinished run: a fresh
+    # 5-task batch picked up a cancelled run's five rows, skipped every task,
+    # and produced a report over results it had not measured. The trace held
+    # one line.
+    RESUME=()
+    [ "$pass" -gt 1 ] && RESUME=(--resume auto)
     if [ -n "$HOSTED" ]; then
         "$PROJECT/scripts/run-group.sh" "$INDEX" "" --subscription \
-            --parallel "$PARALLEL" --resume auto ${MODEL:+--model "$MODEL"} \
+            --parallel "$PARALLEL" "${RESUME[@]}" ${MODEL:+--model "$MODEL"} \
             ${REUSE:+--reuse} \
             --size "$SIZE" --nodes "$live" > "$rlog" 2>&1
     else
         "$PROJECT/scripts/run-group.sh" "$INDEX" "" --cluster "$CLUSTER_JSON" \
-            --parallel "$PARALLEL" --resume auto ${REUSE:+--reuse} \
+            --parallel "$PARALLEL" "${RESUME[@]}" ${REUSE:+--reuse} \
             --size "$SIZE" --nodes "$live" > "$rlog" 2>&1
     fi
     out=$(grep -E "^out " "$rlog" 2>/dev/null | awk '{print $3}')
