@@ -3668,7 +3668,9 @@ def test_a_restricted_agent_is_actually_denied_the_built_in_tools():
                            base_url="http://h:4000/v1", api_key="k")
     cmd = arm.agent_command("p", Path("/tmp"), [], agent="no-such-agent")
     denied = cmd[cmd.index("--disallowedTools") + 1].split(",")
-    assert sorted(denied) == ["Artifact", "RemoteTrigger"]
+    # The schema-breaking pair, plus the off-task reporter that lets an
+    # agent finish without a patch.
+    assert sorted(denied) == ["Artifact", "RemoteTrigger", "ReportFindings"]
     for kept in ("Edit", "Bash", "Write", "Read"):
         assert kept not in denied
 
