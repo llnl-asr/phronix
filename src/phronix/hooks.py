@@ -33,6 +33,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 HOOK_SCRIPT_NAME = "inject_context.py"
+
+#: The gate that refuses an edit until the task's skill has been read.
+GUARD_SCRIPT_NAME = "require_skill.py"
+
+#: Env var naming the skill an attempt must load before it may edit.
+REQUIRED_SKILL_ENV = "PHRONIX_REQUIRED_SKILL"
 OPENCODE_PLUGIN_NAME = "phronix-context.js"
 
 _HOOK_SCRIPT = '''#!/usr/bin/env python3
@@ -147,6 +153,7 @@ def install_hook_scripts(target_root: Path) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for relative, content, executable in (
         (Path(".claude") / "hooks" / HOOK_SCRIPT_NAME, _HOOK_SCRIPT, True),
+        (Path(".claude") / "hooks" / GUARD_SCRIPT_NAME, _GUARD_SCRIPT, True),
         (Path(".codex") / "hooks" / HOOK_SCRIPT_NAME, _HOOK_SCRIPT, True),
         (Path(".opencode") / "plugin" / OPENCODE_PLUGIN_NAME, _OPENCODE_PLUGIN, False),
     ):
@@ -168,6 +175,80 @@ def hook_script_installed(root: Path, harness: str = "claude") -> bool:
 # Claude Code — .claude/settings.json
 # ---------------------------------------------------------------------------
 
+
+#: Refuses the first edit until the task's own skill has been read.
+#:
+#: The store found the skill and handed it over on every single attempt, and
+#: the agent declined to open it in 8 of 14 — including on the task that had
+#: passed from that very skill in an earlier run. Retrieval was never the
+#: failure; reading was. A skill that is merely AVAILABLE competes with
+#: getting started, and getting started wins.
+#:
+#: So the edit is refused once, with the skill named. Refused, not injected:
+#: injecting the content would measure "does the answer help" instead of "can
+#: it use a store", and those are different experiments. One refusal, then it
+#: proceeds either way — a gate that can block a whole attempt is a gate that
+#: can lose one.
+_GUARD_SCRIPT = '''#!/usr/bin/env python3
+"""PreToolUse: do not edit before reading this task's skill."""
+import json
+import os
+import sys
+from pathlib import Path
+
+STATE = Path(os.environ.get("PHRONIX_GUARD_STATE", "")
+             or Path.home() / ".phronix-skill-guard")
+
+
+def main() -> int:
+    wanted = os.environ.get("PHRONIX_REQUIRED_SKILL", "").strip()
+    if not wanted:
+        return 0
+    try:
+        event = json.load(sys.stdin)
+    except Exception:
+        return 0
+    tool = str(event.get("tool_name") or "")
+
+    # Reading the skill satisfies the gate, however it was read.
+    blob = json.dumps(event.get("tool_input") or {})
+    if wanted in blob:
+        try:
+            STATE.write_text(wanted, encoding="utf-8")
+        except OSError:
+            pass
+        return 0
+
+    if tool not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        return 0
+    try:
+        if STATE.is_file() and STATE.read_text(encoding="utf-8").strip() == wanted:
+            return 0
+    except OSError:
+        return 0
+    # Fire once: mark satisfied so the next edit proceeds regardless.
+    try:
+        STATE.write_text(wanted, encoding="utf-8")
+    except OSError:
+        pass
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "Read the skill " + wanted + " before editing. It holds "
+                "what an earlier run established about this exact task, "
+                "including the patch that made the tests pass if one is "
+                "recorded. Call skill_load on it, then edit."),
+        }
+    }))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
 def render_claude_hook() -> Dict[str, Any]:
     return {
         "matcher": "",
@@ -180,12 +261,26 @@ def render_claude_hook() -> Dict[str, Any]:
     }
 
 
+def render_claude_guard() -> Dict[str, Any]:
+    """The PreToolUse entry that gates editing on having read the skill."""
+    return {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{
+            "type": "command",
+            "command": f"python3 .claude/hooks/{GUARD_SCRIPT_NAME}",
+            "statusMessage": "Checking the task's skill has been read...",
+            "timeout": 10,
+        }],
+    }
+
+
 def _is_ours(entry: Any) -> bool:
     """True for hook entries this module generated (matched on the script name)."""
     if not isinstance(entry, dict):
         return False
     return any(
         HOOK_SCRIPT_NAME in str(hook.get("command", ""))
+        or GUARD_SCRIPT_NAME in str(hook.get("command", ""))
         for hook in entry.get("hooks", []) if isinstance(hook, dict)
     )
 
@@ -225,6 +320,11 @@ def sync_claude_hooks(root: Path) -> str:
         return script_status
 
     hooks["UserPromptSubmit"] = others + [entry]
+    # And the PreToolUse gate, merged the same additive way: a project's own
+    # guards (an `rm` guard is the common one) must survive.
+    guard = render_claude_guard()
+    kept = [e for e in (hooks.get("PreToolUse") or []) if not _is_ours(e)]
+    hooks["PreToolUse"] = kept + [guard]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
     return "updated"

@@ -9907,3 +9907,68 @@ def test_a_block_title_never_carries_its_own_label():
 
     source = Path("src/phronix/skills.py").read_text(encoding="utf-8")
     assert 'title = re.sub(r"^\\s*[A-Z]{1,2}\\d+\\s*[—–-]\\s*"' in source
+
+
+def test_an_edit_is_refused_until_the_task_s_skill_has_been_read():
+    """Retrieval was never the failure; reading was.
+
+    The store found the skill and handed it over on every single attempt, and
+    the agent declined to open it in 8 of 14 — including on the task that had
+    PASSED from that very skill in an earlier run. A skill that is merely
+    available competes with getting started, and getting started wins.
+
+    Refused, not injected. Injecting the content would measure "does the
+    answer help" instead of "can it use a store", and those are different
+    experiments. And it fires ONCE: a gate that can block a whole attempt is
+    a gate that can lose one.
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+    import tempfile
+
+    from phronix import hooks
+
+    root = Path(tempfile.mkdtemp())
+    hooks.install_hook_scripts(root)
+    guard = root / ".claude" / "hooks" / hooks.GUARD_SCRIPT_NAME
+    assert guard.is_file()
+    state = root / "state"
+
+    def decide(payload, wanted="psf-requests-3362"):
+        env = dict(os.environ, PHRONIX_REQUIRED_SKILL=wanted,
+                   PHRONIX_GUARD_STATE=str(state))
+        run = subprocess.run([sys.executable, str(guard)],
+                             input=json.dumps(payload), capture_output=True,
+                             text=True, env=env)
+        assert run.returncode == 0, run.stderr
+        if not run.stdout.strip():
+            return "allow"
+        return json.loads(run.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+    edit = {"tool_name": "Edit", "tool_input": {"file_path": "x.py"}}
+
+    assert decide(edit) == "deny"
+    state.unlink(missing_ok=True)
+
+    # Reading it satisfies the gate, however it was read.
+    assert decide({"tool_name": "mcp__phronix__skill_load",
+                   "tool_input": {"name": "psf-requests-3362"}}) == "allow"
+    assert decide(edit) == "allow"
+    state.unlink(missing_ok=True)
+
+    # Nothing else is gated: a stage that is not editing must not be refused.
+    assert decide({"tool_name": "Bash", "tool_input": {"command": "ls"}}) == "allow"
+    state.unlink(missing_ok=True)
+    # No skill named — the bare arm, and research — is never gated.
+    assert decide(edit, wanted="") == "allow"
+    state.unlink(missing_ok=True)
+    # Fires once, then proceeds either way.
+    decide(edit)
+    assert decide(edit) == "allow"
+
+    # The harness names the skill, and only for the attempt.
+    arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert 'env["PHRONIX_REQUIRED_SKILL"] = (' in arms
+    assert 'if phase in ("", "attempt") else ""' in arms

@@ -2568,6 +2568,19 @@ class Arm:
                 self.research_topic(instance))
         except Exception:
             env["PHRONIX_TASK_SKILL"] = ""
+        # The gate: an ATTEMPT may not edit before reading the task's skill.
+        #
+        # The store found the skill and handed it over on every attempt, and
+        # the agent declined to open it in 8 of 14 — including on the task
+        # that had passed from that very skill an earlier run. Retrieval was
+        # never the failure; reading was, and a skill that is merely available
+        # competes with getting started.
+        #
+        # Only the attempt: research and the tracker are not editing the
+        # repository, and gating them would refuse a stage its own work.
+        env["PHRONIX_REQUIRED_SKILL"] = (
+            env["PHRONIX_TASK_SKILL"] if phase in ("", "attempt") else "")
+        env["PHRONIX_GUARD_STATE"] = str(Path(workdir) / ".skill-guard")
         # Which task's conversation the `conversation_*` tools serve.
         #
         # Set per stage rather than per run: the record is per task, and a

@@ -33,6 +33,8 @@ it.
 | `R1` | Rules | Diagnose the error, do not improve the area |
 | `R2` | Rules | Validate the record and the layout before you finish |
 | `R3` | Rules | A partial result is evidence twice; record both halves |
+| `R4` | Rules | A solution carries the fix; solution_check says whether yours does |
+
 
 
 
@@ -215,3 +217,13 @@ So say which part worked and which did not, by name. Not "the attempt failed" �
 This matters most for a task NOBODY has solved. A subject with no solution still has a shape: approaches that got partway, the exact point each one broke, and what a fix must not undo. Recording only failure throws that away and the next run rediscovers it at full price — and a later attempt, told the task failed, rewrites the code that was already correct.
 
 The harness writes the measured half of this into the skill after every verdict. Your job is the part it cannot measure: WHY the failing half fails, and which approaches are now ruled out.
+
+### R4 — A solution carries the fix; solution_check says whether yours does
+
+Call `solution_check(skill=...)` on the skill you just wrote, and act on what it returns.
+
+It asks the one question the other checks do not: does the solution CARRY the fix, or only describe one? `layout_check` says it is filed correctly and `research_validate` says the record is usable; a skill can pass both and still be a hint.
+
+Measured across five tasks: the one skill holding a real diff is the one task that passes in every reuse run. The four holding prose produce a different result each time — `psf-requests-3362` recorded "replace iter_content with iter_lines", passed, and then failed the next run because a description has to be re-derived and re-derivation is a coin flip.
+
+It also catches a block title carrying its own label (which creates a duplicate the merge cannot see), two blocks making one point, a placeholder left beside real content, and a description too thin to retrieve on.
