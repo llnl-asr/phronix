@@ -9179,7 +9179,12 @@ class ClaudeArm(OpenCodeArm):
         sending `Artifact` and `RemoteTrigger` — and since the server rejects the
         WHOLE request when they are present, that arm failed every call.
         """
-        denied = list(self.SCHEMA_BREAKING_TOOLS)
+        # Denied for EVERY agent, restricted or not.
+        #
+        # The unrestricted solve agent is the one that reached for
+        # `ReportFindings` and produced a review instead of a patch, so
+        # scoping this to restricted agents would miss the case it exists for.
+        denied = list(self.SCHEMA_BREAKING_TOOLS) + list(self.OFF_TASK_TOOLS)
         if agent:
             wanted = self._agent_spec(agent).get("tools") or []
             if wanted:
@@ -9194,6 +9199,22 @@ class ClaudeArm(OpenCodeArm):
     # have used them. Measured by replaying a captured request: 100 tools
     # failed, the same 100 without these two succeeded, and each failed alone.
     SCHEMA_BREAKING_TOOLS = ("Artifact", "RemoteTrigger")
+
+    #: Tools that answer a DIFFERENT question than "fix this bug".
+    #
+    # `ReportFindings` is the code-review reporter: it takes a list of defects
+    # and returns them. An agent told to fix a bug reaches for it, reports
+    # what it found, and stops — having produced a review instead of a patch,
+    # and having satisfied itself that it finished.
+    #
+    # Measured on a whole run: all five tasks called `ReportFindings` on try 1
+    # and made ZERO edits between them. `git diff` in every checkout was
+    # empty, and the harness recorded "agent produced no patch" five times —
+    # which reads as a model that could not solve the task, when what happened
+    # is that it answered a question nobody asked. This is a benchmark that
+    # scores a diff; a tool whose output is a report is a way to finish
+    # without writing one.
+    OFF_TASK_TOOLS = ("ReportFindings",)
 
     #: The built-in tools a restricted agent has to be denied by name.
     #

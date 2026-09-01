@@ -10069,3 +10069,33 @@ def test_the_skill_is_repaired_before_it_is_promoted():
     # A repair that cannot run never costs the task its promotion.
     window = source[source.index("repair_skill(home)"):]
     assert "except Exception as exc:" in window[:600]
+
+
+def test_the_code_review_reporter_is_denied_to_every_agent():
+    """A tool whose output is a report is a way to finish without a patch.
+
+    `ReportFindings` takes a list of defects and returns them. An agent told
+    to fix a bug reaches for it, reports what it found, and stops — having
+    answered a question nobody asked, and having satisfied itself that it
+    finished.
+
+    Measured on a whole run: all five tasks called `ReportFindings` on try 1
+    and made ZERO edits between them. `git diff` was empty in every checkout
+    and the harness recorded "agent produced no patch" five times, which reads
+    as a model that could not solve the task. It is a benchmark that scores a
+    diff; nothing that finishes without one should be reachable.
+    """
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    arm = Arm.__new__(Arm)
+    assert Arm.OFF_TASK_TOOLS == ("ReportFindings",)
+
+    # The UNRESTRICTED solve agent is the one that reached for it, so scoping
+    # this to restricted agents would miss the case it exists for.
+    plain = Arm._denial_flags(arm, "")[1]
+    assert "ReportFindings" in plain
+
+    # And still denied alongside the schema-breaking ones, in ONE flag —
+    # Claude Code keeps only the last `--disallowedTools`.
+    assert "Artifact" in plain and "RemoteTrigger" in plain
+    assert Arm._denial_flags(arm, "").count("--disallowedTools") == 1
