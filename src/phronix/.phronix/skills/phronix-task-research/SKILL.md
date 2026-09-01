@@ -31,6 +31,8 @@ it.
 | `I8` | Instructions | Retrieve the conversation a turn at a time; never read it whole |
 | `I9` | Instructions | Check the layout before you finish, and link the tracker history |
 | `R1` | Rules | Diagnose the error, do not improve the area |
+| `R2` | Rules | Validate the record and the layout before you finish |
+
 
 
 
@@ -191,3 +193,13 @@ is already established.
 If the correct fix genuinely requires restructuring, say so and say why the
 narrow fix cannot work — that claim is checkable, and "it would be cleaner" is
 not a reason the tests can read.
+
+### R2 — Validate the record and the layout before you finish
+
+Two checks, both cheap, both before you report:
+
+`research_validate()` — is the record one a later run can ACT on? It arrives asking what was tried, what happened and what is still open, and can only answer from what is written down. The check catches an approach with no hypothesis (nothing it showed can mean anything, because nothing could have falsified it), a metric with no measurement (a prediction being read as a result), a verdict with nothing behind it, a chosen approach that is not in the record, and a deterministic plan step with no capability.
+
+`layout_check()` — is it filed where the next run will find it?
+
+Both return an `issues` list where every entry names the move that fixes it. Act on them and call again. A record that fails either has cost its whole price and bought nothing: the write succeeded, and the next run finds nothing it can use.

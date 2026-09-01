@@ -8869,3 +8869,57 @@ def test_a_record_written_by_an_older_run_is_still_read_and_still_written_to():
     # And a flat glob would have stopped seeing anything, silently.
     assert "def _records_under(" in source
     assert 'found += sorted(root.glob("*.json"))' in source
+
+
+def test_the_research_record_is_validated_against_what_a_later_run_needs():
+    """A record is not a diary; it is read by the next attempt on this subject.
+
+    Every field checked here exists because its absence cost something. A
+    metric with no `measurement` is a prediction being read as a result —
+    measured live, two runs of one task, one asserting 1.0 for an approach it
+    never ran. An approach with no `hypothesis` cannot be falsified, so
+    nothing it "showed" counts. A `chosen` that is not in `approaches` is a
+    plan pointing at nothing.
+    """
+    from phronix.mcp_tools.tools.schema_service import _check
+
+    bad = {
+        "topic": "t", "slug": "t",
+        "approaches": [
+            {"name": "a", "summary": "s"},
+            {"name": "a", "summary": "s", "hypothesis": "h",
+             "metrics": {"correctness": 1.0}},
+            {"name": "c", "summary": "s", "hypothesis": "h",
+             "status": "confirmed"},
+        ],
+        "plan": [{"kind": "deterministic", "title": "do it"},
+                 {"kind": "judgement"}],
+        "chosen": "not-there",
+    }
+    issues = _check(bad)
+    problems = {(i["where"], i["problem"]) for i in issues}
+    assert ("approaches[a]", "no `hypothesis`") in problems
+    assert ("approaches[a]", "two approaches share a name") in problems
+    assert ("approaches[a]", "has metrics but no `measurement`") in problems
+    assert ("approaches[c]", "status `confirmed` with nothing behind it") in problems
+    assert ("chosen", "`not-there` is not one of the approaches") in problems
+    assert ("fom", "no figure of merit") in problems
+    assert ("plan[0]", "a deterministic step with no capability") in problems
+    # Every issue names a MOVE, or it is a complaint rather than a check.
+    assert all(i["fix"] for i in issues)
+
+    # A complete record raises nothing, or the check is noise and gets ignored.
+    good = {
+        "topic": "t", "slug": "t",
+        "approaches": [{"name": "a", "summary": "s", "hypothesis": "h",
+                        "metrics": {"c": 1.0}, "measurement": "ran the suite"}],
+        "plan": [{"kind": "deterministic", "title": "x", "capability": "probe_x"}],
+        "chosen": "a", "fom": {"metric": "c"},
+    }
+    assert _check(good) == []
+
+    # And research is told to run both checks before it finishes.
+    skill = Path(
+        "src/phronix/.phronix/skills/phronix-task-research/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "research_validate()" in skill and "layout_check()" in skill
