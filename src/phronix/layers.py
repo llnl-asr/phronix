@@ -103,8 +103,22 @@ class Layer:
 # Locating each layer
 # ---------------------------------------------------------------------------
 
+#: Overrides the packaged store's location. For TESTS.
+#:
+#: The bundled layer is read by every lookup, and once a run's learning lives
+#: in it — which is the point of keeping it under the package — a test that
+#: writes a skill to a temp store still finds the packaged one and asserts
+#: against it. Measured: eight tests failed that way the moment 856 files
+#: landed in the package, all of them passing on an empty store and all of
+#: them testing nothing.
+BUNDLED_ROOT_ENV = "PHRONIX_BUNDLED_ROOT"
+
+
 def bundled_root() -> Path:
     """``<package>/.phronix`` — the knowledge that ships inside the wheel."""
+    override = os.environ.get(BUNDLED_ROOT_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
     return Path(__file__).resolve().parent / ".phronix"
 
 
@@ -241,7 +255,31 @@ def layers(start: Optional[Path] = None, include_missing: bool = False) -> List[
         found.append(project)
     if include_missing:
         return found
-    return [layer for layer in found if layer.exists()]
+    found = [layer for layer in found if layer.exists()]
+
+    # One layer per PHYSICAL directory.
+    #
+    # The project store is a symlink into the package — that is what makes a
+    # finding survive a clone instead of living as long as one checkout — so
+    # `project` and `bundled` resolve to the same path. Returned twice, every
+    # reader walks the same store twice: the same skill is found under two
+    # layer names, merged with itself, and counted twice by anything counting.
+    # Measured after the store moved into the package: the test suite went
+    # from 27s to 7m21s, most of it re-reading files it had just read.
+    #
+    # The FIRST wins, so precedence is untouched: `bundled` is lowest and a
+    # real project layer that is not the package still overrides it.
+    seen, unique = set(), []
+    for layer in found:
+        try:
+            key = str(Path(layer.root).resolve())
+        except OSError:
+            key = str(layer.root)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(layer)
+    return unique
 
 
 def get_layer(name: str, start: Optional[Path] = None) -> Layer:

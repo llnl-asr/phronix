@@ -1,0 +1,65 @@
+{
+  "achieved": null,
+  "approaches": [
+    {
+      "at": 1787113419.2746212,
+      "attempts": 3,
+      "metrics": {},
+      "name": "(no files changed)",
+      "source": "benchmark attempt",
+      "summary": "attempted by editing (no files changed)",
+      "tools": []
+    }
+  ],
+  "attempts_log": [
+    {
+      "at": 1787113419.2746105,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    },
+    {
+      "at": 1787113441.600434,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    },
+    {
+      "at": 1787113464.1418142,
+      "fom_value": null,
+      "locations": [],
+      "note": "agent produced no patch",
+      "resolved": false
+    }
+  ],
+  "chosen": null,
+  "fom": null,
+  "plan": [],
+  "score_history": [
+    {
+      "approach": null,
+      "at": 1787113406.6643,
+      "best": null,
+      "measured_approaches": 0,
+      "pass": 1
+    },
+    {
+      "approach": null,
+      "at": 1787113428.8841364,
+      "best": null,
+      "measured_approaches": 0,
+      "pass": 2
+    },
+    {
+      "approach": null,
+      "at": 1787113451.1191764,
+      "best": null,
+      "measured_approaches": 0,
+      "pass": 3
+    }
+  ],
+  "slug": "pallets-flask-5063",
+  "topic": "pallets__flask-5063"
+}

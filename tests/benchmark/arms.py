@@ -3037,17 +3037,17 @@ try something else unless you have a specific reason it was wrong.
         """
         if not skill:
             return None
-        try:
-            from phronix import skills as skills_module
-
-            home = skills_module.existing_home(skill)
-        except Exception:
-            home = None
+        # Searched in THIS RUN'S store, never through the layers.
+        #
+        # `existing_home` resolves against the layers of whoever calls it, and
+        # the runner's layers are the checkout's — so this found the developer's
+        # own copy of the skill and handed a run someone else's lessons. Fourth
+        # place that mistake was made, after `_skill_has_content`,
+        # `retire_placeholder` and `record_partial_progress`.
+        home = ClaudePhronixArm._skill_home_in(store_root, skill)
         candidates = []
         if home is not None:
             candidates.append(Path(home) / "LESSONS.md")
-        candidates += list(Path(store_root).glob(f"*/*/{skill}/LESSONS.md"))
-        candidates += list(Path(store_root).glob(f"*/*/*/{skill}/LESSONS.md"))
         for path in candidates:
             try:
                 if path.is_file() and len(path.read_text(errors="replace").strip()) > 200:

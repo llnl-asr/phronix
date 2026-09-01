@@ -33,7 +33,8 @@ def test_bundled_skills_visible_without_a_project(tmp_path, monkeypatch):
     assert layers.which_layer(found["phronix-self-learning"]) == "bundled"
 
 
-def test_common_sections_returned_per_layer_not_merged_here(isolated_layers):
+def test_common_sections_returned_per_layer_not_merged_here(isolated_layers,
+                                                          real_bundled_layer):
     """Shared sections merge key-by-key, so every layer's file must be returned.
 
     Returning only the winner would silently drop the bundled library the moment
@@ -130,7 +131,7 @@ def test_describe_reports_absent_layers(isolated_layers):
     assert names == ["bundled", "user", "project"]
 
 
-def test_the_shipped_store_links_into_a_project():
+def test_the_shipped_store_links_into_a_project(real_bundled_layer):
     """`<package>/.phronix` is the store; a project gets a link, not a copy.
 
     A copy is stale the moment anything is written to either side, and two

@@ -6033,7 +6033,8 @@ def test_the_ways_fan_out_runs_on_whatever_produced_the_steps():
     assert "method = self._in_store(store_root, self._load_aspects, topic)" in between
 
 
-def test_a_run_cannot_write_into_the_frameworks_own_layer(tmp_path, monkeypatch):
+def test_a_run_cannot_write_into_the_frameworks_own_layer(tmp_path, monkeypatch,
+                                                          real_bundled_layer):
     """`--fresh` means nothing if a run can edit the skeleton later runs seed from.
 
     Redirecting the project and user layers is not enough. phronix is installed

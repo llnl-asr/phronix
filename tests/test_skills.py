@@ -386,7 +386,8 @@ class TestInstall:
         assert (theirs / "SKILL.md").read_text() == "the user's own skill"
         assert (project / ".claude" / "skills" / "phronix-phronix-privacy").is_symlink()
 
-    def test_a_stale_link_is_repointed_when_a_higher_layer_shadows(self, isolated_layers):
+    def test_a_stale_link_is_repointed_when_a_higher_layer_shadows(
+            self, isolated_layers, real_bundled_layer):
         project = isolated_layers["project"]
         skills.install_skills(target_root=project)
         link = project / ".claude" / "skills" / "phronix-privacy"
