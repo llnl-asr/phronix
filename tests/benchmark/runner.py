@@ -2559,6 +2559,9 @@ class Runner:
         previous_verdict: Optional[Dict[str, Any]] = None
 
         attempt_index = 0
+        #: Consecutive runner failures this task has survived. A second one
+        #: aborts: one is plausibly the patch, two is the environment.
+        runner_failures = 0
         while attempt_index < ceiling + earned:
             attempt_index += 1
             attempt = Attempt(index=attempt_index)
@@ -2808,6 +2811,34 @@ class Runner:
                             f"the patch broke {blamed} — the suite could not be "
                             f"imported, so this is a failed attempt and not a "
                             f"harness fault; retrying")
+                elif (_patch_text(workdir / f"attempt-{attempt_index}").strip()
+                      and runner_failures < 1):
+                    # A patch exists and the traceback blames something else.
+                    #
+                    # The blame check reads the file the traceback NAMES, and
+                    # an import-time break shows up in the importer rather
+                    # than in the patched module: astropy-14182 patched
+                    # `io/ascii/rst.py`, collection died in
+                    # `io/ascii/tests/test_rst.py` with `'NoneType' object has
+                    # no attribute 'index'`, and the blame check — correctly,
+                    # on its own terms — said the agent never touched that
+                    # file. The task was thrown away after one try, 42 steps
+                    # and $2.53, with the retry budget untouched.
+                    #
+                    # One more try, not the whole ceiling. The protection this
+                    # guards is real: sympy-24066 spent three attempts against
+                    # a suite that could not execute and produced three
+                    # byte-identical diffs. A second consecutive runner
+                    # failure still aborts, so that costs one extra attempt
+                    # instead of a whole task.
+                    runner_failures += 1
+                    if tracer:
+                        tracer.event(
+                            "runner-failed",
+                            f"the suite did not run and the traceback blames "
+                            f"no patched file — but this attempt DID produce a "
+                            f"patch, so it gets one more try before the task "
+                            f"is written off")
                 else:
                     result.stopped_early = (
                         f"the test runner never started, so no attempt at this "

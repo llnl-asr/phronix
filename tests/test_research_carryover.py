@@ -9703,3 +9703,41 @@ def test_the_placeholder_is_retired_in_the_store_the_run_actually_writes():
 
     source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
     assert "home = self._skill_home_in(store_root, skill)" in source
+
+
+def test_a_runner_failure_with_a_patch_gets_one_more_try():
+    """The blame check reads the file the traceback NAMES.
+
+    An import-time break shows up in the importer, not in the patched module.
+    astropy-14182 patched `io/ascii/rst.py`; collection died in
+    `io/ascii/tests/test_rst.py` with `'NoneType' object has no attribute
+    'index'`; and the blame check — correctly, on its own terms — said the
+    agent never touched that file. The task was written off after one try,
+    42 steps and $2.53, with its retry budget untouched.
+
+    One more try, not the whole ceiling. The protection being relaxed is real:
+    sympy-24066 spent three attempts against a suite that could not execute
+    and produced three byte-identical diffs. A second consecutive runner
+    failure still aborts, so the relaxation costs one attempt, not a task.
+    """
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+
+    # Counted per task, and a second failure still aborts.
+    assert "runner_failures = 0" in source
+    assert "runner_failures < 1" in source
+    assert "runner_failures += 1" in source
+
+    # Only when the attempt actually produced a patch: an empty attempt
+    # against a dead suite is the case the abort exists for.
+    guard = source[source.index("elif (_patch_text(workdir"):]
+    guard = guard[:guard.index("else:", 10)]
+    assert '_patch_text(workdir / f"attempt-{attempt_index}").strip()' in guard
+
+    # The abort is still reachable, and still says why.
+    assert "the test runner never started, so no attempt at this" in source
+    assert 'tracer.event("ABORT", result.stopped_early)' in source
+
+    # Order: the self-inflicted branch is tried FIRST, since a patch that
+    # broke a file it touched is the clearest failed attempt there is.
+    assert source.index("attempt.verdict[\"broke_testbed\"] = blamed") < source.index(
+        "runner_failures += 1")
