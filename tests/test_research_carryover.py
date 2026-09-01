@@ -10150,3 +10150,35 @@ def test_an_attempt_that_described_a_change_is_asked_to_make_it():
     # Every arm accepts it, so the baseline is treated identically.
     arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
     assert arms.count("extra_prompt: str = \"\"") == 3
+
+
+def test_the_packaged_store_is_git_tracked():
+    """`.phronix` unanchored ignores the store that ships in the wheel.
+
+    Without a leading slash the pattern matches `.phronix` at ANY depth, so
+    `src/phronix/.phronix/` was ignored along with the repo-root scratch
+    layer — and every skill and record promoted into it was invisible to git.
+    The comment directly above the pattern said the opposite, and was believed
+    for a whole session: `git status` stayed clean while eight files
+    accumulated on disk.
+
+    The point of keeping the store under the package is that a finding
+    survives a clone. Ignored, it survives exactly as long as one checkout,
+    which is the failure the layout was chosen to prevent.
+    """
+    import subprocess
+
+    text = Path(".gitignore").read_text(encoding="utf-8")
+    # Anchored to the repo root, not floating.
+    assert "\n/.phronix\n" in text
+    assert "\n.phronix\n" not in text
+
+    # And the packaged store is genuinely visible to git.
+    for tree in ("capabilities", "research"):
+        path = f"src/phronix/.phronix/{tree}"
+        if not Path(path).is_dir():
+            continue
+        ignored = subprocess.run(
+            ["git", "check-ignore", path],
+            capture_output=True, text=True).returncode
+        assert ignored != 0, f"{path} is ignored by git"

@@ -63,4 +63,12 @@ logs/
 #
 # (It used to be a symlink into `src/phronix/.phronix/learned/`. That directory
 # was never read by any layer — `CONTENT_DIRS` has no such kind — and is gone.)
-.phronix
+#
+# ANCHORED. Without the leading slash this matches `.phronix` at any depth, so
+# `src/phronix/.phronix/` — the store that ships in the wheel — was ignored
+# too, and every skill and record a run promoted into it was invisible to git.
+# The comment above said the opposite and was believed for a whole session.
+/.phronix
+
+# Lock files are per-process state, not content.
+*.lock
