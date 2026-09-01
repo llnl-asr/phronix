@@ -288,7 +288,10 @@ fi
 # `carry_root` is set, so `--reuse` alone left the store as bare as `--fresh`
 # and every reuse measurement came back zero. The two flags are one decision,
 # so they are made in one place.
-CARRY=(--no-carry)
+# Every run WRITES what it learned to the same place; only a reuse run READS
+# it. A fresh run that contributed nothing left the reuse run after it with
+# only what days-old runs had happened to leave behind.
+CARRY=(--no-carry --promote-root "$PBENCH/carry/.phronix")
 for arg in "${EXTRA[@]}"; do
   if [ "$arg" = "--reuse" ]; then
     CARRY=(--carry-root "$PBENCH/carry/.phronix")
@@ -296,6 +299,7 @@ for arg in "${EXTRA[@]}"; do
     break
   fi
 done
+echo "promote : $PBENCH/carry/.phronix (where this run writes what it learns)"
 CMD=("$PROJECT/scripts/run-benchmark.sh" --tasks "$FILE"
      --parallel-tasks "$PARALLEL" "${CARRY[@]}")
 # A spend ceiling is for hosted models. On the local cluster the dollar figure

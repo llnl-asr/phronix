@@ -102,6 +102,19 @@ class RunConfig:
     #: Empty disables carry-over entirely and every run starts from the bundled
     #: skeleton, which is what makes a run comparable to published numbers.
     carry_root: str = ""
+    #: Where this run WRITES what it learned, whatever its mode.
+    #
+    # Separate from `carry_root` because writing and reading are different
+    # questions. `carry_root` is the read path and is empty for `--fresh`, so
+    # gating promotion on it meant a from-scratch run contributed nothing —
+    # and a fresh run's research is exactly what the reuse run after it needs.
+    # Measured on the 5-task pair: the fresh half learned 10 answers and none
+    # reached the carry root, so the reuse half would have inherited only what
+    # runs from days earlier had left.
+    #
+    # Always promoted, never discoverable under `--fresh`: this is the write,
+    # and `capabilities.visible_files` is the filter that decides who reads it.
+    promote_root: str = ""
     #: Stop starting tasks once this many dollars have been charged. 0 = no cap.
     #
     # A cap on spend, not on tasks: one task here cost $2.34 with three tries
@@ -2043,7 +2056,11 @@ class Runner:
         price and contributed nothing.
         """
         session = self.config.research_session
-        if not session or not self.config.carry_root:
+        # Gated on the WRITE path, not the read one. A fresh run has no carry
+        # root and still has research worth folding — that is the whole point
+        # of a fresh half followed by a reuse half.
+        if not session or not (self.config.promote_root
+                               or self.config.carry_root):
             return
 
         import os
@@ -2072,7 +2089,8 @@ class Runner:
             # common folder up as it already does for skills.
             os.environ["PHRONIX_PROJECT_ROOT"] = str(
                 store_root if store_root is not None
-                else Path(self.config.carry_root).parent)
+                else Path(self.config.promote_root
+                          or self.config.carry_root).parent)
             os.environ["PHRONIX_RESEARCH_SESSION"] = session
             result = research.sync_session(session)
             if result.get("synced") and not quiet:
@@ -2974,7 +2992,8 @@ class Runner:
             # five it had not started. The bare arm ran to completion beside it,
             # so the run produced a report showing one arm at 1/6 and the other
             # at 0/6, which reads as a result rather than as a crash.
-            if self.config.carry_root:
+            promote_into = self.config.promote_root or self.config.carry_root
+            if promote_into:
                 # Fold FIRST, then promote. The order is load-bearing.
                 #
                 # `promote_store` skips `research/sessions/` by design, on the
@@ -3033,13 +3052,12 @@ class Runner:
                     if tracer:
                         tracer.event("promote-failed", f"source tree: {exc}"[:200])
                 try:
-                    promoted = promote_store(store_root,
-                                             Path(self.config.carry_root))
+                    promoted = promote_store(store_root, Path(promote_into))
                     result.promoted = promoted["promoted"]
                     if promoted["promoted"] and tracer:
                         tracer.event("promoted",
                                      f"{len(promoted['promoted'])} file(s) into "
-                                     f"{self.config.carry_root}")
+                                     f"{promote_into}")
                 except Exception as exc:
                     if tracer:
                         tracer.event("promote-failed", str(exc)[:200])

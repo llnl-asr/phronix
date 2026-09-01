@@ -589,6 +589,25 @@ def _differs_from_bundled(path: Path, store_root: Path) -> bool:
 #: is what made "always keep it" and "start clean" look incompatible.
 SOURCE_DIRS = ("capabilities", "research")
 
+#: Where a promoted capability is filed so the `--fresh` filter can see it.
+TASK_CAPABILITY_SUBDIR = "tasks"
+
+#: Where a capability goes when the run did not file it under a task itself.
+UNATTRIBUTED_SLUG = "unattributed"
+
+
+def _promotion_slug(store_root: Path, path: Path) -> str:
+    """Which task directory a loose capability should be filed under.
+
+    A run that filed its own work correctly never reaches here. This is for
+    the loose ones, and the honest answer for those is that provenance was not
+    recorded — so they are filed together under one name rather than guessed
+    into somebody's task, where a wrong guess would hand one task another
+    task's answer.
+    """
+    return UNATTRIBUTED_SLUG
+
+
 
 #: The two sections a task skill accumulates knowledge in.
 #:
@@ -814,6 +833,23 @@ def promote_to_source(store_root: Path) -> Dict[str, Any]:
             if not path.is_file():
                 continue
             relative = path.relative_to(store_root)
+            # A promoted capability ALWAYS lands under `tasks/`, never loose.
+            #
+            # `--fresh` is a read filter and it keys on the directory:
+            # `visible_files` hides a bundled capability only when its path
+            # contains `tasks/`. So a capability promoted loose into
+            # `capabilities/` is served to every from-scratch run for good.
+            # Measured: 195 promoted this way sat at the top of the packaged
+            # layer, among them `probe_fix_max_to_sum_powers_filter`, which
+            # applies one benchmark task's fix outright — a from-scratch run
+            # was being handed answers.
+            #
+            # Always promoted, never discoverable under `--fresh`: the write
+            # is unconditional and the filter decides who reads it. Filing it
+            # where the filter can see it is what makes both true at once.
+            if kind == "capabilities" and TASK_CAPABILITY_SUBDIR not in relative.parts:
+                relative = Path(kind) / TASK_CAPABILITY_SUBDIR / _promotion_slug(
+                    store_root, path) / relative.relative_to(kind)
             target = destination / relative
             # Never overwrite what the framework ships. A run adds to the
             # source tree; it does not edit it.

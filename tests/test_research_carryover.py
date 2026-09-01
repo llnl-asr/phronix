@@ -8573,3 +8573,61 @@ def test_the_session_registry_separates_fresh_from_reuse(tmp_path, monkeypatch):
     assert "a-thing-this-run-wrote" in names
     # The earlier run's answer is filtered: this is what --fresh means.
     assert "apply_mignotte_fix" not in names
+
+
+def test_a_fresh_run_writes_what_it_learned_even_though_it_reads_nothing():
+    """Always promoted, never discoverable under `--fresh`.
+
+    Writing and reading are different questions, and conflating them cost the
+    fresh/reuse pair its meaning. `--fresh` and `--no-carry` both empty
+    `carry_root`, promotion was gated on `carry_root`, so a from-scratch run
+    contributed nothing to the runs after it. Measured on the 5-task pair: the
+    fresh half learned 10 answers, none reached the carry root, and the reuse
+    half would have inherited only what runs from days earlier left behind.
+
+    So the write is unconditional, and the read filter decides who sees it.
+    """
+    from tests.benchmark.runner import RunConfig
+
+    fresh = RunConfig(tasks=["a"], fresh=True, carry_root="",
+                      promote_root="/carry/.phronix")
+    # Reads nothing...
+    assert fresh.carry_root == ""
+    # ...writes anyway.
+    assert fresh.promote_root == "/carry/.phronix"
+
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    # The promotion block keys on the write path, not the read path.
+    assert "promote_into = self.config.promote_root or self.config.carry_root" in source
+    assert "if promote_into:" in source
+    assert "promote_store(store_root, Path(promote_into))" in source
+    # Seeding still keys on the READ path, or --fresh would stop meaning
+    # anything at all.
+    assert "seed_store(store_root, Path(self.config.carry_root))" in source
+
+
+def test_a_promoted_capability_is_always_filed_where_fresh_can_hide_it():
+    """`--fresh` filters on the directory, so a loose promotion defeats it.
+
+    `visible_files` hides a bundled capability only when its path contains
+    `tasks/`. A capability promoted loose into `capabilities/` is therefore
+    served to every from-scratch run for good. Measured: 195 sat at the top of
+    the packaged layer, `probe_fix_max_to_sum_powers_filter` among them, which
+    applies one benchmark task's fix outright.
+    """
+    from tests.benchmark.isolation import (TASK_CAPABILITY_SUBDIR,
+                                           UNATTRIBUTED_SLUG)
+
+    source = Path("tests/benchmark/isolation.py").read_text(encoding="utf-8")
+    assert TASK_CAPABILITY_SUBDIR == "tasks"
+    # Re-filed on the way in, rather than trusted to have been filed right.
+    assert ("if kind == \"capabilities\" and TASK_CAPABILITY_SUBDIR "
+            "not in relative.parts:") in source
+    # Filed together under one name rather than guessed into somebody's task:
+    # a wrong guess hands one task another task's answer.
+    assert UNATTRIBUTED_SLUG == "unattributed"
+
+    from phronix.capabilities import TASK_CAPABILITY_DIR
+    # The writer and the read filter must agree on the directory, or the
+    # filter looks in a place nothing is written to.
+    assert TASK_CAPABILITY_DIR == TASK_CAPABILITY_SUBDIR

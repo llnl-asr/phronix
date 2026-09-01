@@ -388,3 +388,14 @@ If any of 2-4 did not hold, `error-report.py` shows it directly: the same
 
 Fresh: /p/lustre5/haridev/phronix-bench/runs/claude-0831-151643
 
+
+### smoke5-fresh — `claude-0831-173550`  (5 task(s), 4 node(s))
+
+```
+TOTAL  10 task(s)     1 pass    9 fail    0 run    10% of finished      1.4M tok    $32.48   [#########!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+```
+
+- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0831-173550`
+- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke5-fresh-173318.log` (16/16 ready)
+- skills written: **6**   attempts that loaded one: **6**
+- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0831-173550 --once`

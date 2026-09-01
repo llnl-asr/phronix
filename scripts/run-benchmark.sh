@@ -74,6 +74,8 @@ while [ $# -gt 0 ]; do
     --tries)   TRIES="$2";   shift 2;;
     --timeout) TIMEOUT="$2"; shift 2;;
     --carry-root) EXTRA+=(--carry-root "$2"); shift 2;;
+    # The WRITE path, which --fresh and --no-carry must not empty.
+    --promote-root) EXTRA+=(--promote-root "$2"); shift 2;;
     # A store of its own, inheriting nothing. The CLI has supported this all
     # along; the launcher parses with an allow-list, so a flag it does not name
     # is refused however well the CLI understands it.

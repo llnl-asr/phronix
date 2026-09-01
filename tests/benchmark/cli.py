@@ -338,6 +338,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         isolation=args.isolation, fresh=not args.no_fresh, pull=not args.no_pull,
         resume_from=getattr(args, "resume", "") or "",
         carry_root=("" if args.no_carry else (args.carry_root or default_carry_root())),
+        # Written to always, read from only when carrying. `--fresh` and
+        # `--no-carry` both empty `carry_root`, and gating promotion on it
+        # meant a from-scratch run contributed nothing to the runs after it.
+        promote_root=(args.promote_root or args.carry_root
+                      or default_carry_root()),
         max_spend_usd=float(getattr(args, "max_spend", 0.0) or 0.0),
         # Research is the fallback, not the opening move, unless asked.
         pipeline=args.pipeline,
@@ -733,6 +738,13 @@ def build_parser() -> argparse.ArgumentParser:
                           "next run. Default: the phronix project's own .phronix. "
                           "Findings therefore accumulate across runs instead of "
                           "dying with the run directory.")
+    run.add_argument("--promote-root", default="",
+                     help="Where this run WRITES what it learned, whatever its "
+                          "mode. Unlike --carry-root this is not emptied by "
+                          "--fresh or --no-carry: a from-scratch run still "
+                          "contributes its research to the runs after it, and "
+                          "the --fresh filter decides what may be READ. "
+                          "Default: the same place --carry-root points at.")
     run.add_argument("--fresh", action="store_true",
                      help="Explore from scratch: ignore task-specific skills and "
                           "research from earlier runs, seeding only the bundled "
