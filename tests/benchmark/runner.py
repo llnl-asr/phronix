@@ -3262,6 +3262,56 @@ class Runner:
                         tracer.event("promote-failed", str(exc)[:200])
         return result
 
+    #: Said once, when an attempt ends having described a fix instead of making one.
+    EDIT_PROMPT = """\
+You did not change any file. The task is judged on a diff, and there is none.
+
+Whatever you concluded, apply it now: edit the source and stop. Do not explain
+the change, do not summarise it, do not plan it — those read as finishing and
+they are not. If you already know the file and the line, that is enough to act.
+
+If you genuinely believe no change is warranted, say so in one line and stop.
+"""
+
+    def _ask_for_the_edit(self, arm, instance, store_root, attempt_dir,
+                          container, outcome, on_call=None, tracer=None):
+        """One re-ask when an attempt produced no diff. Returns the outcome.
+
+        Once, and only when there is no diff at all: an attempt that produced
+        something has answered the question, however badly, and re-asking it
+        would be rewriting the measurement rather than repairing it.
+
+        The original outcome is returned unchanged if the re-ask produces
+        nothing, so this can only add a diff and never lose one.
+        """
+        if tracer:
+            tracer.event("no-edit",
+                         "the attempt described a change and made none — "
+                         "asking once for the edit itself")
+        try:
+            again = arm.generate(instance, store_root, attempt_dir, container,
+                                 on_call=on_call, extra_prompt=self.EDIT_PROMPT)
+        except TypeError:
+            # An arm whose `generate` predates the extra-prompt argument keeps
+            # working; it simply does not get the re-ask.
+            return outcome
+        except Exception as exc:
+            if tracer:
+                tracer.event("no-edit", f"the re-ask failed: {exc}"[:160])
+            return outcome
+        if (getattr(again, "patch", "") or "").strip():
+            if tracer:
+                tracer.event("no-edit", "the re-ask produced a diff")
+            # The cost of both halves belongs to this attempt.
+            for field in ("steps", "tokens_input", "tokens_output", "cost_usd"):
+                setattr(again, field,
+                        (getattr(outcome, field, 0) or 0)
+                        + (getattr(again, field, 0) or 0))
+            return again
+        if tracer:
+            tracer.event("no-edit", "still no diff after the re-ask")
+        return outcome
+
     def trial_runner(self, arm, instance, store_root, attempt_dir,
                      baseline_for, tracer=None, narrate=None):
         """A callable research can use to put ONE candidate in front of the tests.
@@ -3876,6 +3926,27 @@ class Runner:
                 else:
                     outcome = arm.generate(instance, store_root, attempt_dir,
                                            container, on_call=narrate_attempt)
+                    # Described a change and made none? Ask once for the edit.
+                    #
+                    # Not a model that cannot solve the task — one that
+                    # answered a different question. Measured on flask-5063:
+                    # ten turns, $1.00, three `Skill` calls, ZERO edit tools,
+                    # exiting `subtype: success` with "Here's a concise plan
+                    # for the required changes: 1. Validate `name` in
+                    # `Blueprint.__init__` — insert a check right after...".
+                    # It knew the file, the function and the change, and
+                    # described them instead of making them.
+                    #
+                    # This is an intervention and it is worth naming as one:
+                    # it moves the arm from "can it solve the task" toward
+                    # "can it solve the task when told to actually edit". The
+                    # baseline gets the same prompt on the same trigger, so
+                    # the arms stay comparable — and an attempt that already
+                    # produced a diff never sees it.
+                    if not (outcome.patch or "").strip():
+                        outcome = self._ask_for_the_edit(
+                            arm, instance, store_root, attempt_dir, container,
+                            outcome, on_call=narrate_attempt, tracer=tracer)
                 # The record covers what the attempt DID, not only how it was
                 # judged. A verdict says a test failed; the attempt's own diff
                 # and account say what was tried, and "tried and did not work"

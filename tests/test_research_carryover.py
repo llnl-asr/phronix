@@ -10101,3 +10101,52 @@ def test_the_code_review_reporter_is_denied_to_every_agent():
     # Claude Code keeps only the last `--disallowedTools`.
     assert "Artifact" in plain and "RemoteTrigger" in plain
     assert Arm._denial_flags(arm, "").count("--disallowedTools") == 1
+
+
+def test_an_attempt_that_described_a_change_is_asked_to_make_it():
+    """Not a model that cannot solve the task — one that answered another.
+
+    Measured on flask-5063: ten turns, $1.00, three `Skill` calls and ZERO
+    edit tools, exiting `subtype: success` with "Here's a concise plan for the
+    required changes: 1. Validate `name` in `Blueprint.__init__` — insert a
+    check right after...". It knew the file, the function and the change, and
+    described them instead of making them.
+
+    This is an intervention, and it is worth naming as one: it moves the arm
+    from "can it solve the task" toward "can it solve the task when told to
+    actually edit". The BASELINE gets the same prompt on the same trigger, so
+    the arms stay comparable — an intervention applied to one arm is a
+    difference between the arms, not a measurement.
+    """
+    from tests.benchmark.runner import Runner
+
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+
+    # Only when there is NO diff: an attempt that produced something has
+    # answered the question, however badly.
+    assert 'if not (outcome.patch or "").strip():' in source
+    assert "outcome = self._ask_for_the_edit(" in source
+
+    prompt = Runner.EDIT_PROMPT
+    # It must name the failure exactly, or it reads as generic encouragement.
+    assert "You did not change any file" in prompt
+    assert "judged on a diff" in prompt
+    # And rule out the three shapes that read as finishing.
+    assert "do not summarise it, do not plan it" in prompt
+    # A genuine no-change answer stays available, or the re-ask forces a patch
+    # where none is warranted.
+    assert "no change is warranted" in prompt
+
+    body = source[source.index("    def _ask_for_the_edit(self"):]
+    body = body[:body.index("\n    def ", 10)]
+    # Once. A loop here is a budget with no bound.
+    assert body.count("arm.generate(") == 1
+    # It can only ADD a diff, never lose one.
+    assert "return outcome" in body
+    assert 'if (getattr(again, "patch", "") or "").strip():' in body
+    # The cost of both halves belongs to the attempt that spent it.
+    assert 'for field in ("steps", "tokens_input", "tokens_output", "cost_usd")' in body
+
+    # Every arm accepts it, so the baseline is treated identically.
+    arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert arms.count("extra_prompt: str = \"\"") == 3

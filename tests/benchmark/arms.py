@@ -2251,8 +2251,13 @@ class Arm:
 
     def generate(self, instance: Dict[str, Any], store_root: Path, workdir: Path,
                  container: Optional[Container] = None,
-                 on_call=None) -> AttemptOutcome:
+                 on_call=None, extra_prompt: str = "") -> AttemptOutcome:
         """Produce a patch for *instance*.
+
+        *extra_prompt* is appended when the harness re-asks an attempt that
+        described a change and made none. Accepted by every arm so the
+        baseline gets the same treatment on the same trigger — an intervention
+        applied to one arm is a difference between the arms, not a measurement.
 
         *container* is a clean work container, or ``None`` for arms that make
         their own (see :attr:`generates_own_environment`).
@@ -4255,7 +4260,8 @@ class MiniArm(Arm):
         self.cost_limit = cost_limit
 
     def generate(self, instance: Dict[str, Any], store_root: Path, workdir: Path,
-                 container: Optional[Container] = None) -> AttemptOutcome:
+                 container: Optional[Container] = None,
+                 on_call=None, extra_prompt: str = "") -> AttemptOutcome:
         import subprocess
 
         env = tool_path_env(dict(os.environ))
@@ -4609,8 +4615,8 @@ class OpenCodeArm(Arm):
 
     def generate(self, instance: Dict[str, Any], store_root: Path, workdir: Path,
                  container: Optional[Container] = None,
-                 on_call=None, plan: Optional[Dict[str, str]] = None
-                 ) -> AttemptOutcome:
+                 on_call=None, plan: Optional[Dict[str, str]] = None,
+                 extra_prompt: str = "") -> AttemptOutcome:
         """One attempt. *plan* pins it to a specific researched approach.
 
         Without a plan the agent chooses; with one it implements the candidate
@@ -4823,6 +4829,11 @@ class OpenCodeArm(Arm):
         # Ask for this task's pinned backend, so the conversation stays with the
         # server that already holds its history.
         pinned = self.model_for_task(instance)
+
+        # The re-ask goes LAST, after the plan and lesson notes, so it is the
+        # final instruction the agent reads rather than one clause among many.
+        if extra_prompt:
+            prompt = prompt.rstrip() + "\n\n" + extra_prompt
 
         command = self.agent_command(LOG_NOTE + prompt, checkout, files,
                                      self.agent_name, pinned)
