@@ -9520,3 +9520,50 @@ def test_what_already_failed_reaches_the_attempt_not_only_research():
     # what stops the note being read as a rule to obey blindly.
     assert "it is a result" in Arm.LESSONS_NOTE
     assert "Do not spend a step re-deriving one of them" in Arm.LESSONS_NOTE
+
+
+def test_skill_content_is_judged_in_the_layout_that_is_actually_written():
+    """The one check separating "a skill exists" from "a skill says something".
+
+    It globbed `capabilities/tasks/*/<skill>/SKILL.md` — the pre-flattening
+    path — so a skill at `capabilities/skills/<skill>/`, where everything is
+    written now, was invisible to it. And it counted the PLACEHOLDER as
+    content, so every task looked covered from the moment it started:
+    sympy-19254 carried a placeholder-only skill into a reuse run and the
+    lookup announced "found ... — the attempt solves with it".
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        store = Path(root) / ".phronix"
+        skills.write_block("placeholder-only", "rule", Arm.PLACEHOLDER_TITLE,
+                           "none", description="d")
+        skills.write_block("has-content", "instruction", "Return False, []",
+                           "do it", description="d")
+        skills.write_block("both", "rule", Arm.PLACEHOLDER_TITLE, "none",
+                           description="d")
+        skills.write_block("both", "instruction", "Return False, []", "do it")
+
+        # The scaffold alone is not substance.
+        assert Arm._skill_has_content(store, "placeholder-only") is False
+        # Real content, in the layout writes actually use.
+        assert Arm._skill_has_content(store, "has-content") is True
+        # The placeholder does not disqualify a skill that also says something.
+        assert Arm._skill_has_content(store, "both") is True
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # Both trees and both layouts, derived rather than named one at a time.
+    assert 'for tree in ("capabilities", "research")' in source
+    assert 'for sub in ("skills", "tasks")' in source

@@ -3066,8 +3066,23 @@ try something else unless you have a specific reason it was wrong.
         """
         from phronix.skill_schema import parse_skill
 
-        tasks = Path(store_root) / "capabilities" / "tasks"
-        for path in tasks.glob(f"*/{skill}/SKILL.md"):
+        PLACEHOLDER_TITLE = "Nothing is established about this subject yet"
+
+        # BOTH layouts and BOTH trees.
+        #
+        # This globbed `capabilities/tasks/*/<skill>/SKILL.md` alone, which is
+        # the pre-flattening path. A skill at `capabilities/skills/<skill>/`
+        # — where everything is written now — was invisible to it, so the one
+        # check that separates "a skill exists" from "a skill says something"
+        # was answering about a directory nothing writes to.
+        roots = [Path(store_root) / tree / sub
+                 for tree in ("capabilities", "research")
+                 for sub in ("skills", "tasks")]
+        candidates = []
+        for root in roots:
+            candidates += list(root.glob(f"{skill}/SKILL.md"))
+            candidates += list(root.glob(f"*/{skill}/SKILL.md"))
+        for path in candidates:
             try:
                 found = parse_skill(path.parent)
             except Exception:
@@ -3080,7 +3095,16 @@ try something else unless you have a specific reason it was wrong.
             # `LESSONS.md` reading "Attempt to ignore missing variables ...
             # failed – agent produced no patch", and on that basis tries 2 and
             # 3 were handed a skill containing no fix at all.
-            if found.get("blocks"):
+            # The PLACEHOLDER is not content.
+            #
+            # `open_task_skill` writes one block saying nothing is established
+            # yet, so that a skill always exists. Counting it makes every task
+            # look covered from the moment it starts: sympy-19254 carried a
+            # placeholder-only skill into a reuse run and the lookup announced
+            # `found ... — the attempt solves with it`.
+            real = [b for b in (found.get("blocks") or [])
+                    if str(b.get("title") or "") != PLACEHOLDER_TITLE]
+            if real:
                 return True
         return False
 
