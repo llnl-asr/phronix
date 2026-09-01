@@ -9972,3 +9972,70 @@ def test_an_edit_is_refused_until_the_task_s_skill_has_been_read():
     arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
     assert 'env["PHRONIX_REQUIRED_SKILL"] = (' in arms
     assert 'if phase in ("", "attempt") else ""' in arms
+
+
+def test_the_mechanical_faults_in_a_skill_are_repaired_not_just_reported():
+    """A check that names a mechanical fault for someone else to fix is ignored.
+
+    Three of the five things `solution_check` reports need no judgement: a
+    title carrying the label the renderer adds, two blocks making one point,
+    and a description that says nothing. Across the live corpus those were 10
+    of 35 issues, and every one of them is a rewrite of content that is
+    already correct.
+
+    The other two must NOT be faked. A skill with no diff needs the patch that
+    passed; one with nothing established needs a run to establish something.
+    Inventing either would be worse than reporting it.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from phronix.mcp_tools.tools.solution_service import check_skill, repair_skill
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        skills.write_block("a-subject-no-layer-holds", "instruction",
+                           "Use iter_lines", "the short body",
+                           description="Nothing yet.")
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    home = (Path(root) / ".phronix" / "capabilities" / "skills"
+            / "a-subject-no-layer-holds")
+    # Hand-corrupt it the way a run does: the rendered label copied into a
+    # title, which the same-point merge can no longer see as a duplicate.
+    text = (home / "SKILL.md").read_text(encoding="utf-8")
+    text = text.replace(
+        "### I1 — Use iter_lines",
+        "### I1 — Use iter_lines\n\nbody\n\n### I2 — I1 — Use iter_lines")
+    text = text.replace("| `I1` | Instructions | Use iter_lines |",
+                        "| `I1` | Instructions | Use iter_lines |\n"
+                        "| `I2` | Instructions | I1 — Use iter_lines |")
+    (home / "SKILL.md").write_text(text, encoding="utf-8")
+
+    kinds = {i["problem"] for i in check_skill(home)}
+    assert any("carries its own label" in k for k in kinds)
+
+    changed = repair_skill(home)
+    assert changed, "nothing was repaired"
+    fixed = (home / "SKILL.md").read_text(encoding="utf-8")
+    # The label is out of the title, and the duplicate it hid is merged away.
+    assert "I1 — Use iter_lines" not in fixed.replace("### I1 — Use iter_lines", "")
+    assert fixed.count("Use iter_lines |") == 1
+    # And the description now names what the skill covers.
+    assert "Nothing yet" not in fixed
+    assert "Use iter_lines" in fixed
+
+    # Idempotent: a repaired skill needs no second pass.
+    assert repair_skill(home) == []
+
+    # What it must never invent.
+    remaining = {i["problem"] for i in check_skill(home)}
+    assert any("carries no diff" in k for k in remaining), \
+        "a missing patch must still be reported, not fabricated"

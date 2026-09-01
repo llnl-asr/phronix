@@ -102,6 +102,77 @@ def check_skill(home: Path) -> List[Dict[str, str]]:
     return out
 
 
+def repair_skill(home: Path) -> List[str]:
+    """Fix what can be fixed without judgement. Returns what was changed.
+
+    Three of the five things `solution_check` reports are mechanical, and a
+    check that names a mechanical fault the caller must then fix by hand is a
+    check that gets ignored:
+
+    * a title carrying its own label — the renderer adds the label, so strip it;
+    * two blocks making one point — keep the longer body, which is the one
+      written with more known;
+    * a description that says nothing — name what the skill actually covers.
+
+    The other two are not repairable here and must not be faked. A skill with
+    no diff needs the patch that passed, and a skill with nothing established
+    needs a run to establish something; inventing either would be worse than
+    reporting it.
+    """
+    from phronix import skill_schema
+
+    if not (home / "SKILL.md").is_file():
+        return []
+    try:
+        parsed = skill_schema.parse_skill(home)
+    except Exception:
+        return []
+
+    blocks = list(parsed.get("blocks") or [])
+    changed: List[str] = []
+
+    stripped, seen = [], {}
+    for block in blocks:
+        title = str(block.get("title") or "")
+        clean = LABEL_IN_TITLE.sub("", title).strip()
+        if clean != title:
+            changed.append(f"stripped the label from {title[:40]!r}")
+        block = dict(block)
+        block["title"] = clean
+        key = clean.lower()
+        if key in seen:
+            # The longer body is the one written with more known.
+            kept = seen[key]
+            if len(str(block.get("body") or "")) > len(str(kept.get("body") or "")):
+                stripped[stripped.index(kept)] = block
+                seen[key] = block
+            changed.append(f"merged a duplicate of {clean[:40]!r}")
+            continue
+        seen[key] = block
+        stripped.append(block)
+
+    description = str(parsed.get("description") or "")
+    if "Nothing yet" in description or len(description.strip()) < MIN_DESCRIPTION:
+        real = [b for b in stripped
+                if str(b.get("title") or "").strip() != PLACEHOLDER]
+        if real:
+            titles = ", ".join(str(b.get("title") or "") for b in real[:3])
+            description = f"What is known about {home.name}: {titles}"[:300]
+            changed.append("described what the skill covers")
+
+    if not changed:
+        return []
+    try:
+        (home / "SKILL.md").write_text(
+            skill_schema.render_skill(
+                home.name, description,
+                str(parsed.get("subject") or home.name), stripped),
+            encoding="utf-8")
+    except OSError:
+        return []
+    return changed
+
+
 def register(mcp: Any) -> None:
     @mcp.tool()
     def solution_check(skill: str = "") -> str:
@@ -147,4 +218,43 @@ def register(mcp: Any) -> None:
             "issues": issues,
             "note": ("every solution carries its fix" if not issues else
                      "fix each `skill` as its `fix` says, then call again"),
+        }, indent=2)
+
+    @mcp.tool()
+    def solution_repair(skill: str = "") -> str:
+        """Fix the mechanical faults `solution_check` reports.
+
+        A check that names a mechanical fault the caller must then fix by hand
+        is a check that gets ignored. This strips a label baked into a title,
+        merges two blocks making one point (keeping the longer body, which was
+        written with more known), and writes a description that names what the
+        skill covers.
+
+        It does NOT invent what it cannot know: a skill with no diff needs the
+        patch that passed, and one with nothing established needs a run to
+        establish something. Those stay reported.
+
+        Pass `skill` for one, or omit for every solution visible here.
+        Returns JSON: {status, repaired: {skill: [what changed]}, remaining}.
+        """
+        from phronix.layers import layers
+
+        repaired: Dict[str, List[str]] = {}
+        for layer in layers():
+            for tree in ("capabilities", "research"):
+                base = Path(layer.root) / tree / "skills"
+                if not base.is_dir():
+                    continue
+                for entry in sorted(base.iterdir()):
+                    if not entry.is_dir() or (skill and entry.name != skill):
+                        continue
+                    done = repair_skill(entry)
+                    if done:
+                        repaired[entry.name] = done
+        return json.dumps({
+            "status": "ok",
+            "repaired": repaired,
+            "count": len(repaired),
+            "remaining": ("run solution_check again — what is left needs a "
+                          "passing patch or a run, not a rewrite"),
         }, indent=2)
