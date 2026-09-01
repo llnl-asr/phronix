@@ -3035,6 +3035,31 @@ class Runner:
             # five it had not started. The bare arm ran to completion beside it,
             # so the run produced a report showing one arm at 1/6 and the other
             # at 0/6, which reads as a result rather than as a crash.
+            # The LAST gate, before any of it is promoted.
+            #
+            # The research-time check cannot cover the whole task: the final
+            # try's solution and everything the learn stage writes land after
+            # research has run for the last time, and were never checked.
+            # Measured, four solutions carried a procedure as prose with no
+            # tool beside them and none of them was ever re-asked, because
+            # every one was written after the last check.
+            #
+            # Here nothing else will write before promotion, so what passes
+            # here is what the next run inherits.
+            try:
+                left = arm._enforce_checks(
+                    instance, store_root, workdir,
+                    on_call=(lambda text: tracer.event("filing", text))
+                    if tracer else None)
+                if left and tracer:
+                    tracer.event("filing",
+                                 f"** promoting with {len(left)} filing "
+                                 f"problem(s) unfixed — the next run inherits "
+                                 f"them")
+            except Exception as exc:
+                if tracer:
+                    tracer.event("filing", f"check did not run: {exc}"[:180])
+
             promote_into = self.config.promote_root or self.config.carry_root
             if promote_into:
                 # Fold FIRST, then promote. The order is load-bearing.

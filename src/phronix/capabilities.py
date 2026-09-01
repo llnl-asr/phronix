@@ -212,7 +212,14 @@ def duplicates(source: str, name: str = "") -> List[Dict[str, str]]:
         directory = layer.dir("capabilities")
         if not directory.is_dir():
             continue
-        for path in sorted(directory.glob("*.py")):
+        # EVERY filed directory, recursively. The flat `*.py` glob matched
+        # nothing once tools moved into `tools/<category>/` and task fixes
+        # into `skills/<TaskName>/`, so the duplicate check silently stopped
+        # checking: one run wrote `flask_cli_routes.py`,
+        # `add_flask_cli_routes.py` and `flask_cli_routes_fix.py` across three
+        # categories — the same procedure four times, each needing to be
+        # maintained and chosen between.
+        for path in sorted(directory.rglob("*.py")):
             if path.stem == name or path.stem in seen:
                 continue
             try:

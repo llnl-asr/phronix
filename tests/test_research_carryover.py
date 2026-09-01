@@ -9329,3 +9329,68 @@ def test_a_skill_the_attempt_proved_it_loaded_counts_as_retrieved():
     out = ledger.classify(retrieved, order=0, repo="sphinx-doc/sphinx")
     assert out["reused"] == ["sphinx-doc-sphinx-8595"]
     assert out["inherited"] == ["sphinx-doc-sphinx-8595"]
+
+
+def test_the_filing_is_checked_once_more_before_anything_is_promoted():
+    """The research-time check cannot cover the whole task.
+
+    The final try's solution and everything the learn stage writes land after
+    research has run for the last time. Measured: four solutions carried a
+    procedure as prose with no tool beside them and not one was re-asked,
+    because every one was written after the last check.
+
+    Before promotion nothing else will write, so what passes there is exactly
+    what the next run inherits.
+    """
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    gate = source.index("arm._enforce_checks(")
+    promote = source.index("promoted = promote_store(store_root, Path(promote_into))")
+    assert gate < promote, "the check must run BEFORE promotion, not after"
+    # Unfixed problems are said out loud rather than swallowed: they become
+    # the next run's inheritance.
+    assert "the next run inherits" in source
+    # And a check that cannot run never costs the task its promotion.
+    tail = source[gate:promote]
+    assert "except Exception as exc:" in tail
+
+
+def test_a_duplicate_tool_is_caught_across_categories():
+    """The duplicate check globbed a directory nothing writes to any more.
+
+    `capabilities/*.py` matched nothing once tools moved into
+    `tools/<category>/` and task fixes into `skills/<TaskName>/`, so the check
+    silently stopped checking. One run wrote `flask_cli_routes.py`,
+    `add_flask_cli_routes.py` and `flask_cli_routes_fix.py` across three
+    categories — the same procedure four times, each of them then needing to
+    be maintained, verified and chosen between.
+    """
+    import os
+    import tempfile
+
+    from phronix import capabilities
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        body = ("def register(mcp):\n    @mcp.tool()\n"
+                "    def run(where: str) -> str:\n        return where\n")
+        first = capabilities.new("flask_cli_routes", "list routes",
+                                 source=body, category="flask")
+        # Same body, different name, DIFFERENT category — the shape that got
+        # through, four times, in one run.
+        second = capabilities.new("add_flask_cli_routes", "list routes again",
+                                  source=body, category="flask-cli")
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    assert first["status"] == "ok"
+    assert second["status"] == "duplicate"
+    # The existing name comes back, so the caller can just use it.
+    assert second["existing"][0]["name"] == "flask_cli_routes"
+
+    source = Path("src/phronix/capabilities.py").read_text(encoding="utf-8")
+    assert 'for path in sorted(directory.rglob("*.py")):' in source
