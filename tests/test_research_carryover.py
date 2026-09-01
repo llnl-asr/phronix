@@ -136,7 +136,7 @@ def test_promotion_carries_the_run_and_not_the_framework(tmp_path):
     assert "research/topic.json" in promoted
     # An answer is promoted from its own home, not from `skills/`: that holds
     # only the framework's method, and a run's learning is an answer.
-    assert "capabilities/tasks/learned-here/learned-here/SKILL.md" in promoted
+    assert "capabilities/skills/learned-here/SKILL.md" in promoted
 
     shipped = sorted(p.name for p in (bundled_root() / "skills").glob("*")
                      if p.is_dir())
@@ -4253,7 +4253,18 @@ def test_fresh_still_serves_the_bundled_tools(tmp_path, monkeypatch):
 
 
 def test_a_task_capability_is_filed_under_its_task(tmp_path, monkeypatch):
-    """A tool that knows a task goes under that task, not beside the methods."""
+    """A tool is filed by what it is ABOUT, and never beside the methods.
+
+    It used to be filed under the one task that happened to need it, which is
+    backwards for a deterministic procedure: a tool found only by its
+    originating task is a tool nothing reuses, and reuse is the entire reason
+    to write code instead of prose. `tools/<category>/` groups them, and the
+    topic supplies the category when nothing better is given — so a tool built
+    while solving one task still lands somewhere meaningful.
+
+    It also keeps the catalogue navigable: `capability_list` returned 195 flat
+    names, which is not a list anyone chooses from.
+    """
     from phronix import capabilities
 
     store = tmp_path / "project" / ".phronix"
@@ -4273,7 +4284,17 @@ def test_a_task_capability_is_filed_under_its_task(tmp_path, monkeypatch):
     assert method["status"] == "ok" and bound["status"] == "ok"
     assert Path(method["file"]).parent.name == "capabilities"
     assert Path(bound["file"]).parent.name == "pylint-dev-pylint-7080"
-    assert Path(bound["file"]).parent.parent.name == capabilities.TASK_CAPABILITY_DIR
+    assert Path(bound["file"]).parent.parent.name == capabilities.TOOL_DIR
+
+    # An explicit category beats the topic: what the tool is about is a better
+    # grouping than who first needed it.
+    grouped = capabilities.new(
+        "probe_run_pytest_subset", "run a subset of pytest",
+        source="def register(mcp):\n    return \"subset\"\n",
+        topic="pylint-dev__pylint-7080", category="pytest")
+    assert grouped["status"] == "ok"
+    assert Path(grouped["file"]).parent.name == "pytest"
+    assert Path(grouped["file"]).parent.parent.name == capabilities.TOOL_DIR
 
 
 def test_the_solution_skill_is_the_way_in_to_the_candidates(tmp_path):
@@ -6657,7 +6678,7 @@ def test_a_run_always_saves_into_the_source_tree_and_fresh_still_reads_clean(tmp
     # while the framework's own tools stay — which is what `--fresh` means.
     caps = Path("src/phronix/capabilities.py").read_text(encoding="utf-8")
     assert "def is_task_answer(path: Path) -> bool:" in caps
-    assert 'f"/{TASK_CAPABILITY_DIR}/" in Path(path).as_posix()' in caps
+    assert "any(d in parts for d in LEARNED_DIRS)" in caps
     assert "and not is_task_answer(path)" in caps
 
 
@@ -6746,9 +6767,9 @@ def test_a_second_pass_on_a_subject_reconciles_rather_than_replaces(tmp_path):
 
     # End to end: promoting twice accumulates instead of overwriting.
     store = tmp_path / "store"
-    home = store / "capabilities" / "tasks" / "sub" / "sub"
+    home = store / "capabilities" / "skills" / "sub"
     home.mkdir(parents=True)
-    target = tmp_path / "dest" / "capabilities" / "tasks" / "sub" / "sub"
+    target = tmp_path / "dest" / "capabilities" / "skills" / "sub"
     target.mkdir(parents=True)
     (target / "SKILL.md").write_text(first)
     (home / "SKILL.md").write_text(second)
@@ -6876,7 +6897,7 @@ def test_recall_cannot_reach_what_fresh_hides_from_the_lookup(tmp_path, monkeypa
 
     # And the filter it consults really does hide a bundled task answer.
     bundled = tmp_path / "bundled"
-    answer = bundled / "capabilities" / "tasks" / "sub" / "prior-answer"
+    answer = bundled / "capabilities" / "skills" / "prior-answer"
     answer.mkdir(parents=True)
     (answer / "SKILL.md").write_text(
         "---\nname: prior-answer\ntype: skill\n---\n\n## Instructions\n")
@@ -8631,22 +8652,25 @@ def test_a_promoted_capability_is_always_filed_where_fresh_can_hide_it():
     the packaged layer, `probe_fix_max_to_sum_powers_filter` among them, which
     applies one benchmark task's fix outright.
     """
-    from tests.benchmark.isolation import (TASK_CAPABILITY_SUBDIR,
-                                           UNATTRIBUTED_SLUG)
+    from tests.benchmark.isolation import (FILED_SUBDIRS, SOLUTION_SUBDIR,
+                                           TOOL_SUBDIR, UNATTRIBUTED_SLUG)
 
     source = Path("tests/benchmark/isolation.py").read_text(encoding="utf-8")
-    assert TASK_CAPABILITY_SUBDIR == "tasks"
+    # Every directory the filter recognises, not just one: naming only
+    # `tasks/` made a correctly-filed `capabilities/skills/` solution look
+    # unfiled, and promotion moved it to `unattributed/`.
+    assert set(FILED_SUBDIRS) == {"skills", "tools", "tasks"}
     # Re-filed on the way in, rather than trusted to have been filed right.
-    assert ("if kind == \"capabilities\" and TASK_CAPABILITY_SUBDIR "
-            "not in relative.parts:") in source
+    assert 'if kind == "capabilities" and not _already_filed(relative):' in source
+    assert SOLUTION_SUBDIR == "skills" and TOOL_SUBDIR == "tools"
     # Filed together under one name rather than guessed into somebody's task:
     # a wrong guess hands one task another task's answer.
     assert UNATTRIBUTED_SLUG == "unattributed"
 
-    from phronix.capabilities import TASK_CAPABILITY_DIR
-    # The writer and the read filter must agree on the directory, or the
-    # filter looks in a place nothing is written to.
-    assert TASK_CAPABILITY_DIR == TASK_CAPABILITY_SUBDIR
+    from phronix.capabilities import LEARNED_DIRS
+    # The writer and the read filter must agree, or the filter looks in a
+    # place nothing is written to.
+    assert set(LEARNED_DIRS) == set(FILED_SUBDIRS)
 
 
 def test_a_finished_run_is_not_resumed_into():
@@ -8707,3 +8731,81 @@ def test_task_results_have_exactly_one_from_dict():
     rebuilt = TaskResult.from_dict(row)
     assert [type(a) for a in rebuilt.attempts] == [Attempt]
     rebuilt.to_dict()
+
+
+def test_the_layout_is_checked_rather_than_assumed():
+    """A solution that is correct and misfiled is a solution nothing reuses.
+
+    Every filing failure so far has been silent: the write succeeds and the
+    next run's lookup returns nothing. Answers written loose where `--fresh`
+    could not hide them; a slug nested inside itself; a diagnosis under a name
+    no reader asks for. So the layout is a tool the research agent calls on its
+    own work, and every issue names the move that fixes it.
+    """
+    import tempfile
+
+    from phronix.mcp_tools.tools import layout_service
+
+    class _Mcp:
+        def __init__(self): self.tools = {}
+        def tool(self, *a, **k):
+            def take(fn): self.tools[fn.__name__] = fn; return fn
+            return take
+
+    mcp = _Mcp()
+    layout_service.register(mcp)
+    check = mcp.tools["layout_check"]
+
+    root = Path(tempfile.mkdtemp())
+    caps = root / "capabilities"
+    (caps / "skills" / "good-task").mkdir(parents=True)
+    (caps / "skills" / "good-task" / "SKILL.md").write_text(
+        "# s\nsee [notes](notes.md)\n", encoding="utf-8")
+    (caps / "skills" / "good-task" / "notes.md").write_text("linked", encoding="utf-8")
+    (caps / "tools" / "pytest").mkdir(parents=True)
+    (caps / "tools" / "pytest" / "run_subset.py").write_text("x", encoding="utf-8")
+    clean = json.loads(check(root=str(root)))
+    assert clean["ok"] is True, clean["issues"]
+
+    # Now each wrong shape, and each must be named.
+    (caps / "loose_tool.py").write_text("x", encoding="utf-8")
+    (caps / "skills" / "no-skill").mkdir(parents=True)
+    (caps / "skills" / "good-task" / "orphan.md").write_text("x", encoding="utf-8")
+    (caps / "tools" / "uncategorised.py").write_text("x", encoding="utf-8")
+    dirty = json.loads(check(root=str(root)))
+    assert dirty["ok"] is False
+    problems = {i["path"]: i for i in dirty["issues"]}
+    assert "capabilities/loose_tool.py" in problems
+    assert "capabilities/skills/no-skill/" in problems
+    assert "capabilities/skills/good-task/orphan.md" in problems
+    assert "capabilities/tools/uncategorised.py" in problems
+    # Every issue says what to DO, or it is a complaint rather than a check.
+    assert all(i["fix"] for i in dirty["issues"])
+    # The linked helper is not flagged; the unlinked one is.
+    assert "capabilities/skills/good-task/notes.md" not in problems
+
+    # `research/` is the same shape, keyed on what was SEARCHED FOR.
+    assert layout_service.TREES == ("capabilities", "research")
+
+
+def test_a_repeated_phase_is_folded_once_with_a_count():
+    """Three runs of one stage are one fact, not three.
+
+    The fold handed the tracker `attempt, attempt, attempt` and it wrote the
+    finding down three times. A later attempt then cannot tell three
+    approaches from one approach tried three times — which is the question it
+    opens the record to answer.
+    """
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    fold = source[source.index("    def _fold_events(self"):]
+    fold = fold[:fold.index("\n    def ", 10)]
+    # Collapsed where the events still have structure, not asked of a model.
+    assert "counted[key] = counted.get(key, 0) + 1" in fold
+    assert 'f"{name} x{n} ({costs[name]})"' in fold
+
+    # And the rule is in the tracker's SKILL, not restated in the prompt —
+    # the prompt is a pointer and is length-capped for exactly that reason.
+    skill = Path(
+        "src/phronix/.phronix/skills/phronix-task-tracker/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "Nothing appears twice" in skill

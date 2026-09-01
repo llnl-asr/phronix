@@ -54,11 +54,13 @@ graphify-out/
 # from another — pgrep only sees the node it runs on. Local state, not shared.
 logs/
 
-# The project store is a SYMLINK into the package.
+# The repo-root project store, which is scratch.
 #
-# `.phronix/` at the repo root points at `src/phronix/.phronix/learned/`, which
-# is where the store actually lives and is tracked — so it ships in the wheel
-# instead of only existing in this checkout. Tracking the link as well would
-# check the same files in under two paths, and git would then follow the link
-# and record every learned file twice.
+# The store that MATTERS is `src/phronix/.phronix/` — capabilities and research
+# are tracked there and ship in the wheel, so a finding survives a clone rather
+# than living as long as one checkout. This path is the per-checkout project
+# layer that runs write through; it is working state, not a result.
+#
+# (It used to be a symlink into `src/phronix/.phronix/learned/`. That directory
+# was never read by any layer — `CONTENT_DIRS` has no such kind — and is gone.)
 /.phronix

@@ -592,8 +592,29 @@ SOURCE_DIRS = ("capabilities", "research")
 #: Where a promoted capability is filed so the `--fresh` filter can see it.
 TASK_CAPABILITY_SUBDIR = "tasks"
 
-#: Where a capability goes when the run did not file it under a task itself.
+#: One task's solution: `capabilities/skills/<TaskName>/`.
+SOLUTION_SUBDIR = "skills"
+
+#: Deterministic tools, grouped: `capabilities/tools/<cat>/`.
+TOOL_SUBDIR = "tools"
+
+#: Every directory under `capabilities/` the `--fresh` filter recognises.
+FILED_SUBDIRS = (SOLUTION_SUBDIR, TOOL_SUBDIR, TASK_CAPABILITY_SUBDIR)
+
+#: Where a capability goes when the run did not file it anywhere itself.
 UNATTRIBUTED_SLUG = "unattributed"
+
+
+def _already_filed(relative: Path) -> bool:
+    """Is this capability already somewhere `--fresh` can see it?
+
+    Checked against every filed directory, not just one. The check used to name
+    `tasks/` alone, so the moment solutions moved to `capabilities/skills/` a
+    correctly-filed skill looked unfiled and was moved to
+    `tools/unattributed/` — promotion re-filing content that was already where
+    it belonged.
+    """
+    return any(d in relative.parts for d in FILED_SUBDIRS)
 
 
 def _promotion_slug(store_root: Path, path: Path) -> str:
@@ -847,13 +868,20 @@ def promote_to_source(store_root: Path) -> Dict[str, Any]:
             # Always promoted, never discoverable under `--fresh`: the write
             # is unconditional and the filter decides who reads it. Filing it
             # where the filter can see it is what makes both true at once.
-            if kind == "capabilities" and TASK_CAPABILITY_SUBDIR not in relative.parts:
-                relative = Path(kind) / TASK_CAPABILITY_SUBDIR / _promotion_slug(
+            if kind == "capabilities" and not _already_filed(relative):
+                relative = Path(kind) / TOOL_SUBDIR / _promotion_slug(
                     store_root, path) / relative.relative_to(kind)
             target = destination / relative
             # Never overwrite what the framework ships. A run adds to the
             # source tree; it does not edit it.
-            if target.exists() and kind == "capabilities" and "tasks" not in relative.parts:
+            # Never overwrite what the framework ships — but everything under
+            # a FILED directory is learned content, and learned content
+            # reconciles rather than being skipped. Naming `tasks/` alone here
+            # meant a solution at `capabilities/skills/<name>/` hit this guard
+            # and the second promotion of a subject was silently dropped,
+            # leaving the first pass's answer in place for good.
+            if (target.exists() and kind == "capabilities"
+                    and not _already_filed(relative)):
                 continue
             # A task answer that already exists is RECONCILED, not replaced.
             #

@@ -78,10 +78,26 @@ where = ["src"]
     ".phronix/skills/**/*.yaml",
     ".phronix/agents/*.yaml",
     ".phronix/memory/*.md",
+    # Recursive, because capabilities and research are DIRECTORIES now.
+    #
+    # A solution is `capabilities/skills/<TaskName>/SKILL.md` and a tool is
+    # `capabilities/tools/<cat>/<name>.py`; a flat `capabilities/*.py` glob
+    # ships neither, and shipped neither under the previous
+    # `capabilities/tasks/<slug>/<slug>/` layout either. Everything a run
+    # learns is supposed to travel with the wheel — that is the whole reason
+    # the store lives under the package — so the globs have to cross
+    # directories.
+    ".phronix/capabilities/**/*.py",
+    ".phronix/capabilities/**/*.md",
+    ".phronix/capabilities/**/*.json",
     ".phronix/capabilities/*.py",
     ".phronix/capabilities/*.md",
+    ".phronix/verifiers/**/*.py",
+    ".phronix/verifiers/**/*.md",
     ".phronix/verifiers/*.py",
     ".phronix/verifiers/*.md",
+    ".phronix/research/**/*.json",
+    ".phronix/research/**/*.md",
     ".phronix/research/*.json",
     # Layer-root files. A `**` glob still has to cross a directory, so anything
     # sitting directly in .phronix/ needs naming here.

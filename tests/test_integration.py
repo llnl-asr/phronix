@@ -198,8 +198,7 @@ def test_learning_lands_in_the_committed_project_layer(isolated_layers):
     capabilities.new("helper", "A helper.", source="def register(mcp):\n    pass\n")
 
     # An answer, so it lands under capabilities; `skills/` holds only method.
-    for path in (".phronix/capabilities/tasks/workload-thing/"
-                 "workload-thing/SKILL.md",
+    for path in (".phronix/capabilities/skills/workload-thing/SKILL.md",
                  ".phronix/memory/project-state.md",
                  ".phronix/memory/MEMORY.md",
                  ".phronix/capabilities/helper.py"):

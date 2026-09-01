@@ -14,14 +14,23 @@ def skill_home_under(root, name, subject=""):
     """
     from pathlib import Path
 
-    from phronix.capabilities import TASK_CAPABILITY_DIR, task_slug
-    from phronix.skills import is_core_skill
+    from phronix.skills import skill_home
 
     del subject                       # the slug decides, not the prose
-    root = Path(root)
-    if is_core_skill(name):
-        return root / "skills" / name
-    return root / "capabilities" / TASK_CAPABILITY_DIR / task_slug(name) / name
+
+    # Asked of the code, not restated.
+    #
+    # This function's whole point was to stop tests pinning a layout the
+    # system had moved off, and it restated the rule anyway — so when
+    # `capabilities/tasks/<slug>/<slug>/` flattened to
+    # `capabilities/skills/<slug>/`, twenty-six tests failed against a path
+    # nothing writes any more. `skill_home` is the one place that decides;
+    # a `Layer`-shaped stand-in is all it needs to answer for any root.
+    class _At:
+        def __init__(self, base): self.base = Path(base)
+        def dir(self, kind): return self.base / kind
+
+    return skill_home(name, _At(root))
 
 
 def skill_names_under(root):
@@ -36,6 +45,10 @@ def skill_names_under(root):
 
     root = Path(root)
     names = {d.name for d in (root / "skills").glob("*") if d.is_dir()}
-    names |= {d.name for d in (root / "capabilities" / "tasks").glob("*/*")
-              if d.is_dir() and (d / "SKILL.md").is_file()}
+    # Both layouts: `capabilities/skills/<name>/` now, and
+    # `capabilities/tasks/<slug>/<name>/` in any store written before the
+    # flattening — a carry root of 348 answers is not worth invalidating.
+    for pattern in ("capabilities/skills/*", "capabilities/tasks/*/*"):
+        names |= {d.name for d in root.glob(pattern)
+                  if d.is_dir() and (d / "SKILL.md").is_file()}
     return sorted(names)

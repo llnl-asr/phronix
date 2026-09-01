@@ -84,8 +84,15 @@ def register(mcp: Any) -> None:
         layer: str = "",
         overwrite: bool = False,
         topic: str = "",
+        category: str = "",
     ) -> str:
         """Turn a deterministic procedure into a permanent MCP tool.
+
+        Pass `category` to say what the tool is ABOUT — `pytest`, `patching`,
+        `search`. Tools are filed as `capabilities/tools/<category>/<name>.py`,
+        so a catalogue of hundreds stays navigable; a tool filed under the one
+        task that happened to need it is found by that task and by nothing
+        else, which is backwards for a procedure whose whole value is reuse.
 
         **Reach for this whenever you notice yourself following fixed steps.** A
         deterministic task written down as prose in a skill will be re-interpreted
@@ -136,7 +143,8 @@ def register(mcp: Any) -> None:
         try:
             return json.dumps(
                 new(name, description, source=source or None,
-                    layer=layer or None, overwrite=overwrite, topic=topic),
+                    layer=layer or None, overwrite=overwrite, topic=topic,
+                    category=category),
                 indent=2,
             )
         except Exception as exc:

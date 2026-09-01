@@ -29,7 +29,9 @@ it.
 | `I6` | Instructions | Say the problem, the approach and the answer, as you go |
 | `I7` | Instructions | Read the lessons first, and write one back |
 | `I8` | Instructions | Retrieve the conversation a turn at a time; never read it whole |
+| `I9` | Instructions | Check the layout before you finish, and link the tracker history |
 | `R1` | Rules | Diagnose the error, do not improve the area |
+
 
 
 ## Instructions
@@ -161,6 +163,19 @@ Use the tools instead, in this order:
 3. `conversation_turn(-1)` — the most recent turn, which says what just failed. Negative numbers count from the end.
 
 Ask for a turn when the summary leaves you guessing. Do not ask for all of them: the point is that only the turn you need enters the context.
+
+### I9 — Check the layout before you finish, and link the tracker history
+
+Two things a solution needs besides being right.
+
+**File it where it will be found.** Call `layout_check()` before you finish and act on every issue it returns. A solution that is correct and misfiled is one nothing reuses, and nothing will tell you — the write succeeds and the next run just finds nothing. The layout:
+
+    <tree>/skills/<Name>/SKILL.md      the solution + helper notes LINKED from it
+    <tree>/tools/<category>/<name>.py  deterministic tools, grouped by subject
+
+where <tree> is `capabilities` for the task at hand and `research` for a subject that was searched for. Prefer a TOOL to an instruction wherever the steps are always the same: a tool costs one call, an instruction is re-read and re-interpreted by every task that loads the skill.
+
+**Link the tracker history, do not paste it.** The record of what has already been tried belongs in the skill as a link, so the next attempt on this subject can follow it instead of re-deriving it. Add it once, as a reference block pointing at `tracker.md`. Do not restate an approach the record already holds: a history with the same finding written three times costs three reads to learn one thing, and a later attempt cannot tell whether it is looking at three results or one.
 
 ## Rules
 

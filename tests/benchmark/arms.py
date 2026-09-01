@@ -2357,7 +2357,23 @@ class Arm:
             return
 
         highest = max(int(e["n"]) for e in events)
-        phases = ", ".join(f"{e['phase']} ({e['cost']})" for e in events)
+        # One line per DISTINCT phase, with a count.
+        #
+        # A fold of "attempt (12s), attempt (12s), attempt (11s)" hands the
+        # tracker the same fact three times, and it writes it down three
+        # times. A later attempt reading the record then cannot tell whether
+        # it is looking at three findings or one, and pays three reads to
+        # learn one thing. Collapsed here, where the events still have
+        # structure, rather than asked of a model afterwards.
+        counted: Dict[str, int] = {}
+        costs: Dict[str, str] = {}
+        for event in events:
+            key = str(event["phase"])
+            counted[key] = counted.get(key, 0) + 1
+            costs.setdefault(key, str(event["cost"]))
+        phases = ", ".join(
+            f"{name} ({costs[name]})" if n == 1 else f"{name} x{n} ({costs[name]})"
+            for name, n in counted.items())
         files = [Path(p) for p in evidence if Path(p).is_file()]
         if state.tracker.is_file():
             files.append(state.tracker)
@@ -7563,12 +7579,16 @@ It is the plan itself, not background reading.
 
         here = slug(research_mod.resolve_topic(topic))
         # Two homes: the framework's method in `skills/`, a problem's ANSWER
-        # under `capabilities/tasks/<subject>/`. A solution is an answer, so
+        # under `capabilities/skills/<TaskName>/`. A solution is an answer, so
         # this reads both rather than assuming the store it used to live in.
-        roots = [Path(store_root) / "skills"]
-        roots += sorted(
-            d for d in (Path(store_root) / "capabilities" / "tasks").glob("*")
-            if d.is_dir())
+        #
+        # `capabilities/tasks/<slug>/<name>/` is the pre-flattening layout and
+        # is still read: a carry root of 348 answers is not worth invalidating
+        # over a directory rename.
+        capabilities = Path(store_root) / "capabilities"
+        roots = [Path(store_root) / "skills", capabilities / "skills"]
+        roots += sorted(d for d in (capabilities / "tasks").glob("*")
+                        if d.is_dir())
 
         def on_disk(name: str) -> bool:
             return bool(name) and any((root / name / "SKILL.md").is_file()

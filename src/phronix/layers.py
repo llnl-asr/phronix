@@ -396,20 +396,29 @@ def task_skill_dirs(start: Optional[Path] = None) -> Dict[str, Path]:
     `capabilities.visible_files` has always drawn this line correctly via
     `is_task_answer`; this is the same rule on the path skills are read by.
     """
-    from phronix.capabilities import session_authored, session_only
+    from phronix.capabilities import (SOLUTION_DIR, TASK_CAPABILITY_DIR,
+                                      session_authored, session_only)
 
     fresh = session_only()
     mine = session_authored() if fresh else {}
     out: Dict[str, Path] = {}
+    # Two layouts, one lookup. `skills/<TaskName>/SKILL.md` is current;
+    # `tasks/<slug>/<slug>/SKILL.md` is what every store written before the
+    # flattening holds, and a carry root of 348 answers is not worth
+    # invalidating over a directory name. Current layout is read LAST so it
+    # wins where both exist.
     for layer in layers(start):
-        root = layer.dir("capabilities") / "tasks"
-        if not root.is_dir():
-            continue
-        for skill_file in sorted(root.glob("*/*/SKILL.md")):
-            name = skill_file.parent.name
-            if fresh and name not in mine:
+        capabilities = layer.dir("capabilities")
+        for base, pattern in ((TASK_CAPABILITY_DIR, "*/*/SKILL.md"),
+                              (SOLUTION_DIR, "*/SKILL.md")):
+            root = capabilities / base
+            if not root.is_dir():
                 continue
-            out[name] = skill_file.parent
+            for skill_file in sorted(root.glob(pattern)):
+                name = skill_file.parent.name
+                if fresh and name not in mine:
+                    continue
+                out[name] = skill_file.parent
     return out
 
 

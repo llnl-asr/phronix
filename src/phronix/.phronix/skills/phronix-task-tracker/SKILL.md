@@ -26,6 +26,8 @@ not research. Recording is the whole job.
 | `I3` | Instructions | Record evidence, never impressions |
 | `I4` | Instructions | One task. Never carry another task's record into this one |
 | `R1` | Rules | Never delete a failure that is still true |
+| `R2` | Rules | Nothing appears twice; a repeat is a count, not a new entry |
+
 
 ## Instructions
 
@@ -148,3 +150,11 @@ every pass until it says the task is nearly solved. Measured elsewhere in this
 system: an agent reading a patched working tree concluded "the implementation is
 complete and correct" while a target test was failing. A record that had kept
 the failing test in front of it could not have agreed.
+
+### R2 — Nothing appears twice; a repeat is a count, not a new entry
+
+If a phase repeats a finding the record already holds, add a count to the existing entry rather than writing another one. Two entries saying the same thing are not two results.
+
+What it costs to get this wrong: a record with one finding written three times takes three reads to learn one thing, and the next attempt cannot tell whether three approaches were tried or one approach was tried three times — which is exactly the question it opens the record to answer. Measured on a live fold, one cycle handed the tracker `attempt, attempt, attempt` for three runs of the same stage.
+
+The same holds for the history the solution skill links to: it is read by every later attempt on this subject, so a duplicated entry is paid for again on every one of them.

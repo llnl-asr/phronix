@@ -100,8 +100,20 @@ def visible_files() -> Dict[str, Path]:
     # Keyed by filename here and by module name in the registry — compare on
     # the stem, which is the one form both agree about.
     def is_task_answer(path: Path) -> bool:
-        """Is this one task's answer, rather than a framework tool?"""
-        return f"/{TASK_CAPABILITY_DIR}/" in Path(path).as_posix()
+        """Was this LEARNED by some run, rather than shipped by the framework?
+
+        Every directory under `capabilities/` holds learned content —
+        `skills/` the task solutions, `tools/` the deterministic tools built
+        for them, `tasks/` the same thing under the pre-flattening layout. The
+        framework's own tools are the MCP services in `phronix/mcp_tools/`,
+        which are not files in this store at all, so nothing here is a
+        from-scratch run's to see.
+
+        Checked as a path SEGMENT: a task named `tools-something` must not be
+        mistaken for the tools directory.
+        """
+        parts = Path(path).as_posix().split("/")
+        return any(d in parts for d in LEARNED_DIRS)
 
     # Bundled tools YES; bundled task ANSWERS no.
     #
@@ -226,12 +238,57 @@ def duplicates(source: str, name: str = "") -> List[Dict[str, str]]:
 #: applies one task's fix outright, and a run that can call it has been handed
 #: the answer. A filename prefix cannot tell the two apart — both are `probe_` —
 #: so the scope is recorded as the place the file is kept.
+#: Kept as the legacy name for what is now `capabilities/skills`.
+#:
+#: Everything written under the old `capabilities/tasks/<slug>/<slug>/` layout
+#: is still read, so a carry root built before the rename keeps working.
 TASK_CAPABILITY_DIR = "tasks"
+
+#: One task's SOLUTION: `capabilities/skills/<TaskName>/SKILL.md`, plus any
+#: helper notes the skill links to.
+#:
+#: One level, not two. The old layout nested the slug inside itself —
+#: `tasks/psf-requests-3362/psf-requests-3362/SKILL.md` — on the theory that a
+#: task directory might hold several named skills. It never did: the harness
+#: files exactly one skill per task under the canonical name, so the outer
+#: directory was always a container of one thing with the same name as the
+#: thing.
+SOLUTION_DIR = "skills"
+
+#: Deterministic tools, grouped by what they are ABOUT: `tools/<cat>/<name>.py`.
+#:
+#: A procedure with one right answer belongs in code rather than in prose — a
+#: capability costs one tool call, an instruction is read and re-interpreted by
+#: every task that loads the skill. Grouping them by category is what makes a
+#: catalogue of hundreds navigable.
+TOOL_DIR = "tools"
+
+#: Where a tool goes when nothing said what it is about.
+DEFAULT_TOOL_CATEGORY = "general"
 
 
 def task_slug(topic: str) -> str:
     """Directory name for one task's capabilities."""
     return re.sub(r"[^a-z0-9]+", "-", str(topic).lower()).strip("-") or "unknown"
+
+
+def solution_home(slug: str, root: Path) -> Path:
+    """`<capabilities>/skills/<TaskName>` — one task's solution directory."""
+    return Path(root) / SOLUTION_DIR / task_slug(slug)
+
+
+def tool_home(category: str, root: Path) -> Path:
+    """`<capabilities>/tools/<cat>` — deterministic tools, grouped."""
+    clean = re.sub(r"[^a-z0-9]+", "-", str(category or "").lower()).strip("-")
+    return Path(root) / TOOL_DIR / (clean or DEFAULT_TOOL_CATEGORY)
+
+
+#: Every directory under `capabilities/` that holds LEARNED content.
+#:
+#: The `--fresh` filter keys on these. The framework's own tools are the MCP
+#: services in `phronix/mcp_tools/`, not files in this store, so everything
+#: here was written by some run and none of it is a from-scratch run's to see.
+LEARNED_DIRS = (SOLUTION_DIR, TOOL_DIR, TASK_CAPABILITY_DIR)
 
 
 def for_topic(topic: str) -> List[str]:
@@ -249,10 +306,13 @@ def for_topic(topic: str) -> List[str]:
     answer belongs where it can be looked up by subject and filtered by
     provenance.
     """
-    wanted = TASK_CAPABILITY_DIR + "/" + task_slug(topic)
+    slug = task_slug(topic)
+    # Both layouts: `skills/<slug>/` now, `tasks/<slug>/` before the
+    # flattening. A store written by an earlier run is still a store.
+    wanted = (f"{SOLUTION_DIR}/{slug}", f"{TASK_CAPABILITY_DIR}/{slug}")
     return sorted(
         Path(name).stem for name, path in visible_files().items()
-        if wanted in path.as_posix())
+        if any(w in path.as_posix() for w in wanted))
 
 
 def new(
@@ -262,6 +322,7 @@ def new(
     layer: Optional[str] = None,
     overwrite: bool = False,
     topic: str = "",
+    category: str = "",
 ) -> Dict[str, Any]:
     """Author a new capability and persist it to a layer.
 
@@ -300,8 +361,20 @@ def new(
     # A tool that knows a task is filed under that task, not beside the method
     # tools. Both are served identically; the location is what lets a later
     # from-scratch run inherit the methods and none of the answers.
-    if topic:
-        directory = directory / TASK_CAPABILITY_DIR / task_slug(topic)
+    # Tools are grouped by what they are ABOUT, not by who first needed them.
+    #
+    # A capability filed under one task is found by that task and by nothing
+    # else, which is backwards for a deterministic procedure: `run_pytest` and
+    # `grep_usage_sites` are the reusable half of what a run learns. Grouping
+    # by category is also what makes a catalogue of hundreds navigable —
+    # `capability_list` returned 195 flat names, which is not a list anyone
+    # chooses from.
+    #
+    # `category` when given; otherwise the topic, so a tool built while
+    # solving one task still lands somewhere meaningful.
+    group = category or topic
+    if group:
+        directory = tool_home(group, directory)
     directory.mkdir(parents=True, exist_ok=True)
     # The same procedure, already built, under another name.
     #

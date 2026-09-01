@@ -920,10 +920,18 @@ def skill_home(slug: str, target: Any, subject: str = "") -> Path:
     del subject                       # deliberately not part of the location
     if is_core_skill(slug):
         return target.dir("skills") / slug
-    from phronix.capabilities import TASK_CAPABILITY_DIR, task_slug
+    from phronix.capabilities import solution_home
 
-    return (target.dir("capabilities") / TASK_CAPABILITY_DIR
-            / task_slug(slug) / slug)
+    # `capabilities/skills/<TaskName>/`, one level.
+    #
+    # It used to be `capabilities/tasks/<slug>/<slug>/` — the slug nested
+    # inside itself — on the theory that a task might file several named
+    # skills. It never did: the harness re-files everything under the one
+    # canonical name, so the outer directory was a container of one thing
+    # named after the thing it contained.
+    #
+    # Existing stores are still READ at the old path; see `existing_home`.
+    return solution_home(slug, target.dir("capabilities"))
 
 
 def existing_home(slug: str) -> Optional[Path]:

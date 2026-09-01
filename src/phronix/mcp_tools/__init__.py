@@ -55,6 +55,7 @@ from typing import Any, Callable, Dict, List
 REGISTRARS: List[str] = [
     "phronix.mcp_tools.tools.context_service:register",
     "phronix.mcp_tools.tools.skills_service:register",
+    "phronix.mcp_tools.tools.layout_service:register",
     "phronix.mcp_tools.tools.authoring_service:register",
     "phronix.mcp_tools.tools.memory_service:register",
     "phronix.mcp_tools.tools.graph_service:register",
