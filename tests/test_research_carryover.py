@@ -9198,3 +9198,89 @@ def test_a_pair_runs_both_halves_in_one_allocation():
     # A reuse phase with no room measures nothing; the fresh result still
     # counts, so the pair stops rather than starting a half it cannot finish.
     assert "stopping after the $phase phase" in batch
+
+
+def test_the_task_solution_lands_in_capabilities_even_when_research_wrote_it():
+    """Routing by stage alone filed solutions where nothing looks for them.
+
+    The research stage writes BOTH: the task's solution, and whatever it
+    learned about the subject. Only the second belongs in `research/`. Filed
+    under `research/`, a solution is invisible to the next attempt, which asks
+    `capabilities/` for the task it is about to attempt — the retrieval-first
+    path that the whole tracked loop depends on.
+
+    The harness names the task's skill, so the exception is exact rather than
+    a guess about which names look task-shaped.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+
+    root = tempfile.mkdtemp()
+    keys = ("PHRONIX_PROJECT_ROOT", skills.SKILL_TREE_ENV, skills.TASK_SKILL_ENV)
+    was = {k: os.environ.get(k) for k in keys}
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        # Mid-research: the tree says research, one name is exempt.
+        os.environ[skills.SKILL_TREE_ENV] = "research"
+        os.environ[skills.TASK_SKILL_ENV] = "psf-requests-3362"
+        skills.write_block("psf-requests-3362", "instruction", "t", "b",
+                           description="the task's own answer")
+        skills.write_block("how-iter-content-decodes", "instruction", "t", "b",
+                           description="a subject worth keeping")
+    finally:
+        for key, value in was.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    store = Path(root) / ".phronix"
+    assert (store / "capabilities" / "skills" / "psf-requests-3362"
+            / "SKILL.md").is_file()
+    assert (store / "research" / "skills" / "how-iter-content-decodes"
+            / "SKILL.md").is_file()
+
+    arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert 'env["PHRONIX_TASK_SKILL"] = self.task_skill_name(' in arms
+
+
+def test_a_procedure_written_as_prose_is_reported_as_a_missing_tool():
+    """Preferring a tool leaves the default at prose, and prose always wins.
+
+    Across every run to date the system wrote lessons steadily and built ZERO
+    tools, with `capability_new` available throughout. A fenced block in a
+    solution is commands someone will run: a tool costs one call, while prose
+    is read, interpreted and re-acted-on by every task that loads the skill —
+    differently each time, which is where drift comes from.
+
+    Flagged only when nothing executable sits beside it, so a solution that
+    already built its tool is left alone and the check stays quiet on good
+    work.
+    """
+    import tempfile
+
+    from phronix.mcp_tools.tools.layout_service import _issues_for
+
+    root = Path(tempfile.mkdtemp())
+    prose = root / "capabilities" / "skills" / "prose-only"
+    prose.mkdir(parents=True)
+    (prose / "SKILL.md").write_text(
+        "# s\n\nRun this:\n\n```bash\npytest -k foo\n```\n", encoding="utf-8")
+    built = root / "capabilities" / "skills" / "has-tool"
+    built.mkdir(parents=True)
+    (built / "SKILL.md").write_text("# s\n\n```bash\npytest -k foo\n```\n",
+                                    encoding="utf-8")
+    (built / "run_it.py").write_text("def register(mcp): pass\n", encoding="utf-8")
+    facts = root / "capabilities" / "skills" / "just-facts"
+    facts.mkdir(parents=True)
+    (facts / "SKILL.md").write_text("# s\n\nThe constructor raises TypeError.\n",
+                                    encoding="utf-8")
+
+    flagged = {i["path"] for i in _issues_for(root, "capabilities")}
+    assert "capabilities/skills/prose-only/SKILL.md" in flagged
+    # Already built its tool: silent.
+    assert not any("has-tool" in p for p in flagged)
+    # A fact is not a procedure: silent.
+    assert not any("just-facts" in p for p in flagged)

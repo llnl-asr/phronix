@@ -2557,6 +2557,17 @@ class Arm:
         # agent picks the name, and no naming convention has survived contact
         # with one yet.
         env["PHRONIX_SKILL_TREE"] = "research" if phase == "research" else ""
+        # ...with the task's own solution exempted by NAME.
+        #
+        # The research stage writes both: the task's solution, and whatever it
+        # learned about the subject. Only the second belongs in `research/` —
+        # a solution filed there is invisible to the next attempt, which asks
+        # `capabilities/` for the task it is about to attempt.
+        try:
+            env["PHRONIX_TASK_SKILL"] = self.task_skill_name(
+                self.research_topic(instance))
+        except Exception:
+            env["PHRONIX_TASK_SKILL"] = ""
         # Which task's conversation the `conversation_*` tools serve.
         #
         # Set per stage rather than per run: the record is per task, and a

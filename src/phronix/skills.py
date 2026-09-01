@@ -901,6 +901,12 @@ CORE_SKILL_PREFIX = "phronix-"
 #: task's own capabilities.
 SKILL_TREE_ENV = "PHRONIX_SKILL_TREE"
 
+#: The canonical name of the skill holding THIS task's solution.
+#:
+#: Named by the harness so the research stage can write both a task solution
+#: and a subject's findings and have each land in the right tree.
+TASK_SKILL_ENV = "PHRONIX_TASK_SKILL"
+
 
 def _slug_for_tree(slug: str) -> str:
     """The directory name for *slug*, by the same rule both trees use."""
@@ -946,7 +952,18 @@ def skill_home(slug: str, target: Any, subject: str = "") -> Path:
     # Set by the harness around the research stage rather than inferred from
     # the name: an agent picks the name, and no naming convention has survived
     # contact with one yet.
-    if os.environ.get(SKILL_TREE_ENV, "").strip().lower() == "research":
+    # The TASK's own solution is a capability wherever it was written.
+    #
+    # Routing by stage alone was too blunt: the research stage writes the
+    # task's solution skill as well as anything it learns about a subject, so
+    # every solution diagnosed during research would have been filed under
+    # `research/` — where the next attempt's lookup, which asks
+    # `capabilities/` for the task it is about to attempt, would never find
+    # it. The harness names the task's skill, so the exception is exact
+    # rather than a guess about which names look task-shaped.
+    task_skill = os.environ.get(TASK_SKILL_ENV, "").strip()
+    if (os.environ.get(SKILL_TREE_ENV, "").strip().lower() == "research"
+            and slug != task_skill):
         from phronix.research import RESEARCH_DIR, subject_home
 
         return subject_home(_slug_for_tree(slug), target.dir(RESEARCH_DIR))

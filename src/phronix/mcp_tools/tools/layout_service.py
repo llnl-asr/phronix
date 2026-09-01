@@ -86,6 +86,10 @@ def _issues_for(root: Path, tree: str) -> List[Dict[str, str]]:
                 "fix": "write the solution with skill_write; helper notes sit "
                        "beside it and are LINKED from SKILL.md",
             })
+        try:
+            skill_text = (solution / "SKILL.md").read_text(errors="replace")
+        except OSError:
+            skill_text = ""
         # The slug nested inside itself, which is what the old layout did.
         if (solution / solution.name).is_dir():
             out.append({
@@ -95,10 +99,31 @@ def _issues_for(root: Path, tree: str) -> List[Dict[str, str]]:
                        f"{tree}/{SOLUTION_DIR}/{solution.name}/",
             })
         # A helper nobody links to is a file the next run will not read.
-        try:
-            skill_text = (solution / "SKILL.md").read_text(errors="replace")
-        except OSError:
-            skill_text = ""
+        # A PROCEDURE written as prose is a tool that was not built.
+        #
+        # A fenced block in a solution is commands or code someone will run,
+        # and prose is the expensive way to carry it: a tool costs one call,
+        # while an instruction is read, interpreted and re-acted-on by every
+        # task that loads the skill — differently each time, which is where
+        # drift comes from. Measured: across every run to date the system
+        # wrote lessons steadily and built ZERO tools, with `capability_new`
+        # available throughout, because preferring a tool leaves the default
+        # at prose and prose is always cheaper in the moment.
+        #
+        # Flagged only when nothing executable sits beside it, so a solution
+        # that already built its tool is left alone.
+        fenced = skill_text.count("```") >= 2
+        has_tool = any(solution.glob("*.py"))
+        if fenced and not has_tool:
+            out.append({
+                "path": f"{tree}/{SOLUTION_DIR}/{solution.name}/SKILL.md",
+                "problem": "a procedure written as prose, with no tool beside it",
+                "fix": "build the steps in the fenced block with "
+                       "capability_new(category=...) and reference the tool "
+                       "from the skill — a tool is called once; prose is "
+                       "re-interpreted by every task that reads it",
+            })
+
         # A `.py` beside the solution is that task's own fix, and belongs
         # here: the reader who loads the skill already is. Only SHARED tools
         # go to tools/<category>/.
