@@ -1010,6 +1010,20 @@ def write_block(skill: str, kind: str, title: str, body: str,
     """
     from phronix.privacy import anonymize, current_users
 
+    # A title must not carry a LABEL.
+    #
+    # Blocks render as `### I1 — Use iter_lines`, and an agent reading that
+    # back writes a block titled "I1 — Use iter_lines". The store then holds
+    # both `I1 — Use iter_lines` and `I4 — I1 — Use iter_lines`: the same
+    # point twice, the copy invisible to every same-point check because its
+    # title no longer matches. Measured, three of sixteen carried skills had
+    # doubled that way, and the doubling survives promotion — psf-requests-3362
+    # reached the reuse run with five instructions where it had three.
+    #
+    # Stripped rather than rejected: the content is right and only the title
+    # is wrong, and rejecting it would lose the block.
+    title = re.sub(r"^\s*[A-Z]{1,2}\d+\s*[—–-]\s*", "", str(title or "")).strip()
+
     if kind in ("lesson", "pitfall"):
         result = write_lesson(skill, body, kind=kind, title=title,
                               description=description, layer=layer)

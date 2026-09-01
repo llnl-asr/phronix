@@ -9862,3 +9862,48 @@ def test_a_passing_run_records_the_diff_that_passed():
     assert "and attempt.resolved):" in source
     assert source.index("arm.record_winning_patch(") < source.index(
         "arm.record_partial_progress(")
+
+
+def test_a_block_title_never_carries_its_own_label():
+    """Blocks render as `### I1 — Title`, and agents write that back as a title.
+
+    The store then holds both `I1 — Use iter_lines` and
+    `I4 — I1 — Use iter_lines`: the same point twice, and the copy is
+    invisible to every same-point check because its title no longer matches.
+    Three of sixteen carried skills had doubled that way, and the doubling
+    survives promotion — psf-requests-3362 reached a reuse run carrying five
+    instructions where it had three, two of them duplicates.
+
+    Stripped rather than rejected: the content is right and only the title is
+    wrong, and rejecting it would lose the block.
+    """
+    import os
+    import tempfile
+
+    from phronix import skill_schema, skills
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        skills.write_block("a-subject-no-layer-holds", "instruction",
+                           "Use iter_lines", "body", description="d")
+        # The same point, written back with its rendered label in the title.
+        skills.write_block("a-subject-no-layer-holds", "instruction",
+                           "I1 — Use iter_lines", "better body")
+        home = Path(root) / ".phronix" / "capabilities" / "skills" \
+            / "a-subject-no-layer-holds"
+        titles = [str(b.get("title") or "")
+                  for b in skill_schema.parse_skill(home).get("blocks") or []]
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    # No title carries a label, so the same-point check can still see them.
+    assert not any(t.startswith("I1 —") for t in titles), titles
+    assert "Use iter_lines" in titles
+
+    source = Path("src/phronix/skills.py").read_text(encoding="utf-8")
+    assert 'title = re.sub(r"^\\s*[A-Z]{1,2}\\d+\\s*[—–-]\\s*"' in source
