@@ -2995,6 +2995,25 @@ class Runner:
             tracer.retrievals(retrieval_log)
 
         retrieved = read_retrievals(retrieval_log)
+        # A skill the ATTEMPT proved it loaded counts as retrieved.
+        #
+        # `retrievals.jsonl` is written by the MCP server, and the attempt
+        # agent's `skill_load` never reaches it — which the `skill-use` event
+        # already works around by checking the transcript. That workaround set
+        # `attempt.skill_loaded` and stopped there, so the reuse metrics went
+        # on reading the empty log.
+        #
+        # Measured on the first reuse run that ever seeded: sphinx-8595 passed
+        # on try 1 where fresh had needed 3, the trace said `loaded
+        # `sphinx-doc-sphinx-8595` and worked from it`, and the row said
+        # retrieved=0 reused=0 prior-run=0. The one number the fresh/reuse
+        # pair exists to produce, reported as zero on a task that had just
+        # demonstrated reuse.
+        proven = [str(getattr(a, "recalled_skill", "") or "")
+                  for a in result.attempts if getattr(a, "skill_loaded", False)]
+        for name in proven:
+            if name and name not in retrieved:
+                retrieved.append(name)
         result.skills_retrieved = retrieved
         classified = ledger.classify(retrieved, order, repo)
         result.skills_reused = classified["reused"]

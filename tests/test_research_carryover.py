@@ -9284,3 +9284,48 @@ def test_a_procedure_written_as_prose_is_reported_as_a_missing_tool():
     assert not any("has-tool" in p for p in flagged)
     # A fact is not a procedure: silent.
     assert not any("just-facts" in p for p in flagged)
+
+
+def test_a_skill_the_attempt_proved_it_loaded_counts_as_retrieved():
+    """The reuse metric read a log the attempt agent never writes to.
+
+    `retrievals.jsonl` is written by the MCP server, and the attempt agent's
+    `skill_load` never reaches it — which the `skill-use` event already works
+    around by checking the transcript. That workaround set
+    `attempt.skill_loaded` and stopped there, so the metrics went on reading
+    the empty log.
+
+    Measured on the first reuse run that ever seeded: `sphinx-8595` passed on
+    try 1 where fresh had needed 3, the trace said ``loaded
+    `sphinx-doc-sphinx-8595` and worked from it``, and the row said
+    retrieved=0 reused=0 prior-run=0 — the one number the fresh/reuse pair
+    exists to produce, reported as zero on a task that had just demonstrated
+    reuse.
+    """
+    from tests.benchmark.metrics import Attempt, TaskResult
+    from tests.benchmark.runner import Ledger
+
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert 'proven = [str(getattr(a, "recalled_skill", "") or "")' in source
+    # Unioned into `retrieved` BEFORE classification, or the ledger never
+    # sees it and prior-run reuse stays zero.
+    assert source.index("retrieved.append(name)") < source.index(
+        "classified = ledger.classify(retrieved, order, repo)")
+
+    # And the classification then credits it as prior-run reuse.
+    result = TaskResult(instance_id="sphinx-doc__sphinx-8595")
+    result.attempts = [Attempt(index=1)]
+    result.attempts[0].recalled_skill = "sphinx-doc-sphinx-8595"
+    result.attempts[0].skill_loaded = True
+
+    retrieved = []
+    for attempt in result.attempts:
+        if attempt.skill_loaded and attempt.recalled_skill:
+            retrieved.append(attempt.recalled_skill)
+    assert retrieved == ["sphinx-doc-sphinx-8595"]
+
+    ledger = Ledger()
+    ledger.record_inherited("sphinx-doc-sphinx-8595")
+    out = ledger.classify(retrieved, order=0, repo="sphinx-doc/sphinx")
+    assert out["reused"] == ["sphinx-doc-sphinx-8595"]
+    assert out["inherited"] == ["sphinx-doc-sphinx-8595"]

@@ -410,3 +410,14 @@ TOTAL   0 task(s)     0 pass    0 fail    0 run      - of finished         0 tok
 - fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke5-fresh3-191945.log` (16/16 ready)
 - skills written: **0**   attempts that loaded one: **0**
 - `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0831-192216 --once`
+
+### smoke6 — `claude-0831-211616`  (5 task(s), 4 node(s))
+
+```
+TOTAL  10 task(s)     1 pass    9 fail    0 run    10% of finished      1.3M tok    $30.08   [#########!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+```
+
+- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0831-211616`
+- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke6-211341.log` (16/16 ready)
+- skills written: **0**   attempts that loaded one: **10**
+- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0831-211616 --once`
