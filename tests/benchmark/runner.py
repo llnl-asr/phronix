@@ -3665,6 +3665,21 @@ class Runner:
                     try:
                         attempt.recalled_skill = arm.best_skill_for(
                             store_root, arm.research_topic(instance)) or ""
+                        # An EMPTY skill is a miss, not a hit.
+                        #
+                        # Every task is guaranteed a skill so that a later
+                        # pass has somewhere to write, which means a skill
+                        # existing says nothing about it holding anything.
+                        # Offering one anyway announces `the attempt solves
+                        # with it` over a file whose only content is "nothing
+                        # is established about this subject yet", and then
+                        # scores the attempt as having declined to use it.
+                        # Measured on this reuse run: two of five carried
+                        # skills were placeholders, and both tasks were logged
+                        # as `was given it and never loaded it`.
+                        if attempt.recalled_skill and not arm._skill_has_content(
+                                store_root, attempt.recalled_skill):
+                            attempt.recalled_skill = ""
                     except Exception:
                         # A lookup that fails is a miss, not a broken attempt.
                         attempt.recalled_skill = ""

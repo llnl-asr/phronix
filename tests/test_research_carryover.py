@@ -9454,3 +9454,26 @@ def test_a_skill_that_learned_something_stops_saying_it_has_not():
     source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
     assert source.index("arm.retire_placeholder(") < source.index(
         "promoted = promote_store(store_root, Path(promote_into))")
+
+
+def test_an_empty_skill_is_a_miss_not_a_hit():
+    """Every task is guaranteed a skill, so existing says nothing about content.
+
+    `open_task_skill` writes a valid but empty skill so a later pass has
+    somewhere to write. Offering one back announces "found X — the attempt
+    solves with it" over a file whose only content is "nothing is established
+    about this subject yet", and then scores the attempt as having DECLINED to
+    use it.
+
+    Measured on the reuse run: two of five carried skills were placeholders,
+    and both tasks were logged `was given it and never loaded it` — a reuse
+    failure recorded against the agent for ignoring an empty file.
+    """
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    lookup = source[source.index('tracer.begin("search-skill"'):]
+    lookup = lookup[:lookup.index("retrieved_before", 10)] if "retrieved_before" in lookup[10:] else lookup[:4000]
+
+    assert "if attempt.recalled_skill and not arm._skill_has_content(" in source
+    # Cleared BEFORE the trace announces a hit, or the announcement lies.
+    assert source.index("not arm._skill_has_content(") < source.index(
+        "the attempt solves with it")
