@@ -9419,31 +9419,35 @@ def test_a_skill_that_learned_something_stops_saying_it_has_not():
     from phronix import skills
     from tests.benchmark.arms import ClaudePhronixArm as Arm
 
+    # A name no real layer holds. `write_block` resolves through the
+    # layers, so a skill of the same name in the packaged layer is found
+    # and written to instead — which made this test pass or fail on
+    # whether an unrelated run had polluted the checkout.
     root = tempfile.mkdtemp()
     was = os.environ.get("PHRONIX_PROJECT_ROOT")
     os.environ["PHRONIX_PROJECT_ROOT"] = root
     try:
         arm = Arm.__new__(Arm)
         store = Path(root) / ".phronix"
-        skills.write_block("sphinx-doc-sphinx-8595", "rule",
+        skills.write_block("a-subject-no-layer-holds", "rule",
                            Arm.PLACEHOLDER_TITLE, "nothing yet",
                            description="What is known about it. Nothing yet.")
 
         # An EMPTY skill keeps its placeholder: that is what makes it valid.
-        assert arm.retire_placeholder(store, "sphinx-doc-sphinx-8595") is False
+        assert arm.retire_placeholder(store, "a-subject-no-layer-holds") is False
 
-        skills.write_block("sphinx-doc-sphinx-8595", "instruction",
+        skills.write_block("a-subject-no-layer-holds", "instruction",
                            "Handle empty __all__ in autodoc", "return False, []")
-        assert arm.retire_placeholder(store, "sphinx-doc-sphinx-8595") is True
+        assert arm.retire_placeholder(store, "a-subject-no-layer-holds") is True
 
-        text = (Path(skills.existing_home("sphinx-doc-sphinx-8595"))
+        text = (Path(skills.existing_home("a-subject-no-layer-holds"))
                 / "SKILL.md").read_text(encoding="utf-8")
         assert Arm.PLACEHOLDER_TITLE not in text
         # The description names what is known, rather than denying it.
         assert "Nothing yet" not in text
         assert "Handle empty __all__" in text
         # Idempotent: nothing left to retire on a second pass.
-        assert arm.retire_placeholder(store, "sphinx-doc-sphinx-8595") is False
+        assert arm.retire_placeholder(store, "a-subject-no-layer-holds") is False
     finally:
         if was is None:
             os.environ.pop("PHRONIX_PROJECT_ROOT", None)
@@ -9794,3 +9798,67 @@ def test_the_progress_block_is_written_into_the_run_store():
     assert text.count(f"### R1 — {Arm.PROGRESS_TITLE}") == 1
     # The other blocks survive.
     assert "### I1 — Use iter_lines" in text
+
+
+def test_a_passing_run_records_the_diff_that_passed():
+    """A skill written from a passing run described the fix instead of carrying it.
+
+    `psf-requests-3362` PASSED and recorded "Replace uses of
+    `iter_content(..., decode_unicode=True)` with `iter_lines(...)`" — advice,
+    with no diff, no file and no line. The next reuse run had to re-derive the
+    patch from that description, and failed.
+
+    Across five tasks the correlation was exact. `sphinx-doc-sphinx-8595` is
+    the only skill holding a real diff, and the only task that passes in every
+    reuse run; the four prose-only skills produce coin flips. So the harness
+    writes the patch, because it is not a judgement — what passed is known
+    exactly. The agent's job is why it works, not reconstructing what it was.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        skills.write_block("psf-requests-3362", "instruction",
+                           "Use iter_lines", "advice only", description="d")
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    store = Path(root) / ".phronix"
+    arm = Arm.__new__(Arm)
+    target = store / "capabilities" / "skills" / "psf-requests-3362" / "SKILL.md"
+    patch = ("--- a/requests/models.py\n+++ b/requests/models.py\n"
+             "@@ -1,3 +1,3 @@\n-    return chunk\n+    return chunk.decode(enc)\n")
+
+    assert arm.record_winning_patch(store, "psf-requests-3362", patch, 1) is True
+    text = target.read_text(encoding="utf-8")
+    # The diff itself, verbatim — file, hunk and both sides.
+    assert "requests/models.py" in text
+    assert "chunk.decode(enc)" in text
+    assert "@@" in text
+    # And it says not to re-derive it, which is the whole point.
+    assert "do not re-derive it from scratch" in text
+
+    # Written again, the block is replaced rather than duplicated.
+    assert arm.record_winning_patch(store, "psf-requests-3362", patch, 2) is True
+    text = target.read_text(encoding="utf-8")
+    assert text.count(f"### I2 — {Arm.SOLUTION_TITLE}") == 1
+    assert "### I1 — Use iter_lines" in text
+
+    # An empty patch records nothing: a skill claiming a fix it does not hold
+    # is worse than one that admits it has none.
+    assert arm.record_winning_patch(store, "psf-requests-3362", "   ", 3) is False
+
+    # Only on a PASS, and before the partial-progress block.
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert "and attempt.resolved):" in source
+    assert source.index("arm.record_winning_patch(") < source.index(
+        "arm.record_partial_progress(")

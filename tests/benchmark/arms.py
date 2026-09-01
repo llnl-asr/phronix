@@ -2779,6 +2779,74 @@ there are several, merge them — one task, one skill.
                             return path.parent
         return None
 
+    #: The block holding the diff that actually made the tests pass.
+    SOLUTION_TITLE = "The patch that made the tests pass"
+
+    #: Most bytes of patch kept in a skill. A whole refactor is not a fix.
+    SOLUTION_PATCH_B = 6000
+
+    def record_winning_patch(self, store_root: Path, skill: str,
+                             patch: str, attempt_index: int = 0) -> bool:
+        """Put the diff that PASSED into the skill, verbatim.
+
+        A skill written from a passing run described the fix instead of
+        carrying it: `psf-requests-3362` passed, and what it recorded was
+        "Replace uses of `iter_content(..., decode_unicode=True)` with
+        `iter_lines(...)`" — advice, with no diff, no file and no line. The
+        next run had to re-derive the patch from the description and failed.
+
+        The one skill that holds an actual diff, `sphinx-doc-sphinx-8595`, is
+        the one task that passes in every reuse run. The correlation across
+        five tasks is exact: diff present, reproduces; prose only, coin flip.
+
+        So the harness writes it, because it is not a judgement — the patch
+        that passed is known exactly. What the agent adds is why it works;
+        what it must not have to reconstruct is what it was.
+        """
+        from phronix import skill_schema
+
+        text = (patch or "").strip()
+        home = self._skill_home_in(store_root, skill)
+        if not text or home is None:
+            return False
+        if len(text) > self.SOLUTION_PATCH_B:
+            # Kept whole or not at all: half a diff cannot be applied, and
+            # would read as the fix while being unusable.
+            head = text[:self.SOLUTION_PATCH_B]
+            text = head[:head.rfind("\n")] if "\n" in head else head
+            text += ("\n\n(truncated — the full diff is in the run that "
+                     "produced it; treat this as the shape of the change, "
+                     "not something to apply directly)")
+        body = ("This diff made the target tests pass. Apply it, or make the "
+                "equivalent change — do not re-derive it from scratch.\n\n"
+                f"```diff\n{text}\n```")
+        try:
+            parsed = skill_schema.parse_skill(Path(home))
+            existing = list(parsed.get("blocks") or [])
+            mine = next((b for b in existing
+                         if str(b.get("title") or "") == self.SOLUTION_TITLE),
+                        None)
+            label = str((mine or {}).get("label") or "")
+            if not label:
+                used = [int(str(b.get("label") or "I0")[1:] or 0)
+                        for b in existing
+                        if str(b.get("label") or "").startswith("I")
+                        and str(b.get("label") or "I")[1:].isdigit()]
+                label = f"I{max(used or [0]) + 1}"
+            blocks = [b for b in existing
+                      if str(b.get("title") or "") != self.SOLUTION_TITLE]
+            blocks.append({"kind": "instruction", "title": self.SOLUTION_TITLE,
+                           "body": body, "label": label,
+                           "prefix": "I", "number": int(label[1:])})
+            (Path(home) / "SKILL.md").write_text(
+                skill_schema.render_skill(
+                    skill, str(parsed.get("description") or skill),
+                    str(parsed.get("subject") or skill), blocks),
+                encoding="utf-8")
+        except Exception:
+            return False
+        return True
+
     #: The one block that records how far the task has actually got.
     PROGRESS_TITLE = "What has been achieved so far, and what has not"
 

@@ -432,3 +432,14 @@ TOTAL  10 task(s)     2 pass    8 fail    0 run    20% of finished      1.4M tok
 - fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke10-reuse-235746.log` (16/16 ready)
 - skills written: **348**   attempts that loaded one: **8**
 - `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0901-000018 --once`
+
+### smoke11-reuse — `claude-0901-085709`  (5 task(s), 4 node(s))
+
+```
+TOTAL  10 task(s)     2 pass    8 fail    0 run    20% of finished      1.6M tok    $37.53   [###################!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+```
+
+- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0901-085709`
+- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke11-reuse-085438.log` (16/16 ready)
+- skills written: **348**   attempts that loaded one: **11**
+- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0901-085709 --once`

@@ -2624,6 +2624,27 @@ class Runner:
             # say both, and it dies with the run — so the next RUN inherited
             # "this task failed" and nothing about the half already working,
             # and a later attempt rewrote the part that was correct.
+            # The diff that PASSED, verbatim, before anything else.
+            #
+            # A skill written from a passing run described the fix instead of
+            # carrying it, and the next run had to re-derive it. Across five
+            # tasks the correlation was exact: the one skill holding a real
+            # diff is the one task that passes in every reuse run.
+            if (getattr(arm, "uses_phronix", False) and attempt.resolved):
+                try:
+                    if arm.record_winning_patch(
+                            store_root,
+                            arm.task_skill_name(arm.research_topic(instance)),
+                            _patch_text(workdir / f"attempt-{attempt_index}"),
+                            attempt_index) and tracer:
+                        tracer.event("solution",
+                                     f"try {attempt_index}: wrote the passing "
+                                     f"diff into the skill")
+                except Exception as exc:
+                    if tracer:
+                        tracer.event("solution",
+                                     f"could not record the patch: {exc}"[:160])
+
             if getattr(arm, "uses_phronix", False) and attempt.verdict:
                 try:
                     if arm.record_partial_progress(
