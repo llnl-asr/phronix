@@ -2760,6 +2760,69 @@ there are several, merge them — one task, one skill.
     #: The placeholder a skill is opened with, matched to retire it later.
     PLACEHOLDER_TITLE = "Nothing is established about this subject yet"
 
+    #: The one block that records how far the task has actually got.
+    PROGRESS_TITLE = "What has been achieved so far, and what has not"
+
+    def record_partial_progress(self, store_root: Path, skill: str,
+                                verdict: Dict[str, Any],
+                                attempt_index: int = 0) -> bool:
+        """Write which target tests PASS and which still fail, into the skill.
+
+        A verdict is not a pass or a fail; at 1 of 2 it is both, and only the
+        failing half was ever carried forward. `feedback.md` was taught to say
+        both — and it dies with the run, so the next RUN inherits "this task
+        failed" and nothing about the half that was already working. A later
+        attempt then rewrites the part that was correct.
+
+        Written by the harness because it is not a judgement: the evaluator
+        already knows exactly which named tests passed. One block, replaced
+        each time rather than appended, so the skill says where the task IS
+        rather than accumulating a diary of where it has been.
+        """
+        from phronix import skills as skills_module
+
+        passing = list(verdict.get("fail_to_pass_passing") or [])
+        failing = list(verdict.get("fail_to_pass_failing") or [])
+        regressions = list(verdict.get("regressions") or [])
+        if not skill or not (passing or failing):
+            return False
+        # Nothing worked and nothing is known: that is what the placeholder
+        # already says, and repeating it as progress is noise.
+        if not passing and not regressions and not failing:
+            return False
+
+        lines = []
+        if passing:
+            lines.append(
+                f"**Already passing ({len(passing)} of "
+                f"{len(passing) + len(failing)}).** Do not rewrite the code "
+                f"that makes these pass — they are the part that works:\n"
+                + "\n".join(f"- `{n}`" for n in passing[:8]))
+        else:
+            lines.append("**No target test passes yet.** Every approach so far "
+                         "has left all of them failing.")
+        if failing:
+            lines.append(
+                f"**Still failing ({len(failing)}).** This is what is left to "
+                f"do, and the whole task is not:\n"
+                + "\n".join(f"- `{n}`" for n in failing[:8]))
+        if regressions:
+            lines.append(
+                f"**Broken by an earlier attempt ({len(regressions)}).** These "
+                f"passed before and do not now, so something already tried was "
+                f"too broad:\n"
+                + "\n".join(f"- `{n}`" for n in regressions[:6]))
+        if attempt_index:
+            lines.append(f"Measured after try {attempt_index}.")
+
+        try:
+            result = skills_module.write_block(
+                skill, "rule", self.PROGRESS_TITLE, "\n\n".join(lines),
+                replace=True)
+        except Exception:
+            return False
+        return bool(result) and result.get("status") in ("ok", "updated")
+
     def retire_placeholder(self, store_root: Path, skill: str) -> bool:
         """Drop the "nothing is established" rule once something is.
 

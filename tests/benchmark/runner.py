@@ -2614,6 +2614,31 @@ class Runner:
                 arm.tasks_without_environment = 0
             result.attempts.append(attempt)
             last_verdict = attempt.verdict
+            # Where the task has actually GOT to, into the skill.
+            #
+            # A verdict at 1 of 2 is a pass and a fail at once, and only the
+            # failing half was carried forward. `feedback.md` was taught to
+            # say both, and it dies with the run — so the next RUN inherited
+            # "this task failed" and nothing about the half already working,
+            # and a later attempt rewrote the part that was correct.
+            if getattr(arm, "uses_phronix", False) and attempt.verdict:
+                try:
+                    if arm.record_partial_progress(
+                            store_root,
+                            arm.task_skill_name(arm.research_topic(instance)),
+                            attempt.verdict, attempt_index):
+                        if tracer:
+                            tracer.event(
+                                "progress",
+                                f"try {attempt_index}: recorded "
+                                f"{len(attempt.verdict.get('fail_to_pass_passing') or [])}"
+                                f" passing / "
+                                f"{len(attempt.verdict.get('fail_to_pass_failing') or [])}"
+                                f" still failing into the skill")
+                except Exception as exc:
+                    if tracer:
+                        tracer.event("progress",
+                                     f"could not record progress: {exc}"[:160])
             signature = _failure_signature(attempt.verdict)
             if signature:
                 same = signatures.count(signature)

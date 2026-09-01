@@ -9571,3 +9571,81 @@ def test_skill_content_is_judged_in_the_layout_that_is_actually_written():
     # Both trees and both layouts, derived rather than named one at a time.
     assert 'for tree in ("capabilities", "research")' in source
     assert 'for sub in ("skills", "tasks")' in source
+
+
+def test_a_partial_result_records_both_halves_into_the_skill():
+    """A verdict at 1 of 2 is a pass and a fail at once.
+
+    Only the failing half was ever carried forward. `feedback.md` was taught
+    to say both — and it dies with the run, so the next RUN inherited "this
+    task failed" and nothing about the half already working. A later attempt,
+    told the task failed, then rewrites the code that was already correct.
+
+    Written by the harness because it is not a judgement: the evaluator knows
+    exactly which named tests passed. One block, replaced each time, so the
+    skill says where the task IS rather than accumulating a diary.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        arm = Arm.__new__(Arm)
+        store = Path(root) / ".phronix"
+        skills.write_block("sympy-19254", "rule", Arm.PLACEHOLDER_TITLE,
+                           "none", description="d")
+        verdict = {
+            "fail_to_pass_passing": ["test_mignotte_bound_poly"],
+            "fail_to_pass_failing": ["test_mignotte_bound_multivar"],
+            "regressions": ["test_factor_list"],
+        }
+        assert arm.record_partial_progress(store, "sympy-19254", verdict, 2)
+        text = (Path(skills.existing_home("sympy-19254"))
+                / "SKILL.md").read_text(encoding="utf-8")
+
+        # What WORKS, named, and protected from being rewritten.
+        assert "Already passing (1 of 2)" in text
+        assert "test_mignotte_bound_poly" in text
+        assert "Do not rewrite the code that makes these pass" in text
+        # What is left, named, and scoped: the whole task is not left.
+        assert "Still failing (1)" in text
+        assert "test_mignotte_bound_multivar" in text
+        # And what an earlier attempt broke, which says an approach was too broad.
+        assert "test_factor_list" in text
+
+        # Replaced, not appended: the skill says where the task IS.
+        verdict["fail_to_pass_passing"] = ["test_mignotte_bound_poly",
+                                           "test_mignotte_bound_multivar"]
+        verdict["fail_to_pass_failing"] = []
+        arm.record_partial_progress(store, "sympy-19254", verdict, 3)
+        text = (Path(skills.existing_home("sympy-19254"))
+                / "SKILL.md").read_text(encoding="utf-8")
+        # Once as a heading (the index lists it too, which is not a copy).
+        assert text.count(f"### R2 — {Arm.PROGRESS_TITLE}") <= 1
+        assert text.count(Arm.PROGRESS_TITLE) == 2
+        assert "Already passing (2 of 2)" in text
+        # The superseded measurement is GONE, not stacked beneath it.
+        assert "Measured after try 3" in text
+        assert "Measured after try 2" not in text
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    # Recorded after EVERY verdict, not only a final one.
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert "arm.record_partial_progress(" in source
+    assert source.index("last_verdict = attempt.verdict") < source.index(
+        "arm.record_partial_progress(")
+
+    # And the agent is told the half it must supply: WHY the failing half fails.
+    skill = Path(
+        "src/phronix/.phronix/skills/phronix-task-research/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "A partial result is evidence twice" in skill

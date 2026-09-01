@@ -32,6 +32,8 @@ it.
 | `I9` | Instructions | Check the layout before you finish, and link the tracker history |
 | `R1` | Rules | Diagnose the error, do not improve the area |
 | `R2` | Rules | Validate the record and the layout before you finish |
+| `R3` | Rules | A partial result is evidence twice; record both halves |
+
 
 
 
@@ -203,3 +205,13 @@ Two checks, both cheap, both before you report:
 `layout_check()` — is it filed where the next run will find it?
 
 Both return an `issues` list where every entry names the move that fixes it. Act on them and call again. A record that fails either has cost its whole price and bought nothing: the write succeeded, and the next run finds nothing it can use.
+
+### R3 — A partial result is evidence twice; record both halves
+
+A verdict is rarely just a pass or a fail. At 1 of 2 target tests it is both at once, and the half that WORKS is the more valuable half: it is the only part already confirmed against the tests.
+
+So say which part worked and which did not, by name. Not "the attempt failed" — that is true of every attempt that has not finished, and it tells the next one to start over. " passes;  does not" tells it where the line is.
+
+This matters most for a task NOBODY has solved. A subject with no solution still has a shape: approaches that got partway, the exact point each one broke, and what a fix must not undo. Recording only failure throws that away and the next run rediscovers it at full price — and a later attempt, told the task failed, rewrites the code that was already correct.
+
+The harness writes the measured half of this into the skill after every verdict. Your job is the part it cannot measure: WHY the failing half fails, and which approaches are now ruled out.
