@@ -9512,7 +9512,11 @@ def test_what_already_failed_reaches_the_attempt_not_only_research():
 
     source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
     # Attached to the ATTEMPT, before the plan note, on every try.
-    assert "lessons = self._lessons_for(store_root," in source
+    assert "lessons = (self._lessons_for(store_root, for_task)" in source
+    # Keyed on the task's CANONICAL skill, not on whether the lookup hit: a
+    # task whose skill is empty is exactly the one with nothing to reuse and
+    # everything to avoid repeating.
+    assert "for_task = self.task_skill_name(self.research_topic(instance))" in source
     assert "files += self.attachments([lessons])" in source
     assert source.index("prompt += self.LESSONS_NOTE") < source.index(
         "prompt += self.PLAN_NOTE.format(")

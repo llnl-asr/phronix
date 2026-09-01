@@ -4588,8 +4588,17 @@ class OpenCodeArm(Arm):
         # Attached whenever the skill has one, on every try including the
         # first: trying something new each time and recording what worked and
         # what did not is the point, and it does not start at try 2.
-        lessons = self._lessons_for(store_root, getattr(self, "recalled_skill", "")
-                                    or (plan or {}).get("skill", ""))
+        # Keyed on the task's CANONICAL skill name, not on whether the lookup
+        # hit. A task whose skill is empty is exactly the one with nothing to
+        # reuse and everything to avoid repeating: sympy-19254 carried a
+        # placeholder skill — correctly a miss — and 599 bytes of recorded
+        # pitfalls, and keying off the miss would have withheld them.
+        try:
+            for_task = self.task_skill_name(self.research_topic(instance))
+        except Exception:
+            for_task = ""
+        lessons = (self._lessons_for(store_root, for_task)
+                   or self._lessons_for(store_root, (plan or {}).get("skill", "")))
         if lessons is not None:
             files += self.attachments([lessons])
             prompt += self.LESSONS_NOTE
