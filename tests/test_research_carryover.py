@@ -9649,3 +9649,57 @@ def test_a_partial_result_records_both_halves_into_the_skill():
         "src/phronix/.phronix/skills/phronix-task-research/SKILL.md"
     ).read_text(encoding="utf-8")
     assert "A partial result is evidence twice" in skill
+
+
+def test_the_placeholder_is_retired_in_the_store_the_run_actually_writes():
+    """`existing_home` resolves against the asking process's layers.
+
+    The runner's layers are the checkout's, not the store the run writes to,
+    so the retirement looked in the wrong tree and silently did nothing:
+    sympy-19254 gained a real instruction, kept "Nothing is established about
+    this subject yet" beside it, and was promoted that way into the carry root
+    for the next run to read.
+
+    Both questions — where does this skill live, and does it say anything —
+    are asked about the same file and must not disagree about where it is.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+
+    arm = Arm.__new__(Arm)
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        # Built the way the code builds it, so the fixture cannot drift from
+        # the real file shape.
+        skills.write_block("sympy-sympy-19254", "rule", Arm.PLACEHOLDER_TITLE,
+                           "none", description="What is known. Nothing yet.")
+        skills.write_block("sympy-sympy-19254", "instruction",
+                           "Fix dup_zz_mignotte_bound", "raise the bound")
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    store = Path(root) / ".phronix"
+    home = store / "capabilities" / "skills" / "sympy-sympy-19254"
+    assert (home / "SKILL.md").is_file()
+
+    # Found in the STORE, with no layer lookup involved — the environment
+    # variable is restored above, so a layer lookup here would find nothing.
+    assert arm._skill_home_in(store, "sympy-sympy-19254") == home
+    assert arm._skill_home_in(store, "not-here") is None
+
+    assert arm.retire_placeholder(store, "sympy-sympy-19254") is True
+    text = (home / "SKILL.md").read_text(encoding="utf-8")
+    assert Arm.PLACEHOLDER_TITLE not in text
+    assert "Fix dup_zz_mignotte_bound" in text
+    assert "Nothing yet" not in text
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert "home = self._skill_home_in(store_root, skill)" in source

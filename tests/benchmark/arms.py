@@ -2760,6 +2760,25 @@ there are several, merge them — one task, one skill.
     #: The placeholder a skill is opened with, matched to retire it later.
     PLACEHOLDER_TITLE = "Nothing is established about this subject yet"
 
+    @staticmethod
+    def _skill_home_in(store_root: Path, skill: str) -> Optional[Path]:
+        """Where *skill* lives inside this run's store, or None.
+
+        Both trees and both layouts, by the same rule `_skill_has_content`
+        uses — the two questions are asked about the same file and must not
+        disagree about where it is.
+        """
+        if not skill:
+            return None
+        for tree in ("capabilities", "research"):
+            for sub in ("skills", "tasks"):
+                root = Path(store_root) / tree / sub
+                for pattern in (f"{skill}/SKILL.md", f"*/{skill}/SKILL.md"):
+                    for path in sorted(root.glob(pattern)):
+                        if path.is_file():
+                            return path.parent
+        return None
+
     #: The one block that records how far the task has actually got.
     PROGRESS_TITLE = "What has been achieved so far, and what has not"
 
@@ -2842,10 +2861,18 @@ there are several, merge them — one task, one skill.
 
         Deterministic, because retiring a placeholder is not a judgement.
         """
-        from phronix import skill_schema, skills as skills_module
+        from phronix import skill_schema
 
-        home = skills_module.existing_home(skill)
-        if home is None or not (Path(home) / "SKILL.md").is_file():
+        # Found inside THIS RUN'S store, not through the layers.
+        #
+        # `existing_home` resolves against the layers of whatever process asks,
+        # and the runner's layers are the checkout's — not the store the run
+        # writes to. So the retirement looked in the wrong tree and silently
+        # did nothing: sympy-19254 gained a real instruction, kept
+        # `R1 — Nothing is established about this subject yet` beside it, and
+        # was promoted that way into the carry root for the next run to read.
+        home = self._skill_home_in(store_root, skill)
+        if home is None:
             return False
         parsed = skill_schema.parse_skill(Path(home))
         blocks = list(parsed.get("blocks") or [])
