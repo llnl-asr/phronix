@@ -2124,13 +2124,19 @@ def test_the_gate_paces_agent_starts_and_waits_out_a_closed_window():
     # Spacing forced rather than read from tuning: a deployment that sets
     # `llm.min_seconds_between_starts` to 0 — correct for a self-hosted server
     # that schedules its own queue — would otherwise make this assert nothing.
+    import os
+
     gate = _LlmGate()
     monkey = {"llm.min_seconds_between_starts": 1.0,
               "llm.max_concurrent_agents": 4}
     import tests.benchmark.arms as arms_mod
 
     real = arms_mod._tuned
+    was_hosted = os.environ.get(arms_mod.HOSTED_ENV)
     arms_mod._tuned = lambda key, fallback: monkey.get(key, fallback)
+    # Pacing exists for the ACCOUNT's usage window, so it is a hosted-run
+    # property. A local fleet has no window; see the local branch below.
+    os.environ[arms_mod.HOSTED_ENV] = "1"
     try:
         started = time.time()
         with gate.slot():
@@ -2142,6 +2148,10 @@ def test_the_gate_paces_agent_starts_and_waits_out_a_closed_window():
         assert time.time() - started >= 1.0
     finally:
         arms_mod._tuned = real
+        if was_hosted is None:
+            os.environ.pop(arms_mod.HOSTED_ENV, None)
+        else:
+            os.environ[arms_mod.HOSTED_ENV] = was_hosted
 
     notes = []
     gate.rejected_until(time.time() + 10_000, notes.append)
@@ -2153,6 +2163,52 @@ def test_the_gate_paces_agent_starts_and_waits_out_a_closed_window():
     gate._wait_for_window(notes.append)
     assert time.time() - waited < 5
     assert any("going ahead" in note for note in notes)
+
+
+def test_a_local_fleet_is_not_paced_like_a_usage_window():
+    """The cap of 8 and the 2s stagger are about the ACCOUNT, not the machine.
+
+    A hosted subscription has a five-hour window that, once rejected, fails
+    every agent for the rest of it, so the draw has to be paced. A local fleet
+    has no window: the binding limit is the replica count, and the same
+    argument that set 8 for hosted runs against it here — capping below the
+    server's concurrency moves the queue into the client, where it shows up as
+    nothing at all.
+
+    Measured on a 16-node run: 64 replicas ready and idle, 20 tasks in two
+    arms wanting attempt, research, track and learn agents, and the trace
+    saying `waiting for one of 8 agent slots`.
+    """
+    import os
+
+    import tests.benchmark.arms as arms_mod
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # The key and the default both switch on the same question.
+    assert '"llm.max_concurrent_agents"' in source
+    assert '"llm.max_concurrent_agents_local"' in source
+    assert "default = 8 if _hosted_run() else 64" in source
+    assert '"llm.min_seconds_between_starts_local"' in source
+    assert "2.0 if _hosted_run() else 0.0" in source
+
+    was = os.environ.get(arms_mod.HOSTED_ENV)
+    try:
+        os.environ.pop(arms_mod.HOSTED_ENV, None)
+        assert arms_mod._hosted_run() is False
+        os.environ[arms_mod.HOSTED_ENV] = "1"
+        assert arms_mod._hosted_run() is True
+    finally:
+        if was is None:
+            os.environ.pop(arms_mod.HOSTED_ENV, None)
+        else:
+            os.environ[arms_mod.HOSTED_ENV] = was
+
+    # And the tuning file documents both, so the numbers are not folklore.
+    tuning = Path(
+        "src/phronix/.phronix/workspace/tuning.yaml").read_text(encoding="utf-8")
+    assert "max_concurrent_agents_local: 64" in tuning
+    assert "min_seconds_between_starts_local: 0.0" in tuning
+
 
 
 def test_a_dry_account_is_not_reported_as_a_broken_pipeline():

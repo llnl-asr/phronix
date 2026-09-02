@@ -799,6 +799,16 @@ def private_home(env: Dict[str, str]):
             shutil.rmtree(home, ignore_errors=True)
 
 
+def _hosted_run() -> bool:
+    """Is this run talking to a hosted endpoint rather than a local fleet?
+
+    The one question that decides whether the account's usage window or the
+    fleet's replica count is the binding limit.
+    """
+    return str(os.environ.get(HOSTED_ENV, "")).strip().lower() in (
+        "1", "true", "yes")
+
+
 class _LlmGate:
     """Paces every agent invocation in the job, and waits out a rejected window.
 
@@ -832,7 +842,25 @@ class _LlmGate:
         if self._semaphore is None:
             with self._lock:
                 if self._semaphore is None:
-                    self._size = max(1, int(_tuned("llm.max_concurrent_agents", 8)))
+                    # The cap of 8 is about the ACCOUNT, not the machine.
+                    #
+                    # A hosted subscription has a five-hour window that, once
+                    # rejected, fails every agent instantly for the rest of it,
+                    # so the draw has to be paced. A local fleet has no such
+                    # window: the binding limit is the replicas, and the same
+                    # reasoning that set 8 for hosted argues AGAINST it here —
+                    # capping below the server's concurrency moves the queue
+                    # into this process, where it shows up as nothing at all.
+                    #
+                    # Measured on a 16-node run: 64 replicas ready, 20 tasks in
+                    # two arms wanting attempt, research, track and learn
+                    # agents, and a cap of 8 across all of them. The fleet sat
+                    # idle while the trace said `waiting for one of 8 agent
+                    # slots`.
+                    key = ("llm.max_concurrent_agents"
+                           if _hosted_run() else "llm.max_concurrent_agents_local")
+                    default = 8 if _hosted_run() else 64
+                    self._size = max(1, int(_tuned(key, default)))
                     self._semaphore = threading.Semaphore(self._size)
         return self._semaphore
 
@@ -872,7 +900,14 @@ class _LlmGate:
             if on_note:
                 on_note(f"got a slot after {time.time() - waiting_since:.0f}s")
         try:
-            spacing = float(_tuned("llm.min_seconds_between_starts", 2.0))
+            # Spacing paces the draw on a usage WINDOW. A local fleet has
+            # none, and 2s between starts costs 80s of pure latency to launch
+            # 40 task-arms' first agents — for no saving, since the server
+            # queues what it cannot serve and reports the backlog itself.
+            spacing = float(_tuned(
+                "llm.min_seconds_between_starts" if _hosted_run()
+                else "llm.min_seconds_between_starts_local",
+                2.0 if _hosted_run() else 0.0))
             with self._lock:
                 delay = max(0.0, self._last_start + spacing - time.time())
                 self._last_start = time.time() + delay

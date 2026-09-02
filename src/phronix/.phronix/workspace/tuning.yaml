@@ -253,6 +253,19 @@ llm:
   # per-task cap multiplies by however many are packed onto the node.
   max_concurrent_agents: 8
 
+  # The same limit for a LOCAL fleet, where no usage window exists.
+  #
+  # The binding constraint here is the replica count, and capping below it
+  # moves the queue into the client where nothing can see it. Measured on a
+  # 16-node run: 64 replicas ready and idle while the trace said `waiting for
+  # one of 8 agent slots`. Set to the fleet's concurrency so the server does
+  # the queueing and `status.sh` can show the backlog.
+  max_concurrent_agents_local: 64
+
+  # And no stagger locally: 2s between starts costs 80s of latency to launch
+  # forty task-arms, buying nothing when there is no window to pace.
+  min_seconds_between_starts_local: 0.0
+
   # Seconds between starting one agent and starting the next.
   #
   # Concurrency alone bounds the peak but not the rate: eight agents that each
