@@ -167,12 +167,33 @@ fi
 # hard way — a second benchmark launched with the caller's own teardown skipped
 # still died here, because this kill is a separate one and matches on the run
 # path, so it stopped an unrelated run that was twenty minutes in.
+# Never kill another run's work.
+#
+# `kill.sh` clears every stray agent and container, which is right when a run
+# starts alone and catastrophic when one does not: starting a second batch
+# killed the first batch's runner mid-task. Measured — a hosted Haiku batch
+# started at 17:53 and the gpt-oss batch that had been running since 14:44
+# lost its runner and restarted from its supervisor two minutes later, and
+# each then blamed the other's death on itself.
+#
+# So the sweep is skipped while somebody else is running. A stray agent left
+# behind is cheap; a killed run is an hour of GPU time.
 if [ -z "${NO_KILL:-}" ]; then
-  "$SCRIPTS/kill.sh" >/dev/null 2>&1
-  rm -f "$BENCH/runs/.runner.lock"
+  if pgrep -f "benchmark.cli run" >/dev/null 2>&1; then
+    echo "another benchmark runner is active; not sweeping stray agents"
+  else
+    "$SCRIPTS/kill.sh" >/dev/null 2>&1
+    rm -f "$BENCH/runs/.runner.lock"
+  fi
 fi
 
-OUT=$BENCH/runs/$TAG-$(date +%m%d-%H%M%S)
+# The pid makes it UNIQUE.
+#
+# Seconds are not enough: two batches started a run in the same second and got
+# the same directory, so two concurrent runs wrote their manifests, traces and
+# results over each other. `top` then reported one job's model and mode for
+# the other's run, which is how this was noticed.
+OUT=$BENCH/runs/$TAG-$(date +%m%d-%H%M%S)-$$
 echo "$OUT" > "$BENCH/CURRENT"
 
 cd "$PROJECT" || exit 1

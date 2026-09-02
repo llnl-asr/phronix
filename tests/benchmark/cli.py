@@ -288,6 +288,17 @@ def cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
 
+    # No cluster asked for means a HOSTED endpoint, and hosted must not
+    # measure whatever fleet happens to be deployed on this machine.
+    #
+    # `has_local_fleet` falls back to the default cluster config, which is
+    # right for a local run started without `--cluster` and wrong here: a
+    # hosted Haiku run read a concurrent gpt-oss job's cluster, measured
+    # 126 tok/s against a calibration of 1000, and multiplied every research
+    # budget by 7.9 for a model that turns a stage around in seconds.
+    if not getattr(args, "cluster", None):
+        os.environ.setdefault("PHRONIX_HOSTED_MODEL", "1")
+
     if getattr(args, "cluster", None):
         # The cluster's config is the source of truth for where the model is
         # and what it is called. Resolved here, before the RunConfig is built,

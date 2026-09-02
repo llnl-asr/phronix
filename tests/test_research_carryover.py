@@ -10183,3 +10183,31 @@ def test_the_packaged_store_is_git_tracked():
             ["git", "check-ignore", path],
             capture_output=True, text=True).returncode
         assert ignored != 0, f"{path} is ignored by git"
+
+
+def test_two_concurrent_runs_cannot_share_a_directory_or_kill_each_other():
+    """Two batches, one machine, and each destroyed the other.
+
+    The run directory was named to the SECOND, so two batches that started a
+    run in the same second got the same directory and wrote their manifests,
+    traces and results over each other. `top` reported one job's model and
+    mode for the other's run, which is how it was noticed:
+    `claude-0901-175544` appears in both batch logs with different runner pids.
+
+    And every run swept stray agents with `kill.sh` before starting, which is
+    right when a run starts alone and catastrophic when one does not: a hosted
+    Haiku batch started at 17:53 and the gpt-oss batch running since 14:44
+    lost its runner two minutes later. A stray agent left behind is cheap; a
+    killed run is an hour of GPU time.
+    """
+    script = Path("scripts/run-benchmark.sh").read_text(encoding="utf-8")
+
+    # Unique per process, not merely per second.
+    assert 'OUT=$BENCH/runs/$TAG-$(date +%m%d-%H%M%S)-$$' in script
+
+    # The sweep is skipped while another runner is alive.
+    assert 'if pgrep -f "benchmark.cli run" >/dev/null 2>&1; then' in script
+    assert "another benchmark runner is active; not sweeping stray agents" in script
+    # And the guard has to come BEFORE the kill, not after it.
+    assert script.index('pgrep -f "benchmark.cli run"') < script.index(
+        '"$SCRIPTS/kill.sh"')

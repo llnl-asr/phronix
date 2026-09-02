@@ -1037,6 +1037,10 @@ BUDGET_SCALE_BOUNDS = (0.2, 50.0)
 _BUDGET_SCALE_CACHE: Dict[str, Any] = {"value": None}
 
 
+#: Set by the runner when the model is a hosted endpoint, not a fleet.
+HOSTED_ENV = "PHRONIX_HOSTED_MODEL"
+
+
 def has_local_fleet() -> bool:
     """Is a local fleet configured at all?
 
@@ -1046,6 +1050,16 @@ def has_local_fleet() -> bool:
     Those want opposite budgets, and conflating them halved every budget on
     every batch run — see `budget_scale`.
     """
+    # A HOSTED run has no fleet, whatever is deployed on the machine.
+    #
+    # Falling back to `DEFAULT_CONFIG` is right for a local run started
+    # without `--cluster` and wrong for a hosted one: it picks up whichever
+    # fleet a DIFFERENT job happens to have deployed. Measured live — a hosted
+    # Haiku run read the gpt-oss job's cluster, measured 126 tok/s against a
+    # calibration of 1000, and scaled every research budget by 7.9 for a model
+    # that turns a stage around in seconds.
+    if str(os.environ.get(HOSTED_ENV, "")).strip().lower() in ("1", "true", "yes"):
+        return False
     try:
         from .cluster import DEFAULT_CONFIG
 
