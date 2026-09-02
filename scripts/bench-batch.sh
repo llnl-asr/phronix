@@ -73,6 +73,23 @@ BASE_NAME=$NAME
 # here, so a cluster that changes its paths changes them in one place.
 LLM_DIR=$PROJECT/$FLEET
 # shellcheck disable=SC1090
+# A HOSTED run is bounded by the ACCOUNT, not by the hardware.
+#
+# `run-group.sh` drops a subscription run to one task at a time for exactly
+# this reason, and the guard only fires when nobody passed `--parallel` — which
+# this script always does. So `--hosted --parallel 30` put 60 task-arms on the
+# subscription at once, the five-hour allowance went in minutes, and every
+# agent exited rc=1 reporting `Not logged in · Please run /login`. That message
+# reads as an expired login and is actually an exhausted quota: the same
+# command run by hand on the same node authenticates fine.
+#
+# Capped rather than forced to 1: thirty tasks one at a time does not finish in
+# a working day either. Pass `--parallel` after `--hosted` to override.
+if [ -n "$HOSTED" ] && [ "$PARALLEL" -gt "${HOSTED_PARALLEL_CAP:-4}" ]; then
+    echo "hosted run: capping --parallel $PARALLEL to ${HOSTED_PARALLEL_CAP:-4}"          "(the account's allowance, not the nodes, is the limit here)"
+    PARALLEL=${HOSTED_PARALLEL_CAP:-4}
+fi
+
 LLM_ROOT=$(cd "$LLM_DIR" && bash -c 'source ./env.sh >/dev/null 2>&1; echo "$LLM_ROOT"')
 case "$FLEET" in
   corona-llm)

@@ -10211,3 +10211,35 @@ def test_two_concurrent_runs_cannot_share_a_directory_or_kill_each_other():
     # And the guard has to come BEFORE the kill, not after it.
     assert script.index('pgrep -f "benchmark.cli run"') < script.index(
         '"$SCRIPTS/kill.sh"')
+
+
+def test_a_hosted_run_is_bounded_by_the_account_not_the_nodes():
+    """`Not logged in · Please run /login` is what an exhausted quota looks like.
+
+    `run-group.sh` drops a subscription run to one task at a time because the
+    constraint is the account's allowance rather than dollars or GPUs — and
+    that guard only fires when nobody passed `--parallel`, which `bench-batch`
+    always does. So `--hosted --parallel 30` put 60 task-arms on the
+    subscription at once, the five-hour allowance went in minutes, and every
+    agent exited rc=1 reporting a login failure.
+
+    That message cost an hour of diagnosis: network reachable, credentials
+    symlinked correctly into the private home, eight concurrent agents fine by
+    hand, and the harness's exact command authenticating on the same node. The
+    only thing wrong was how many were asked for at once.
+    """
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+    group = Path("scripts/run-group.sh").read_text(encoding="utf-8")
+
+    assert 'if [ -n "$HOSTED" ] && [ "$PARALLEL" -gt "${HOSTED_PARALLEL_CAP:-4}" ]; then' in batch
+    assert "PARALLEL=${HOSTED_PARALLEL_CAP:-4}" in batch
+    # Capped, not forced to 1: thirty tasks one at a time does not finish in a
+    # working day either.
+    assert "Capped rather than forced to 1" in batch
+    # The cap has to be applied BEFORE the value is forwarded to the job.
+    assert batch.index("HOSTED_PARALLEL_CAP") < batch.index(
+        '"$0" --size "$SIZE" --index "$INDEX" --parallel "$PARALLEL"')
+
+    # And a subscription run uses the account's own auth, not the site gateway
+    # that --base-url defaults to.
+    assert 'EXTRA+=(--base-url "")' in group

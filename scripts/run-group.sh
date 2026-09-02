@@ -115,6 +115,16 @@ done
 if [ -n "$SUBSCRIPTION" ]; then
   [ -n "$CLUSTER" ] && { echo "--subscription is a HOSTED run; drop --local/--cluster"; exit 2; }
   [ -z "$PARALLEL_SET" ] && PARALLEL=1
+  # The ACCOUNT's own auth, not a gateway.
+  #
+  # `--base-url` defaults to the site gateway, so a subscription run inherited
+  # it and the harness then set ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN to
+  # a gateway the CLI has no credentials for. Every agent exited rc=1 with
+  # "Not logged in · Please run /login" — which reads as an expired login and
+  # is actually a run pointed at the wrong endpoint.
+  #
+  # Empty means: leave the CLI alone and let it use the login it already has.
+  EXTRA+=(--base-url "")
 fi
 
 # An allocation that is not RUNNING cannot host anything.
