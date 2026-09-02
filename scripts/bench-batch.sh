@@ -22,7 +22,7 @@ PROJECT=/usr/WS2/haridev/phronix
 source "$PROJECT/scripts/bench-root.sh"
 PBENCH=$(bench_root)
 
-SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch; PAIR=""
+SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch; PAIR=""; CARRY_NAME=""
 SIZE=30; INDEX=1; PARALLEL=30; MODEL=""; NAME=""; SOURCE_LIST=""; HOSTED=""; REUSE=""; AFTER=""
 # Which cluster this batch is for. Everything that differs between them —
 # the fleet directory, the log root, the default model, the per-node shape —
@@ -57,6 +57,9 @@ while [ $# -gt 0 ]; do
     --hosted)   HOSTED=1; shift;;
     # Let the run READ what earlier runs learned, instead of starting clean.
     --reuse)    REUSE=1; shift;;
+    # Which knowledge store this run reads and writes. A sweep over models
+    # gives each its own, or the later ones inherit the earlier ones' work.
+    --carry)    CARRY_NAME="$2"; shift 2;;
     # Fresh then reuse, one allocation, in that order.
     --pair)     PAIR=1; shift;;
     # Do not start until JOBID has finished, however it finished.
@@ -89,6 +92,11 @@ if [ -n "$HOSTED" ] && [ "$PARALLEL" -gt "${HOSTED_PARALLEL_CAP:-4}" ]; then
     echo "hosted run: capping --parallel $PARALLEL to ${HOSTED_PARALLEL_CAP:-4}"          "(the account's allowance, not the nodes, is the limit here)"
     PARALLEL=${HOSTED_PARALLEL_CAP:-4}
 fi
+
+# Exported rather than passed: `run-group.sh` is invoked in several places
+# here, and a flag added to one of them and not the others is the shape of
+# bug that leaves half a sweep sharing a store.
+[ -n "$CARRY_NAME" ] && export PHRONIX_CARRY="$PBENCH/carry-$CARRY_NAME"
 
 LLM_ROOT=$(cd "$LLM_DIR" && bash -c 'source ./env.sh >/dev/null 2>&1; echo "$LLM_ROOT"')
 case "$FLEET" in
@@ -141,6 +149,7 @@ if [ -n "$SUBMIT" ]; then
                  --fleet "$FLEET" --fleet-nodes "$FLEET_NODES" \
                  ${SOURCE_LIST:+--source "$SOURCE_LIST"} \
                  ${HOSTED:+--hosted} ${REUSE:+--reuse} ${PAIR:+--pair} \
+                 ${CARRY_NAME:+--carry "$CARRY_NAME"} \
                  2>&1 | tr -d '[:space:]')
     case "$job" in
       f*) echo "submitted $job   ($NODES nodes, $WALL, $QUEUE)"

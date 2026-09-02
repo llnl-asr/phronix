@@ -301,15 +301,23 @@ fi
 # Every run WRITES what it learned to the same place; only a reuse run READS
 # it. A fresh run that contributed nothing left the reuse run after it with
 # only what days-old runs had happened to leave behind.
-CARRY=(--no-carry --promote-root "$PBENCH/carry/.phronix")
+# One carry root per EXPERIMENT, not one per machine.
+#
+# Six models chained through a single store is a transfer experiment, not six
+# learning curves: model two reads what model one promoted, and every later
+# model looks better partly because the earlier ones ran. `PHRONIX_CARRY`
+# names the store so a sweep can keep them apart, and defaults to the shared
+# one so a single run behaves as before.
+CARRY_STORE=${PHRONIX_CARRY:-$PBENCH/carry}/.phronix
+CARRY=(--no-carry --promote-root "$CARRY_STORE")
 for arg in "${EXTRA[@]}"; do
   if [ "$arg" = "--reuse" ]; then
-    CARRY=(--carry-root "$PBENCH/carry/.phronix")
-    echo "carry   : $PBENCH/carry/.phronix (what earlier runs learned)"
+    CARRY=(--carry-root "$CARRY_STORE")
+    echo "carry   : $CARRY_STORE (what earlier runs learned)"
     break
   fi
 done
-echo "promote : $PBENCH/carry/.phronix (where this run writes what it learns)"
+echo "promote : $CARRY_STORE (where this run writes what it learns)"
 CMD=("$PROJECT/scripts/run-benchmark.sh" --tasks "$FILE"
      --parallel-tasks "$PARALLEL" "${CARRY[@]}")
 # A spend ceiling is for hosted models. On the local cluster the dollar figure

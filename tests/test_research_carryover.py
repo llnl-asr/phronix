@@ -10243,3 +10243,29 @@ def test_a_hosted_run_is_bounded_by_the_account_not_the_nodes():
     # And a subscription run uses the account's own auth, not the site gateway
     # that --base-url defaults to.
     assert 'EXTRA+=(--base-url "")' in group
+
+
+def test_a_model_sweep_can_keep_its_carry_roots_apart():
+    """Six models chained through one store is a transfer experiment.
+
+    Model two reads what model one promoted, so every later model looks better
+    partly because the earlier ones ran — which is worth measuring on purpose
+    and misleading by accident. `PHRONIX_CARRY` names the store; the default
+    is the shared one, so a single run behaves as before.
+    """
+    group = Path("scripts/run-group.sh").read_text(encoding="utf-8")
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+
+    # One place decides, and both the read and the write use it.
+    assert 'CARRY_STORE=${PHRONIX_CARRY:-$PBENCH/carry}/.phronix' in group
+    assert 'CARRY=(--no-carry --promote-root "$CARRY_STORE")' in group
+    assert 'CARRY=(--carry-root "$CARRY_STORE")' in group
+    # No path left hardcoded, or half a sweep shares a store.
+    assert "$PBENCH/carry/.phronix" not in group
+
+    # Exported rather than passed: run-group is invoked from more than one
+    # branch here, and a flag added to one of them is exactly that bug.
+    assert '--carry)    CARRY_NAME="$2"; shift 2;;' in batch
+    assert 'export PHRONIX_CARRY="$PBENCH/carry-$CARRY_NAME"' in batch
+    # And it reaches the job that actually runs inside the allocation.
+    assert '${CARRY_NAME:+--carry "$CARRY_NAME"}' in batch
