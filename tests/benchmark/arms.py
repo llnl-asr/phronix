@@ -3861,6 +3861,17 @@ still wrong.
         computed from these files, so crossing them would corrupt the headline
         learning metric in a way no downstream check would catch.
         """
+        # Give the MCP server room to answer the handshake.
+        #
+        # It scans the catalogue at startup, and the catalogue now lives under
+        # the package with several hundred files on a parallel filesystem:
+        # measured on corona, 15-20s to reply to `initialize`, against a
+        # client default of 30s — and every agent starts its own server, so
+        # thirty of them contend for the same metadata. A server the client
+        # gives up on does not fail loudly; the arm silently becomes a plain
+        # agent, which is the most misleading state this benchmark has.
+        env.setdefault("MCP_TIMEOUT", "120000")
+        env.setdefault("MCP_TOOL_TIMEOUT", "120000")
         if getattr(self, "retrieval_log", None):
             env["PHRONIX_RETRIEVAL_LOG"] = str(self.retrieval_log)
         # Session isolation and reuse travel with every phronix invocation:
