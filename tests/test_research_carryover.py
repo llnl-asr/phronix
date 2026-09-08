@@ -7861,8 +7861,14 @@ def test_the_batch_job_waits_for_the_run_it_started():
     assert 'while kill -0 "$runner" 2>/dev/null; do' in batch
     # And has a fallback for the case where no pid was printed.
     assert 'pgrep -f "benchmark.cli run"' in batch
-    # The teardown must come AFTER the wait, or it kills what it waited for.
-    assert batch.index('while kill -0 "$runner"') < batch.index("scripts/kill.sh")
+    # The teardown must not kill the run it is waiting for. It now lives in
+    # `leave_a_note`, which is DEFINED before the loop so the trap can be
+    # armed early and only RUNS at exit — so position in the file no longer
+    # expresses the invariant, and asserting on it tests the layout instead.
+    teardown = batch[batch.index("leave_a_note() {"):]
+    teardown = teardown[:teardown.index("\n}\n")]
+    assert "scripts/kill.sh" in teardown, "teardown escaped the exit handler"
+    assert 'while kill -0 "$runner"' not in teardown
 
     # `run-group.sh` really does background the runner — the premise above.
     launcher = Path("scripts/run-benchmark.sh").read_text(encoding="utf-8")
