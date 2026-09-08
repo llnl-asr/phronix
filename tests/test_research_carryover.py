@@ -10481,3 +10481,27 @@ def test_a_dead_mcp_server_stops_the_run_instead_of_degrading_it():
     assert '"-P", "-m", "phronix.mcp_server", "--no-setup", "--quiet"' in arms
     # Both harnesses, or the one without the flags loses it again.
     assert '"phronix-mcp-server", "--no-setup", "--quiet"' in arms
+
+
+def test_the_run_note_survives_a_cancelled_job():
+    """A run that completes and leaves no record throws away the expensive half.
+
+    The note block ran only after the pass loop returned, so a cancelled job
+    was killed before reaching it: the gpt-5.4-mini run finished all 60
+    task-arms and its numbers had to be recovered from `top.sh` by hand.
+
+    A trap registered AFTER the work is a trap that never runs when the work
+    is what got killed, so it is armed before the loop — and guarded, because
+    it fires on a normal exit too.
+    """
+    batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
+
+    assert "leave_a_note() {" in batch
+    assert "trap leave_a_note EXIT INT TERM" in batch
+    # Armed before the pass loop, not after it.
+    assert batch.index("trap leave_a_note") < batch.index("ATTEMPTS=${ATTEMPTS:-4}")
+    # Written once: the trap fires on a normal exit as well as a signal.
+    assert '[ -n "$_NOTE_WRITTEN" ] && return 0' in batch
+    assert batch.count("_NOTE_WRITTEN=1") == 1
+    # And still called explicitly, so a normal run writes before teardown.
+    assert batch.rstrip().endswith("leave_a_note")

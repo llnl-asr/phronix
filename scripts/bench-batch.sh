@@ -299,6 +299,70 @@ seconds_of() {   # 90 | 90s | 30m | 2h | 1d -> seconds
 # So each pass runs on the nodes that are still answering, and `--resume auto`
 # carries forward everything earlier passes finished. A pass that dies costs
 # the tasks that were in flight during it, and nothing else.
+# ---- tidy up, and leave a note ---------------------------------------------
+#
+# On EXIT, however the job ends.
+#
+# This used to run only after the pass loop returned, so a cancelled job was
+# killed before reaching it: the gpt-5.4-mini run finished all 60 task-arms
+# and its numbers had to be recovered from `top.sh` by hand afterwards. A run
+# that completes and leaves no record of itself is the expensive half of the
+# work thrown away for the cheap half.
+#
+# Guarded against running twice: the trap fires on a normal exit as well.
+_NOTE_WRITTEN=""
+leave_a_note() {
+    [ -n "$_NOTE_WRITTEN" ] && return 0
+    _NOTE_WRITTEN=1
+    "$PROJECT/scripts/kill.sh" >/dev/null 2>&1
+    [ -z "$HOSTED" ] && "$LLM_DIR/stop.sh" >/dev/null 2>&1
+    if [ -n "$out" ] && [ -d "$out" ]; then
+        {
+          top=$(cd "$PROJECT" && scripts/top.sh "$out" --once 2>/dev/null)
+          # The TOTAL line, and each ARM's line beside it.
+          #
+          # A combined total hides the only comparison the run exists to make:
+          # measured on a 30-task livai run, TOTAL read 21 pass / 39 fail while
+          # the arms were 7/30 for bare and 14/30 for phronix — twice the pass
+          # rate, invisible in the number that got written down.
+          summary=$(printf '%s\n' "$top" | sed -n 2p | sed 's/^ *//' | cut -c1-150)
+          arms=$(printf '%s\n' "$top" | grep -E "^v (claude|opencode)-" |
+                 sed 's/^v //' | sed 's/  */ /g' | cut -c1-110)
+          # The MODEL, read from top's own header rather than from $MODEL, which
+          # is the batch's key ("gptoss120") and not what the run recorded.
+          model=$(printf '%s\n' "$top" | sed -n 1p |
+                  sed -E 's/.*[0-9]+[hms] +([^ ].*)$/\1/' |
+                  sed -E 's/ +(fresh|reuse).*$//' | cut -c1-60)
+          # Where skills actually live. This read `capabilities/tasks/`, the
+          # pre-flattening path, and so reported "skills written: 0" for a run
+          # whose store held sixteen.
+          skills=$(ls -d "$out"/*/store/.phronix/capabilities/skills/*/ 2>/dev/null | wc -l)
+          used=$(grep -rh "skill-use" "$out"/*/trace.log 2>/dev/null | grep -c "loaded \`")
+          echo ""
+          echo "### $NAME — \`$(basename "$out")\`  ($SIZE task(s), $count node(s))"
+          echo ""
+          echo "- model: \`${model:-unknown}\`"
+          echo ""
+          echo '```'
+          echo "$summary"
+          printf '%s\n' "$arms"
+          echo '```'
+          echo ""
+          echo "- run: \`$out\`"
+          echo "- fleet: \`$dlog\` (${ready})"
+          echo "- skills written: **$skills**   attempts that loaded one: **$used**"
+          echo "- \`scripts/top.sh $out --once\`"
+        } >> "$PROJECT/$NOTES"
+    fi
+    say "batch $NAME done"
+}
+# Armed HERE, before the pass loop.
+#
+# A trap registered after the work is a trap that never runs when the
+# work is what got killed: the gpt-5.4-mini job was cancelled mid-loop
+# and its finished numbers had to be recovered by hand.
+trap leave_a_note EXIT INT TERM
+
 ATTEMPTS=${ATTEMPTS:-4}
 
 # `--pair` runs fresh and then reuse inside ONE allocation.
@@ -458,45 +522,4 @@ if [ "${limit:-0}" -gt 0 ]; then
     fi
 fi
 
-# ---- tidy up, and leave a note ---------------------------------------------
-"$PROJECT/scripts/kill.sh" >/dev/null 2>&1
-[ -z "$HOSTED" ] && "$LLM_DIR/stop.sh" >/dev/null 2>&1
-if [ -n "$out" ] && [ -d "$out" ]; then
-    {
-      top=$(cd "$PROJECT" && scripts/top.sh "$out" --once 2>/dev/null)
-      # The TOTAL line, and each ARM's line beside it.
-      #
-      # A combined total hides the only comparison the run exists to make:
-      # measured on a 30-task livai run, TOTAL read 21 pass / 39 fail while
-      # the arms were 7/30 for bare and 14/30 for phronix — twice the pass
-      # rate, invisible in the number that got written down.
-      summary=$(printf '%s\n' "$top" | sed -n 2p | sed 's/^ *//' | cut -c1-150)
-      arms=$(printf '%s\n' "$top" | grep -E "^v (claude|opencode)-" |
-             sed 's/^v //' | sed 's/  */ /g' | cut -c1-110)
-      # The MODEL, read from top's own header rather than from $MODEL, which
-      # is the batch's key ("gptoss120") and not what the run recorded.
-      model=$(printf '%s\n' "$top" | sed -n 1p |
-              sed -E 's/.*[0-9]+[hms] +([^ ].*)$/\1/' |
-              sed -E 's/ +(fresh|reuse).*$//' | cut -c1-60)
-      # Where skills actually live. This read `capabilities/tasks/`, the
-      # pre-flattening path, and so reported "skills written: 0" for a run
-      # whose store held sixteen.
-      skills=$(ls -d "$out"/*/store/.phronix/capabilities/skills/*/ 2>/dev/null | wc -l)
-      used=$(grep -rh "skill-use" "$out"/*/trace.log 2>/dev/null | grep -c "loaded \`")
-      echo ""
-      echo "### $NAME — \`$(basename "$out")\`  ($SIZE task(s), $count node(s))"
-      echo ""
-      echo "- model: \`${model:-unknown}\`"
-      echo ""
-      echo '```'
-      echo "$summary"
-      printf '%s\n' "$arms"
-      echo '```'
-      echo ""
-      echo "- run: \`$out\`"
-      echo "- fleet: \`$dlog\` (${ready})"
-      echo "- skills written: **$skills**   attempts that loaded one: **$used**"
-      echo "- \`scripts/top.sh $out --once\`"
-    } >> "$PROJECT/$NOTES"
-fi
-say "batch $NAME done"
+leave_a_note
