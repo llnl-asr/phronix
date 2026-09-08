@@ -470,5 +470,23 @@ TOTAL  40 task(s)     3 pass   37 fail    0 run     8% of finished      6.6M tok
 
 ### Fresh runs
 
-- `svc-dldl-gpt-5.4-nano` : `/p/lustre3/haridev/phronix-bench/runs/claude-0908-084949-1507128`
-- 
+### livai30c-fresh — `claude-0908-084949-1507128`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4-nano (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    21 pass   39 fail    0 run    35% of finished      6.7M tok   $115.82
+claude-bare 7 pass 23 fail 0 run 23% 1.1M tok $13.64 avg 4m24s/task
+claude-phronix 14 pass 16 fail 0 run 47% 5.5M tok $102.18 avg 37m21s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0908-084949-1507128`
+- fleet: `(none)` (hosted)
+- skills written: **31**   attempts that loaded one: **22**
+- the first run on corona where the MCP server actually started; every run
+  before it had `mcp_servers: [{"name": "phronix", "status": "failed"}]` and
+  the phronix arm was a plain agent, so earlier livai numbers are not
+  comparable with this one.
+- cost is the endpoint's own figure and is not verified: livai's spend API
+  returns 403 for this key.
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0908-084949-1507128 --once`

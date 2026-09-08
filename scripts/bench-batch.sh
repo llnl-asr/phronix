@@ -463,15 +463,34 @@ fi
 [ -z "$HOSTED" ] && "$LLM_DIR/stop.sh" >/dev/null 2>&1
 if [ -n "$out" ] && [ -d "$out" ]; then
     {
-      summary=$(cd "$PROJECT" && scripts/top.sh "$out" --once 2>/dev/null |
-                sed -n 2p | sed 's/^ *//' | cut -c1-150)
-      skills=$(ls "$out"/claude-phronix/store/.phronix/capabilities/tasks/ 2>/dev/null | wc -l)
-      used=$(grep -rh "skill-use" "$out"/*/tasks/*/trace.log 2>/dev/null | grep -c "loaded \`")
+      top=$(cd "$PROJECT" && scripts/top.sh "$out" --once 2>/dev/null)
+      # The TOTAL line, and each ARM's line beside it.
+      #
+      # A combined total hides the only comparison the run exists to make:
+      # measured on a 30-task livai run, TOTAL read 21 pass / 39 fail while
+      # the arms were 7/30 for bare and 14/30 for phronix — twice the pass
+      # rate, invisible in the number that got written down.
+      summary=$(printf '%s\n' "$top" | sed -n 2p | sed 's/^ *//' | cut -c1-150)
+      arms=$(printf '%s\n' "$top" | grep -E "^v (claude|opencode)-" |
+             sed 's/^v //' | sed 's/  */ /g' | cut -c1-110)
+      # The MODEL, read from top's own header rather than from $MODEL, which
+      # is the batch's key ("gptoss120") and not what the run recorded.
+      model=$(printf '%s\n' "$top" | sed -n 1p |
+              sed -E 's/.*[0-9]+[hms] +([^ ].*)$/\1/' |
+              sed -E 's/ +(fresh|reuse).*$//' | cut -c1-60)
+      # Where skills actually live. This read `capabilities/tasks/`, the
+      # pre-flattening path, and so reported "skills written: 0" for a run
+      # whose store held sixteen.
+      skills=$(ls -d "$out"/*/store/.phronix/capabilities/skills/*/ 2>/dev/null | wc -l)
+      used=$(grep -rh "skill-use" "$out"/*/trace.log 2>/dev/null | grep -c "loaded \`")
       echo ""
       echo "### $NAME — \`$(basename "$out")\`  ($SIZE task(s), $count node(s))"
       echo ""
+      echo "- model: \`${model:-unknown}\`"
+      echo ""
       echo '```'
       echo "$summary"
+      printf '%s\n' "$arms"
       echo '```'
       echo ""
       echo "- run: \`$out\`"
