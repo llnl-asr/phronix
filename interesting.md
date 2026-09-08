@@ -490,3 +490,23 @@ claude-phronix 14 pass 16 fail 0 run 47% 5.5M tok $102.18 avg 37m21s/task
 - cost is the endpoint's own figure and is not verified: livai's spend API
   returns 403 for this key.
 - `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0908-084949-1507128 --once`
+
+### livai-gpt-5.4-mini — `claude-0908-104954-3730240`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4-mini (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    22 pass   38 fail    0 run    37% of finished      5.3M tok   $100.80
+claude-bare 8 pass 22 fail 0 run 27% 980k tok $11.80 avg 3m37s/task
+claude-phronix 14 pass 16 fail 0 run 47% 4.4M tok $89.00 avg 22m17s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0908-104954-3730240`
+- fleet: `(none)` (hosted)
+- skills written: **33**   attempts that loaded one: **40**
+- errors: MODEL 75 (25 task-arms), PIPELINE 18 (6 task-arms), TESTBED 0
+- the batch job was CANCELLED at 73m, so the run finished but the note block
+  never ran — these numbers were added by hand from `top.sh` afterwards.
+- MCP server across transcripts: 71 connected, 15 failed. The failures are the
+  6 task-arms counted as PIPELINE; a phronix arm whose server did not start is
+  a plain agent, so those six are not comparable.
