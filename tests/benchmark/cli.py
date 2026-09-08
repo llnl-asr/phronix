@@ -309,6 +309,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         provider = str(getattr(args, "provider", "") or "").lower()
         if provider in ("", "anthropic", "claude"):
             os.environ.setdefault("PHRONIX_PACED_LLM", "1")
+        elif not getattr(args, "api_key", ""):
+            # A gateway needs a credential, and it must not travel in argv.
+            #
+            # `run-benchmark.sh` passes `--base-url` but no key, so a gateway
+            # run reached the endpoint unauthenticated. Putting the key on the
+            # command line instead would print it in `ps`, in the batch log,
+            # and in the manifest's own record of how the run was invoked.
+            # The environment is where it already lives — `.env` is sourced
+            # before the runner starts.
+            args.api_key = (os.environ.get("PHRONIX_API_KEY")
+                            or os.environ.get("OPENAI_API_KEY") or "")
 
     if getattr(args, "cluster", None):
         # The cluster's config is the source of truth for where the model is

@@ -465,3 +465,10 @@ TOTAL  40 task(s)     3 pass   37 fail    0 run     8% of finished      6.6M tok
 - fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-m20-gptoss120-fresh-214747.log` (64/64 ready)
 - skills written: **0**   attempts that loaded one: **14**
 - `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0901-215052-1150614 --once`
+
+## Livai models
+
+### Fresh runs
+
+- `svc-dldl-gpt-5.4-nano` : `/p/lustre3/haridev/phronix-bench/runs/claude-0908-081527-970884`
+- 

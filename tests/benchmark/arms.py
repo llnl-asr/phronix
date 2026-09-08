@@ -9376,9 +9376,20 @@ class ClaudeArm(OpenCodeArm):
 
         Steps are counted as tool calls, matching what the opencode arm counts,
         so "steps" means the same thing in both harnesses.
+
+        The MCP server's status is read here too. Claude Code reports a server
+        it could not start as `mcp_servers: [{"name": "phronix", "status":
+        "failed"}]` and then carries on, so the arm degrades into a plain
+        agent with extra scaffolding and every number it produces is still
+        attributed to phronix. That is the most misleading state this
+        benchmark can be in, and the existing guard cannot see it: it asks
+        whether the agent made any tool calls, and a plain agent that greps
+        happily makes plenty.
         """
         tools = set()
         steps = 0
+        if '"name":"phronix","status":"failed"' in stdout.replace(" ", ""):
+            outcome.raw["mcp_failed"] = True
 
         for line in stdout.splitlines():
             line = line.strip()
@@ -9464,9 +9475,24 @@ class ClaudePhronixArm(PhronixOpenCodeArm, ClaudeArm):
         # every revision pass recorded 0 aspects and 0 approaches), and the
         # agent reporting it "couldn't find a capability_list command". Nothing
         # in the trace named the cause; the arm merely looked ineffective.
+        # `--no-setup --quiet`, the same flags the opencode config passes.
+        #
+        # Without them the server runs its whole install pass — skills,
+        # agents, permissions, hooks — before answering the handshake, and
+        # Claude Code gives up first. Measured in a task's own checkout:
+        # 14,774ms with no flags against 1,865ms with them, an 8x difference
+        # either side of the client's patience.
+        #
+        # The cost of losing that race is silent and total: every transcript
+        # in the run carried `mcp_servers: [{"name": "phronix", "status":
+        # "failed"}]`, 107 stages logged "no phronix tools called", not one
+        # `mcp__phronix__*` call was made, and research spent its budget
+        # GREPPING THE SOURCE for `skill_write` because it could not call it.
+        # 21 of 22 skills came out placeholder-only and five tasks that PASSED
+        # recorded nothing at all.
         config = {"mcpServers": {"phronix": {
             "command": sys.executable,
-            "args": ["-P", "-m", "phronix.mcp_server"],
+            "args": ["-P", "-m", "phronix.mcp_server", "--no-setup", "--quiet"],
         }}}
         command += ["--mcp-config", json.dumps(config)]
         command += self._denial_flags(agent)

@@ -3733,6 +3733,29 @@ If you genuinely believe no change is warranted, say so in one line and stop.
                 # command, a dead endpoint, a missing binary. A research pass
                 # that ran and concluded little is a different thing entirely,
                 # and is left alone.
+                # The server never STARTED: the arm is not phronix at all.
+                #
+                # Caught separately from "no tool calls", which cannot see it —
+                # that guard asks whether the agent did anything, and a plain
+                # agent that greps the source does plenty. Measured on a
+                # 30-task run: every transcript carried `status: "failed"`,
+                # 107 stages logged "no phronix tools called", research spent
+                # its budget grepping for `skill_write` because it could not
+                # call it, and 21 of 22 skills came out empty — while the run
+                # reported itself as a phronix arm throughout.
+                if (arm.uses_phronix
+                        and (getattr(attempt, "raw", None) or {}).get("mcp_failed")):
+                    raise ResearchCollapsed(
+                        f"the phronix MCP server did not start on "
+                        f"{instance.get('instance_id')} try {attempt_index}: "
+                        f"Claude Code reported it as failed and carried on.\n"
+                        f"Every stage after this is a plain agent, and every "
+                        f"number it produces would be attributed to phronix. "
+                        f"Check that the server answers a handshake inside a "
+                        f"task checkout — it is started with `--no-setup "
+                        f"--quiet` because the install pass takes longer than "
+                        f"the client will wait.")
+
                 if (research is not None and arm.uses_phronix
                         and not (research.get("steps") or 0)):
                     # A dry account and a broken harness both produce zero tool

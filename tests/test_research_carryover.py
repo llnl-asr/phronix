@@ -10387,3 +10387,47 @@ def test_only_the_subscription_is_paced():
     cli = Path("tests/benchmark/cli.py").read_text(encoding="utf-8")
     assert 'if provider in ("", "anthropic", "claude"):' in cli
     assert 'os.environ.setdefault("PHRONIX_PACED_LLM", "1")' in cli
+
+
+def test_a_dead_mcp_server_stops_the_run_instead_of_degrading_it():
+    """A phronix arm whose server never started is a plain agent.
+
+    Claude Code reports a server it could not start as
+    `mcp_servers: [{"name": "phronix", "status": "failed"}]` and then carries
+    on, so every number the arm produces is still attributed to phronix. The
+    existing guard cannot see it: it asks whether the agent made any tool
+    calls, and a plain agent that greps the source makes plenty.
+
+    Measured on a 30-task run: every transcript carried `status: "failed"`,
+    107 stages logged "no phronix tools called", research spent its budget
+    GREPPING FOR `skill_write` because it could not call it, 21 of 22 skills
+    came out placeholder-only, and five tasks that PASSED recorded nothing.
+
+    The cause was the server losing the handshake race — it ran its whole
+    install pass first. 14,774ms with no flags against 1,865ms with
+    `--no-setup --quiet`, either side of the client's patience.
+    """
+    from tests.benchmark.arms import AttemptOutcome, ClaudeArm, ClaudePhronixArm
+
+    # The status is read from the stream, whichever way it is spaced.
+    ok = ClaudeArm.parse_events(
+        '{"mcp_servers":[{"name":"phronix","status":"connected"}]}',
+        AttemptOutcome())
+    assert not ok.raw.get("mcp_failed")
+    for text in ('{"mcp_servers":[{"name":"phronix","status":"failed"}]}',
+                 '{"mcp_servers": [{"name": "phronix", "status": "failed"}]}'):
+        bad = ClaudeArm.parse_events(text, AttemptOutcome())
+        assert bad.raw.get("mcp_failed") is True, text
+
+    runner = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert '.get("mcp_failed")' in runner
+    assert "the phronix MCP server did not start on" in runner
+    # Raised BEFORE the zero-tool-calls guard, which would never fire here.
+    assert runner.index('.get("mcp_failed")') < runner.index(
+        'and not (research.get("steps") or 0)')
+
+    # And the server is started the way that wins the race.
+    arms = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    assert '"-P", "-m", "phronix.mcp_server", "--no-setup", "--quiet"' in arms
+    # Both harnesses, or the one without the flags loses it again.
+    assert '"phronix-mcp-server", "--no-setup", "--quiet"' in arms
