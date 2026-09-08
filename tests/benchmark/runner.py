@@ -268,8 +268,17 @@ def _snapshot_task_solution(arm, instance: Dict[str, Any],
         name = arm.task_skill_name(topic)
     except Exception:
         return ""
-    source = Path(store_root) / "capabilities" / "tasks" / name
-    if not source.is_dir():
+    # Asked of the helper, not spelled out here.
+    #
+    # This read `capabilities/tasks/<name>`, the pre-flattening path, so it
+    # found nothing and returned silently on every try — 16 skills in the
+    # store and zero snapshots, with no error anywhere. That is the fifth
+    # place a path outlived the layout change, after store_inventory,
+    # _skill_has_content, retire_placeholder, record_partial_progress and
+    # _lessons_for. One helper knows where a skill lives; nothing else should
+    # guess.
+    source = arm._skill_home_in(store_root, name)
+    if source is None:
         return ""
     target = Path(attempt_dir) / "solution"
     try:

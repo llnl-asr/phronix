@@ -10104,6 +10104,56 @@ def test_the_mechanical_faults_in_a_skill_are_repaired_not_just_reported():
         "a missing patch must still be reported, not fabricated"
 
 
+def test_the_per_try_snapshot_looks_where_skills_actually_live():
+    """Fifth place a path outlived the layout change, and silent every time.
+
+    `_snapshot_task_solution` read `capabilities/tasks/<name>`, the
+    pre-flattening path, so it found nothing and returned "" on every try:
+    16 skills in the store, zero snapshots, and no error anywhere. The
+    snapshots exist to answer "did try 2 fix what try 1 missed", so their
+    absence removed the evidence for the one question the retry budget is for.
+
+    After store_inventory, _skill_has_content, retire_placeholder,
+    record_partial_progress and _lessons_for, the rule is that one helper
+    knows where a skill lives and nothing else guesses.
+    """
+    import os
+    import tempfile
+
+    from phronix import skills
+    from tests.benchmark.arms import ClaudePhronixArm as Arm
+    from tests.benchmark.runner import _snapshot_task_solution
+
+    root = tempfile.mkdtemp()
+    was = os.environ.get("PHRONIX_PROJECT_ROOT")
+    os.environ["PHRONIX_PROJECT_ROOT"] = root
+    try:
+        skills.write_block("sympy-sympy-20442", "instruction",
+                           "Compute exponents", "body", description="d")
+    finally:
+        if was is None:
+            os.environ.pop("PHRONIX_PROJECT_ROOT", None)
+        else:
+            os.environ["PHRONIX_PROJECT_ROOT"] = was
+
+    arm = Arm.__new__(Arm)
+    arm.research_topic = lambda inst: "sympy__sympy-20442"
+    arm.task_skill_name = lambda topic: "sympy-sympy-20442"
+    attempt = Path(tempfile.mkdtemp()) / "attempt-2"
+    attempt.mkdir(parents=True)
+
+    written = _snapshot_task_solution(arm, {}, Path(root) / ".phronix", attempt)
+    assert written, "the snapshot found nothing to copy"
+    # The skill's own files, not a directory named after it: the old
+    # two-level layout nested them, and the flattening removed that level.
+    assert (attempt / "solution" / "SKILL.md").is_file()
+
+    source = Path("tests/benchmark/runner.py").read_text(encoding="utf-8")
+    assert "source = arm._skill_home_in(store_root, name)" in source
+    # And no hardcoded layout is left to outlive the next rename.
+    assert '"capabilities" / "tasks" / name' not in source
+
+
 def test_the_skill_is_repaired_before_it_is_promoted():
     """A run corrupts its own skills as it writes them.
 

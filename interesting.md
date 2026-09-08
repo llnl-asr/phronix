@@ -470,5 +470,5 @@ TOTAL  40 task(s)     3 pass   37 fail    0 run     8% of finished      6.6M tok
 
 ### Fresh runs
 
-- `svc-dldl-gpt-5.4-nano` : `/p/lustre3/haridev/phronix-bench/runs/claude-0908-081527-970884`
+- `svc-dldl-gpt-5.4-nano` : `/p/lustre3/haridev/phronix-bench/runs/claude-0908-084949-1507128`
 - 
