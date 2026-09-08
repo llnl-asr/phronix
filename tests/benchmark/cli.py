@@ -298,6 +298,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     # budget by 7.9 for a model that turns a stage around in seconds.
     if not getattr(args, "cluster", None):
         os.environ.setdefault("PHRONIX_HOSTED_MODEL", "1")
+        # ...and PACED only for the subscription.
+        #
+        # The Claude account has a five-hour window that, once rejected, fails
+        # every agent for the rest of it, so its draw has to be spaced. A site
+        # gateway is hosted too and has none of that — it has its own key and
+        # its own capacity — so pacing it to 8 agents and a 2s stagger buys
+        # nothing and costs the run. `--provider` naming anything other than
+        # Anthropic is what says "not the subscription".
+        provider = str(getattr(args, "provider", "") or "").lower()
+        if provider in ("", "anthropic", "claude"):
+            os.environ.setdefault("PHRONIX_PACED_LLM", "1")
 
     if getattr(args, "cluster", None):
         # The cluster's config is the source of truth for where the model is

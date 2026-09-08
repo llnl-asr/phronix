@@ -802,10 +802,31 @@ def private_home(env: Dict[str, str]):
 def _hosted_run() -> bool:
     """Is this run talking to a hosted endpoint rather than a local fleet?
 
-    The one question that decides whether the account's usage window or the
-    fleet's replica count is the binding limit.
+    Used to decide whether to measure a fleet at all — a hosted run must not
+    read whichever cluster another job happens to have deployed.
     """
     return str(os.environ.get(HOSTED_ENV, "")).strip().lower() in (
+        "1", "true", "yes")
+
+
+#: Set only for the Claude SUBSCRIPTION, which is the endpoint with a window.
+PACED_ENV = "PHRONIX_PACED_LLM"
+
+
+def _paced_run() -> bool:
+    """Does this endpoint have a usage window that has to be paced?
+
+    Only the subscription does. Hosted is the wrong question: a site gateway
+    is hosted too, and has its own key, its own capacity and no five-hour
+    allowance to exhaust — so pacing it to 8 agents and a 2s stagger costs
+    wall-clock for a reason that does not apply. Measured on a livai run:
+    196 `waiting for one of 8 agent slots` in the first minute, against a
+    gateway that had said nothing about being busy.
+
+    A local fleet is not paced either; there the replica count is the limit
+    and capping below it hides the queue in this process.
+    """
+    return str(os.environ.get(PACED_ENV, "")).strip().lower() in (
         "1", "true", "yes")
 
 
@@ -857,9 +878,20 @@ class _LlmGate:
                     # agents, and a cap of 8 across all of them. The fleet sat
                     # idle while the trace said `waiting for one of 8 agent
                     # slots`.
-                    key = ("llm.max_concurrent_agents"
-                           if _hosted_run() else "llm.max_concurrent_agents_local")
-                    default = 8 if _hosted_run() else 64
+                    if _paced_run():
+                        key, default = "llm.max_concurrent_agents", 8
+                    elif has_local_fleet():
+                        # The replica count is the real limit; capping below
+                        # it moves the queue into this process where nothing
+                        # can see it.
+                        key, default = "llm.max_concurrent_agents_local", 64
+                    else:
+                        # A GATEWAY publishes no capacity, so the harness has
+                        # no number to respect. Do not invent one: let the
+                        # gateway queue or refuse, which it can say out loud,
+                        # and keep only the bound that stops this process
+                        # spawning subprocesses until the node dies.
+                        key, default = "llm.max_concurrent_agents_gateway", 256
                     self._size = max(1, int(_tuned(key, default)))
                     self._semaphore = threading.Semaphore(self._size)
         return self._semaphore
@@ -905,9 +937,9 @@ class _LlmGate:
             # 40 task-arms' first agents — for no saving, since the server
             # queues what it cannot serve and reports the backlog itself.
             spacing = float(_tuned(
-                "llm.min_seconds_between_starts" if _hosted_run()
+                "llm.min_seconds_between_starts" if _paced_run()
                 else "llm.min_seconds_between_starts_local",
-                2.0 if _hosted_run() else 0.0))
+                2.0 if _paced_run() else 0.0))
             with self._lock:
                 delay = max(0.0, self._last_start + spacing - time.time())
                 self._last_start = time.time() + delay

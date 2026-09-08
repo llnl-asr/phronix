@@ -266,6 +266,15 @@ llm:
   # forty task-arms, buying nothing when there is no window to pace.
   min_seconds_between_starts_local: 0.0
 
+  # A site GATEWAY publishes no capacity, so there is no number to respect.
+  #
+  # Not a throttle — a bound on how many subprocesses this process will spawn
+  # before the node itself is the problem. The gateway can queue or refuse and
+  # say so; a client-side cap says nothing to anyone. Measured on a livai run
+  # capped at 8: 196 waits in the first minute against a gateway that had not
+  # complained once.
+  max_concurrent_agents_gateway: 256
+
   # Seconds between starting one agent and starting the next.
   #
   # Concurrency alone bounds the peak but not the rate: eight agents that each

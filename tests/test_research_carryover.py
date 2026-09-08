@@ -2137,6 +2137,7 @@ def test_the_gate_paces_agent_starts_and_waits_out_a_closed_window():
     # Pacing exists for the ACCOUNT's usage window, so it is a hosted-run
     # property. A local fleet has no window; see the local branch below.
     os.environ[arms_mod.HOSTED_ENV] = "1"
+    os.environ[arms_mod.PACED_ENV] = "1"
     try:
         started = time.time()
         with gate.slot():
@@ -2148,6 +2149,7 @@ def test_the_gate_paces_agent_starts_and_waits_out_a_closed_window():
         assert time.time() - started >= 1.0
     finally:
         arms_mod._tuned = real
+        os.environ.pop(arms_mod.PACED_ENV, None)
         if was_hosted is None:
             os.environ.pop(arms_mod.HOSTED_ENV, None)
         else:
@@ -2187,16 +2189,18 @@ def test_a_local_fleet_is_not_paced_like_a_usage_window():
     # The key and the default both switch on the same question.
     assert '"llm.max_concurrent_agents"' in source
     assert '"llm.max_concurrent_agents_local"' in source
-    assert "default = 8 if _hosted_run() else 64" in source
+    assert 'key, default = "llm.max_concurrent_agents_local", 64' in source
     assert '"llm.min_seconds_between_starts_local"' in source
-    assert "2.0 if _hosted_run() else 0.0" in source
+    assert "2.0 if _paced_run() else 0.0" in source
 
     was = os.environ.get(arms_mod.HOSTED_ENV)
     try:
         os.environ.pop(arms_mod.HOSTED_ENV, None)
-        assert arms_mod._hosted_run() is False
-        os.environ[arms_mod.HOSTED_ENV] = "1"
-        assert arms_mod._hosted_run() is True
+        os.environ.pop(arms_mod.PACED_ENV, None)
+        assert arms_mod._paced_run() is False
+        os.environ[arms_mod.PACED_ENV] = "1"
+        assert arms_mod._paced_run() is True
+        os.environ.pop(arms_mod.PACED_ENV, None)
     finally:
         if was is None:
             os.environ.pop(arms_mod.HOSTED_ENV, None)
@@ -10287,7 +10291,12 @@ def test_a_hosted_run_is_bounded_by_the_account_not_the_nodes():
     batch = Path("scripts/bench-batch.sh").read_text(encoding="utf-8")
     group = Path("scripts/run-group.sh").read_text(encoding="utf-8")
 
-    assert 'if [ -n "$HOSTED" ] && [ "$PARALLEL" -gt "${HOSTED_PARALLEL_CAP:-4}" ]; then' in batch
+    # Gated on the SUBSCRIPTION, not on hosted: a site gateway is hosted too
+    # and has its own capacity, so capping it to 4 makes a 30-task run crawl
+    # for a reason that does not apply to it.
+    assert 'if [ -n "$HOSTED" ] && [ -z "$GATEWAY" ] \\' in batch
+    assert '&& [ "$PARALLEL" -gt "${HOSTED_PARALLEL_CAP:-4}" ]; then' in batch
+    assert '[ "$arg" = "--provider" ] && GATEWAY=1' in batch
     assert "PARALLEL=${HOSTED_PARALLEL_CAP:-4}" in batch
     # Capped, not forced to 1: thirty tasks one at a time does not finish in a
     # working day either.
@@ -10325,3 +10334,56 @@ def test_a_model_sweep_can_keep_its_carry_roots_apart():
     assert 'export PHRONIX_CARRY="$PBENCH/carry-$CARRY_NAME"' in batch
     # And it reaches the job that actually runs inside the allocation.
     assert '${CARRY_NAME:+--carry "$CARRY_NAME"}' in batch
+
+
+def test_only_the_subscription_is_paced():
+    """Hosted is the wrong question; having a usage WINDOW is the right one.
+
+    The Claude account has a five-hour window that, once rejected, fails every
+    agent for the rest of it, so its draw has to be spaced. A site gateway is
+    hosted too and has none of that — its own key, its own capacity, no
+    allowance to exhaust. Pacing it cost wall-clock for a reason that did not
+    apply: measured on a livai run, 196 `waiting for one of 8 agent slots` in
+    the first minute, against a gateway that had not complained once.
+
+    And a gateway publishes no capacity, so there is no number to respect.
+    The bound that remains is not a throttle — it stops this process spawning
+    subprocesses until the node dies. The gateway can queue or refuse and say
+    so; a client-side cap says nothing to anyone.
+    """
+    import os
+
+    import tests.benchmark.arms as arms_mod
+
+    keys = ("PHRONIX_HOSTED_MODEL", arms_mod.PACED_ENV)
+    was = {k: os.environ.get(k) for k in keys}
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+        # A local fleet: not paced, capped at the replica count.
+        assert arms_mod._paced_run() is False
+
+        os.environ["PHRONIX_HOSTED_MODEL"] = "1"
+        os.environ[arms_mod.PACED_ENV] = "1"
+        assert arms_mod._paced_run() is True          # the subscription
+
+        os.environ.pop(arms_mod.PACED_ENV)
+        assert arms_mod._hosted_run() is True         # a gateway is hosted...
+        assert arms_mod._paced_run() is False         # ...and not paced
+    finally:
+        for k, v in was.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    source = Path("tests/benchmark/arms.py").read_text(encoding="utf-8")
+    # Three regimes, decided in one place.
+    assert 'key, default = "llm.max_concurrent_agents", 8' in source
+    assert 'key, default = "llm.max_concurrent_agents_local", 64' in source
+    assert 'key, default = "llm.max_concurrent_agents_gateway", 256' in source
+
+    # And only the subscription is marked as paced, by provider.
+    cli = Path("tests/benchmark/cli.py").read_text(encoding="utf-8")
+    assert 'if provider in ("", "anthropic", "claude"):' in cli
+    assert 'os.environ.setdefault("PHRONIX_PACED_LLM", "1")' in cli

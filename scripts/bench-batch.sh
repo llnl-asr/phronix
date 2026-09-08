@@ -94,7 +94,19 @@ LLM_DIR=$PROJECT/$FLEET
 #
 # Capped rather than forced to 1: thirty tasks one at a time does not finish in
 # a working day either. Pass `--parallel` after `--hosted` to override.
-if [ -n "$HOSTED" ] && [ "$PARALLEL" -gt "${HOSTED_PARALLEL_CAP:-4}" ]; then
+# ...but only for the SUBSCRIPTION, which is what has a window.
+#
+# A site gateway is hosted too and has its own key and its own capacity; it
+# has no five-hour allowance to exhaust. Capping it to 4 would make a 30-task
+# run crawl for a reason that does not apply to it. The subscription is the
+# case with no `--provider`, since that is what "hosted Claude on this
+# account" means here.
+GATEWAY=""
+for arg in "${PASS_THROUGH[@]}"; do
+    [ "$arg" = "--provider" ] && GATEWAY=1
+done
+if [ -n "$HOSTED" ] && [ -z "$GATEWAY" ] \
+   && [ "$PARALLEL" -gt "${HOSTED_PARALLEL_CAP:-4}" ]; then
     echo "hosted run: capping --parallel $PARALLEL to ${HOSTED_PARALLEL_CAP:-4}"          "(the account's allowance, not the nodes, is the limit here)"
     PARALLEL=${HOSTED_PARALLEL_CAP:-4}
 fi
