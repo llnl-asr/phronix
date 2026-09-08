@@ -23,7 +23,7 @@ source "$PROJECT/scripts/bench-root.sh"
 PBENCH=$(bench_root)
 
 SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch; PAIR=""; CARRY_NAME=""
-PASS_THROUGH=()
+PASS_THROUGH=(); CARRY_FROM=""
 SIZE=30; INDEX=1; PARALLEL=30; MODEL=""; NAME=""; SOURCE_LIST=""; HOSTED=""; REUSE=""; AFTER=""
 # Which cluster this batch is for. Everything that differs between them —
 # the fleet directory, the log root, the default model, the per-node shape —
@@ -61,6 +61,13 @@ while [ $# -gt 0 ]; do
     # Which knowledge store this run reads and writes. A sweep over models
     # gives each its own, or the later ones inherit the earlier ones' work.
     --carry)    CARRY_NAME="$2"; shift 2;;
+    # Seed this run's carry root from a FINISHED run's own store.
+    #
+    # Every model in a sweep promotes into the same place unless told
+    # otherwise, so by the third model the corpus is three models' work and a
+    # "reuse" run measures transfer rather than that model's own learning.
+    # Pointing at the fresh run's store is what makes the pair a pair.
+    --carry-from) CARRY_FROM="$2"; shift 2;;
     # Fresh then reuse, one allocation, in that order.
     --pair)     PAIR=1; shift;;
     # Do not start until JOBID has finished, however it finished.
@@ -116,6 +123,19 @@ fi
 # bug that leaves half a sweep sharing a store.
 [ -n "$CARRY_NAME" ] && export PHRONIX_CARRY="$PBENCH/carry-$CARRY_NAME"
 
+# Seeded HERE, inside the job, so the source run has finished by the time it
+# is read — a copy taken at submission would catch the fresh half mid-flight.
+if [ -n "$CARRY_FROM" ] && [ -n "$CARRY_NAME" ]; then
+    dest=$PBENCH/carry-$CARRY_NAME/.phronix
+    rm -rf "$dest"; mkdir -p "$(dirname "$dest")"
+    for store in "$CARRY_FROM"/*/store/.phronix; do
+        [ -d "$store" ] || continue
+        mkdir -p "$dest"
+        cp -r "$store"/. "$dest"/ 2>/dev/null
+    done
+    say "carry seeded from $CARRY_FROM: $(ls -d "$dest"/capabilities/skills/*/ 2>/dev/null | wc -l) skill(s)"
+fi
+
 LLM_ROOT=$(cd "$LLM_DIR" && bash -c 'source ./env.sh >/dev/null 2>&1; echo "$LLM_ROOT"')
 case "$FLEET" in
   corona-llm)
@@ -168,6 +188,7 @@ if [ -n "$SUBMIT" ]; then
                  ${SOURCE_LIST:+--source "$SOURCE_LIST"} \
                  ${HOSTED:+--hosted} ${REUSE:+--reuse} ${PAIR:+--pair} \
                  ${CARRY_NAME:+--carry "$CARRY_NAME"} \
+                 ${CARRY_FROM:+--carry-from "$CARRY_FROM"} \
                  "${PASS_THROUGH[@]}" \
                  2>&1 | tr -d '[:space:]')
     case "$job" in
