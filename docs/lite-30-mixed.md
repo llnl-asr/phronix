@@ -42,36 +42,36 @@ differently from one with 24.
 
 | instance | repo | patch | band | F2P | P2P |
 |---|---|---:|---|---:|---:|
-| `astropy__astropy-14182` | astropy | 41 | large | 1 | 9 |
-| `sympy__sympy-19254` | sympy | 61 | large | 1 | 18 |
-| `psf__requests-3362` | requests | 17 | large | 1 | 75 |
-| `astropy__astropy-6938` | astropy | 2 | small | 2 | 11 |
-| `sympy__sympy-24102` | sympy | 2 | small | 2 | 0 |
-| `sphinx-doc__sphinx-8595` | sphinx | 2 | small | 1 | 0 |
-| `pallets__flask-5063` | flask | 65 | large | 2 | 54 |
-| `mwaskom__seaborn-3190` | seaborn | 2 | small | 1 | 84 |
 | `pylint-dev__pylint-7080` | pylint | 1 | small | 1 | 120 |
-| `pydata__xarray-4493` | xarray | 10 | large | 1 | 1689 |
-| `pallets__flask-4992` | flask | 11 | large | 1 | 18 |
-| `mwaskom__seaborn-2848` | seaborn | 7 | medium | 1 | 50 |
-| `pylint-dev__pylint-7228` | pylint | 13 | large | 2 | 10 |
-| `pydata__xarray-4248` | xarray | 2 | small | 1 | 18 |
-| `matplotlib__matplotlib-24265` | matplotlib | 69 | large | 1 | 16 |
-| `psf__requests-2317` | requests | 4 | small | 8 | 133 |
-| `scikit-learn__scikit-learn-14087` | scikit-learn | 9 | medium | 3 | 172 |
-| `sphinx-doc__sphinx-7686` | sphinx | 54 | large | 2 | 15 |
-| `pytest-dev__pytest-6116` | pytest | 1 | small | 2 | 69 |
-| `matplotlib__matplotlib-25079` | matplotlib | 8 | medium | 1 | 253 |
-| `django__django-11019` | django | 76 | large | 16 | 58 |
-| `django__django-13447` | django | 1 | small | 1 | 5 |
+| `pallets__flask-5063` | flask | 65 | large | 2 | 54 |
 | `pytest-dev__pytest-5495` | pytest | 25 | large | 2 | 86 |
-| `scikit-learn__scikit-learn-25500` | scikit-learn | 41 | large | 1 | 45 |
+| `mwaskom__seaborn-2848` | seaborn | 7 | medium | 1 | 50 |
+| `matplotlib__matplotlib-25079` | matplotlib | 8 | medium | 1 | 253 |
+| `psf__requests-3362` | requests | 17 | large | 1 | 75 |
 | `scikit-learn__scikit-learn-13584` | scikit-learn | 2 | small | 6 | 3 |
+| `pylint-dev__pylint-7228` | pylint | 13 | large | 2 | 10 |
+| `pallets__flask-4992` | flask | 11 | large | 1 | 18 |
+| `mwaskom__seaborn-3190` | seaborn | 2 | small | 1 | 84 |
+| `scikit-learn__scikit-learn-14087` | scikit-learn | 9 | medium | 3 | 172 |
+| `pydata__xarray-4493` | xarray | 10 | large | 1 | 1689 |
+| `astropy__astropy-14182` | astropy | 41 | large | 1 | 9 |
+| `pydata__xarray-4248` | xarray | 2 | small | 1 | 18 |
+| `psf__requests-2317` | requests | 4 | small | 8 | 133 |
+| `astropy__astropy-6938` | astropy | 2 | small | 2 | 11 |
+| `pytest-dev__pytest-6116` | pytest | 1 | small | 2 | 69 |
+| `sphinx-doc__sphinx-7686` | sphinx | 54 | large | 2 | 15 |
+| `sphinx-doc__sphinx-8595` | sphinx | 2 | small | 1 | 0 |
+| `matplotlib__matplotlib-24265` | matplotlib | 69 | large | 1 | 16 |
+| `scikit-learn__scikit-learn-25500` | scikit-learn | 41 | large | 1 | 45 |
 | `matplotlib__matplotlib-25433` | matplotlib | 1 | small | 1 | 55 |
+| `sympy__sympy-24102` | sympy | 2 | small | 2 | 0 |
 | `sympy__sympy-20442` | sympy | 7 | medium | 1 | 24 |
+| `sympy__sympy-19254` | sympy | 61 | large | 1 | 18 |
+| `django__django-13447` | django | 1 | small | 1 | 5 |
 | `django__django-12184` | django | 3 | small | 1 | 25 |
-| `django__django-11797` | django | 6 | medium | 1 | 38 |
 | `django__django-16229` | django | 10 | large | 1 | 21 |
+| `django__django-11019` | django | 76 | large | 16 | 58 |
+| `django__django-11797` | django | 6 | medium | 1 | 38 |
 
 ## Coverage achieved
 
@@ -79,12 +79,12 @@ differently from one with 24.
 |---|---:|---:|---|
 | django | 114 | 5 | small, medium, large |
 | sympy | 77 | 3 | small, medium, large |
-| scikit-learn | 23 | 3 | small, medium, large |
 | matplotlib | 23 | 3 | small, medium, large |
+| scikit-learn | 23 | 3 | small, medium, large |
 | pytest | 17 | 2 | small, large |
 | sphinx | 16 | 2 | small, large |
-| astropy | 6 | 2 | small, large |
 | pylint | 6 | 2 | small, large |
+| astropy | 6 | 2 | small, large |
 | requests | 6 | 2 | small, large |
 | xarray | 5 | 2 | small, large |
 | seaborn | 4 | 2 | small, medium |

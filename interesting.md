@@ -454,3 +454,14 @@ TOTAL  10 task(s)     3 pass    7 fail    0 run    30% of finished      1.6M tok
 - fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke15-reuse-112130.log` (16/16 ready)
 - skills written: **348**   attempts that loaded one: **8**
 - `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0901-112401 --once`
+
+### m20-gptoss120-fresh — `claude-0901-215052-1150614`  (20 task(s), 16 node(s))
+
+```
+TOTAL  40 task(s)     3 pass   37 fail    0 run     8% of finished      6.6M tok   $173.70   [#######!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+```
+
+- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0901-215052-1150614`
+- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-m20-gptoss120-fresh-214747.log` (64/64 ready)
+- skills written: **0**   attempts that loaded one: **14**
+- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0901-215052-1150614 --once`

@@ -23,6 +23,7 @@ source "$PROJECT/scripts/bench-root.sh"
 PBENCH=$(bench_root)
 
 SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch; PAIR=""; CARRY_NAME=""
+PASS_THROUGH=()
 SIZE=30; INDEX=1; PARALLEL=30; MODEL=""; NAME=""; SOURCE_LIST=""; HOSTED=""; REUSE=""; AFTER=""
 # Which cluster this batch is for. Everything that differs between them —
 # the fleet directory, the log root, the default model, the per-node shape —
@@ -64,7 +65,12 @@ while [ $# -gt 0 ]; do
     --pair)     PAIR=1; shift;;
     # Do not start until JOBID has finished, however it finished.
     --after)    AFTER="$2"; shift 2;;
-    *) echo "unknown argument: $1" >&2; exit 2;;
+    # Anything else goes THROUGH to run-group.sh, which passes it on to the
+    # runner. `--harness opencode --provider livai` is the shape that needs
+    # this: a site-gateway run is neither a local fleet nor the Claude
+    # subscription, and enumerating every such flag here would mean editing
+    # three scripts to add one option to the runner.
+    *) PASS_THROUGH+=("$1"); shift;;
   esac
 done
 NAME=${NAME:-bench-${SIZE}x${INDEX}}
@@ -150,6 +156,7 @@ if [ -n "$SUBMIT" ]; then
                  ${SOURCE_LIST:+--source "$SOURCE_LIST"} \
                  ${HOSTED:+--hosted} ${REUSE:+--reuse} ${PAIR:+--pair} \
                  ${CARRY_NAME:+--carry "$CARRY_NAME"} \
+                 "${PASS_THROUGH[@]}" \
                  2>&1 | tr -d '[:space:]')
     case "$job" in
       f*) echo "submitted $job   ($NODES nodes, $WALL, $QUEUE)"
@@ -339,10 +346,12 @@ while [ "$pass" -lt "$ATTEMPTS" ]; do
         "$PROJECT/scripts/run-group.sh" "$INDEX" "" --subscription \
             --parallel "$PARALLEL" "${RESUME[@]}" ${MODEL:+--model "$MODEL"} \
             ${REUSE:+--reuse} \
+            "${PASS_THROUGH[@]}" \
             --size "$SIZE" --nodes "$live" > "$rlog" 2>&1
     else
         "$PROJECT/scripts/run-group.sh" "$INDEX" "" --cluster "$CLUSTER_JSON" \
             --parallel "$PARALLEL" "${RESUME[@]}" ${REUSE:+--reuse} \
+            "${PASS_THROUGH[@]}" \
             --size "$SIZE" --nodes "$live" > "$rlog" 2>&1
     fi
     out=$(grep -E "^out " "$rlog" 2>/dev/null | awk '{print $3}')

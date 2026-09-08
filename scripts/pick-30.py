@@ -31,7 +31,23 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-BENCH = Path("/p/lustre5/haridev/phronix-bench")
+#: The workspace on THIS machine. `/p/lustre5` is Tuolumne's and is not
+#: mounted on corona, `/p/lustre3` the other way about — a hardcoded path here
+#: does not error on the wrong cluster, it reports the task list as missing.
+def _bench_root() -> Path:
+    import os
+
+    override = os.environ.get("PHRONIX_BENCH")
+    if override:
+        return Path(override)
+    for candidate in (Path("/p/lustre5/haridev/phronix-bench"),
+                      Path("/p/lustre3/haridev/phronix-bench")):
+        if (candidate / "lite-300.txt").is_file():
+            return candidate
+    return Path("/p/lustre5/haridev/phronix-bench")
+
+
+BENCH = _bench_root()
 #: Every repository appears at least this many times.
 FLOOR = 2
 
