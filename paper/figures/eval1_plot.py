@@ -231,7 +231,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     small = plt.rcParams["legend.fontsize"]
     axes[0].legend(handles=kind_keys + mode_keys + line_key, frameon=False,
                    fontsize=small, handlelength=1.6, ncol=2,
-                   loc="upper left", bbox_to_anchor=(0.22, 1.0))
+                   loc="upper left", bbox_to_anchor=(0.14, 1.0))
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
