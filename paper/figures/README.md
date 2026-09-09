@@ -147,21 +147,27 @@ counted from the capability tree, not from `research/`.
 
 ## Eval 4 -- `eval4_tokens`
 
-End-to-end token cost of ONE attempt, fresh panel beside reuse. Colour carries
-the outcome and hatch the arm, so neither is read off colour alone. Green and
-red are the reserved status steps rather than categorical slots, because
-success and failure genuinely are a status -- and they always appear with a
-written label.
+Token cost of ONE attempt, three arms per category, each split by outcome.
 
-**Per attempt, not per task.** Phronix retries and bare does not, so a
-per-task total compares a budget against a single shot. Bare's `tries` is
-always 1, which makes its per-attempt figure identical to its per-task figure;
-the five-attempt extrapolation lives in the CSV column `est_total_5` for the
-cost argument and does not change what the figure plots.
+* **Bare** -- every bare task. Bare has no memory, so its fresh and reuse runs
+  are the same experiment twice; pooling them halves the noise.
+* **Phronix, fresh** -- every phronix task in a fresh run.
+* **Phronix, reuse** -- only the tasks a reuse run could actually reuse
+  something for: those its own model solved in the fresh run, confirmed to
+  have left a skill directory behind. A task nothing ever solved has no reuse
+  to measure. There is no bare equivalent; bare reuses nothing.
 
-**Split by outcome** because a failed attempt is not a cheap success -- it is
-a full budget spent reaching nothing, and averaging the two hides where the
-tokens went.
+**The two segments sum correctly.** Both are divided by the group's TOTAL
+attempts, so they stack to the group's overall tokens-per-attempt and each
+segment is that total's share. Stacking two separately-averaged means would
+add up to nothing.
 
-Both panels rank categories by pooled attempt count, so they show the same
-categories in the same order and can be read across.
+Colour carries the outcome and texture the arm, so neither is read off colour
+alone. Green and red are the reserved status steps, because success and
+failure genuinely are a status, and both carry a written label.
+
+Per attempt, not per task: phronix retries and bare does not, so a per-task
+total compares a budget against a single shot. Bare's `tries` is always 1, so
+its per-attempt figure is also its per-task figure; the five-attempt
+extrapolation lives in the CSV column `est_total_5` and does not change what
+the figure plots.
