@@ -176,12 +176,18 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     mode_keys = [Patch(facecolor=style["surface"], hatch=hatch,
                        edgecolor=style["text_secondary"], label=label)
                  for _, hatch, label in MODES]
-    first = axes[0].legend(handles=kind_keys, frameon=False, loc="upper right",
-                           fontsize=small)
+    # Both legends are anchored to the SAME left edge and drawn `upper left`.
+    # Anchored right, each box is only as wide as its own longest label, so
+    # the two swatch columns land at different x and the key reads as two
+    # unrelated blocks instead of one.
+    LEGEND_X = 0.52
+    first = axes[0].legend(handles=kind_keys, frameon=False, loc="upper left",
+                           fontsize=small, handlelength=1.6,
+                           bbox_to_anchor=(LEGEND_X, 1.0))
     axes[0].add_artist(first)
-    axes[0].legend(handles=mode_keys, frameon=False, loc="upper right",
+    axes[0].legend(handles=mode_keys, frameon=False, loc="upper left",
                    fontsize=small, handlelength=1.6,
-                   bbox_to_anchor=(1.0, 1.0 - 0.13 * len(kind_keys)))
+                   bbox_to_anchor=(LEGEND_X, 1.0 - 0.13 * len(kind_keys)))
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
