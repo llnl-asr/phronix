@@ -172,7 +172,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
         # a weak result look like a strong one.
         ax2.set_ylim(0, 100)
         ax2.yaxis.set_major_formatter(PercentFormatter())
-        ax2.set_ylabel("Solved on first try (reuse)",
+        ax2.set_ylabel("Solved on first try",
                        color=DETERMINISM_COLOR)
         ax2.tick_params(axis="y", colors=DETERMINISM_COLOR)
         for side in ("top", "left"):
@@ -208,7 +208,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                        label=label) for i, (_, label) in enumerate(KINDS)]
     line_key = [Line2D([0], [0], color=DETERMINISM_COLOR, marker="o",
                        markersize=9, linewidth=2,
-                       label="% solved first try (reuse)")]
+                       label="% solved first try")]
     mode_keys = [Patch(facecolor=style["surface"], hatch=hatch,
                        edgecolor=style["text_secondary"], label=label)
                  for _, hatch, label in MODES]
