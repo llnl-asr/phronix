@@ -9,6 +9,9 @@ Each evaluation is a `evalN_extract.py` (runs -> CSV) and a `evalN_plot.py`
     python eval2_extract.py --runs <run-dir-name> ...
     python eval2_plot.py
 
+    python eval3_extract.py --runs <run-dir-name> ...
+    python eval3_plot.py
+
 `figtools.py` holds the axis rules every figure obeys: when a plot carries a
 second y-axis, both axes get the SAME number of major ticks, so the two
 scales share one set of horizontal rules instead of interleaving at unrelated
@@ -105,3 +108,28 @@ with tracking it inherited. Only entries at or after the run's own
 the CSV but not the figure: it barely moves across models (30-33 everywhere),
 which is itself the finding -- the topic vocabulary is set by the pipeline's
 stages, not by how much a model learns.
+
+
+## Eval 3 -- `eval3_retries`
+
+RL-driven research, priced in attempts. Left axis, three bars per category;
+right axis, one stacked bar for what the research left behind.
+
+**The bare column is an estimate, not a measurement.** Bare has no retry loop
+-- every bare task runs exactly once and is scored -- so its budget is assumed
+to be `--bare-retries` (default 5) attempts, priced from the one attempt that
+actually ran. It is drawn hatched for that reason, and no conclusion should
+rest on its exact height. Change the assumption with the flag; the CSV records
+what was used.
+
+**Phronix is split by outcome because the two halves say opposite things.** A
+solved task's attempt count is what the research SAVED: 1.1-1.7 attempts
+across every category. A failed task's is just the budget cap being spent
+(2.9-3.6), and reading the two together as one average would hide both.
+
+Topics are de-duplicated across the sweep: a run that revisits a topic has not
+learnt a second one.
+
+Research itself writes no tool modules -- it emits a plan and a skill, and the
+capability builder turns those into tools -- so the MCP half of the stack is
+counted from the capability tree, not from `research/`.
