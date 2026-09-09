@@ -112,8 +112,15 @@ stages, not by how much a model learns.
 
 ## Eval 3 -- `eval3_retries`
 
-RL-driven research, priced in attempts. Left axis, three bars per category;
-right axis, one stacked bar for what the research left behind.
+RL-driven research, priced in attempts. Cost is drawn as LINES on the left
+axis and knowledge as a stacked BAR on the right: four bars in a row read as
+one series of four, and the distinction between "what it cost" and "what it
+produced" should be structural rather than something the reader carries over
+from the legend.
+
+A category with no task of a given outcome draws a gap, not a zero -- astropy
+solved nothing across all three models, and a zero there would claim it solved
+something in zero attempts.
 
 **The bare column is an estimate, not a measurement.** Bare has no retry loop
 -- every bare task runs exactly once and is scored -- so its budget is assumed

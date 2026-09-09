@@ -20,6 +20,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 import figtools
@@ -30,12 +31,15 @@ HERE = Path(__file__).parent
 # which is where the legend sits.
 TICK_INTERVALS = 8
 
-# Attempt series (left axis). Colours are slots the research stack does not
-# use, so a cost bar can never be mistaken for a knowledge bar.
+# Attempt series (left axis), drawn as LINES. Cost and knowledge are
+# different kinds of quantity, and as four bars in a row they read as one
+# series of four; as lines over bars the distinction is structural rather
+# than something the reader has to hold in their head from the legend.
+# Bare is dashed because its value is assumed, not measured.
 ATTEMPTS = [
-    ("bare_attempts_est", "#eda100", "///", "Bare (est.)"),
-    ("solved_attempts_mean", "#1baf7a", "", "Phronix, solved"),
-    ("failed_attempts_mean", "#4a3aa7", "", "Phronix, failed"),
+    ("bare_attempts_est", "#eda100", "--", "Bare (est.)", "count_bare"),
+    ("solved_attempts_mean", "#1baf7a", "-", "Phronix, solved", "solved_tasks"),
+    ("failed_attempts_mean", "#4a3aa7", "-", "Phronix, failed", "failed_tasks"),
 ]
 # Research stack (right axis), in the same colours these two things wear in
 # every other figure in the paper.
@@ -89,27 +93,32 @@ def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
 
     # Four bars per category: three attempt bars then the research stack, with
     # the stack set slightly apart so it reads as a different quantity.
-    slots = len(ATTEMPTS) + 1
-    width = style["axes"]["bar_width"] / slots
     fig, ax = plt.subplots(figsize=size)
     ax2 = ax.twinx()
 
-    def offset(slot: int) -> list[float]:
-        return [i - style["axes"]["bar_width"] / 2 + width * (slot + 0.5)
-                for i in range(n)]
-
-    for si, (field, color, hatch, _label) in enumerate(ATTEMPTS):
-        ax.bar(offset(si), [r[field] for r in rows], width=width, color=color,
-               hatch=hatch,
-               edgecolor=style["text_secondary"] if hatch else style["surface"],
-               linewidth=1.0, zorder=3)
-
+    # The research stack is the only bar now, so it takes the whole slot.
     bottom = [0.0] * n
     for field, color, _label in RESEARCH:
         vals = [r[field] for r in rows]
-        ax2.bar(offset(slots - 1), vals, width=width, bottom=bottom, color=color,
-                edgecolor=style["surface"], linewidth=1.0, zorder=3)
+        ax2.bar(range(n), vals, width=style["axes"]["bar_width"] * 0.6,
+                bottom=bottom, color=color, edgecolor=style["surface"],
+                linewidth=1.0, zorder=2)
         bottom = [b + v for b, v in zip(bottom, vals)]
+
+    for field, color, dash, _label, count in ATTEMPTS:
+        # A category with no task of that outcome has no mean to plot --
+        # astropy solved nothing, and a zero there would claim it solved
+        # something in zero attempts.
+        vals = [r[field] if (count == "count_bare" or r[count]) else float("nan")
+                for r in rows]
+        ax.plot(range(n), vals, color=color, linestyle=dash, marker="o",
+                markersize=9, linewidth=2, markeredgecolor=style["surface"],
+                markeredgewidth=1.5, zorder=5, clip_on=False)
+
+    # Twin axes draw in creation order, so the bars would cover the lines.
+    # Lift the line axes above and let the bars show through it.
+    ax.set_zorder(ax2.get_zorder() + 1)
+    ax.patch.set_visible(False)
 
     ax.set_xticks(range(n))
     ax.set_xticklabels([short(c) for c in cats])
@@ -135,9 +144,8 @@ def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
     figtools.pair_axes(ax, ax2, 0, max(bottom) * 1.5,
                        intervals=TICK_INTERVALS, left_step=1)
 
-    keys = [Patch(facecolor=c, hatch=h,
-                  edgecolor=style["text_secondary"] if h else style["surface"],
-                  label=lab) for _, c, h, lab in ATTEMPTS]
+    keys = [Line2D([0], [0], color=c, linestyle=d, marker="o", markersize=9,
+                   linewidth=2, label=lab) for _, c, d, lab, _ in ATTEMPTS]
     keys += [Patch(facecolor=c, edgecolor=style["surface"], label=lab)
              for _, c, lab in RESEARCH]
     # Inside, across the top: the headroom above keeps every bar clear of it.
