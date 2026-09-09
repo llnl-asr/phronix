@@ -147,8 +147,8 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                 bottom = [b + v for b, v in zip(bottom, vals)]
 
         ax.set_xticks(range(len(cats)))
-        ax.set_xticklabels([short(c) for c in cats], rotation=45,
-                           ha="right", rotation_mode="anchor")
+        ax.set_xticklabels([short(c) for c in cats])
+        ax.set_xlabel("Task category")
         ax.set_xlim(-0.6, len(cats) - 0.4)
         ax.grid(axis=style["axes"]["grid_axis"], alpha=style["axes"]["grid_alpha"],
                 zorder=0)
@@ -158,11 +158,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
         for side in style["axes"]["spines"]:
             ax.spines[side].set_color(style["text_secondary"])
 
-    axes[0].set_ylabel("#\nCapabilities", rotation=0, ha="center", va="center")
-    # Placed in axes coordinates rather than with a fixed pad: the pad is
-    # measured from the axis, so a run whose counts need an extra digit walks
-    # the tick labels straight through the text.
-    axes[0].yaxis.set_label_coords(-0.30, 0.5)
+    axes[0].set_ylabel("# Capabilities")
     # Headroom for the legends, so they sit in empty space rather than on top
     # of the tallest stack.
     top = max((sum(v) for v in [[b.get_height() for b in ax.patches]
