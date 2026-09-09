@@ -100,7 +100,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     ax.set_xlabel("Model")
     ax.set_ylabel("# Learned")
     ax.set_xlim(-0.6, len(models) - 0.4)
-    ax.set_ylim(0, max(bottom) * 1.45)
+    ax.set_ylim(0, max(bottom) * 1.12)
     ax.grid(axis=style["axes"]["grid_axis"], alpha=style["axes"]["grid_alpha"],
             zorder=0)
     ax.set_axisbelow(True)
@@ -117,7 +117,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     ax2.plot(list(x), tracked, color=TRACKING_COLOR, marker="o", markersize=9,
              linewidth=2, markeredgecolor=style["surface"], markeredgewidth=1.5,
              zorder=5, clip_on=False)
-    ax2.set_ylim(0, max(tracked) * 1.45)
+    ax2.set_ylim(0, max(tracked) * 1.12)
     ax2.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=5))
     ax2.set_ylabel("# Entries tracked", color=TRACKING_COLOR)
     ax2.tick_params(axis="y", colors=TRACKING_COLOR)
@@ -125,23 +125,19 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
         ax2.spines[side].set_visible(False)
     ax2.spines["right"].set_color(TRACKING_COLOR)
 
-    # Both legends share one left edge; anchored right, each box would be only
-    # as wide as its own longest label and the swatches would not line up.
+    # Below the axes, one row-major block, matching eval 1 so the two figures
+    # read as one system.
     small = plt.rcParams["legend.fontsize"]
     kind_keys = [Patch(facecolor=colors[i], edgecolor=style["surface"], label=lab)
                  for i, (_, lab) in enumerate(KINDS)]
     line_key = [Line2D([0], [0], color=TRACKING_COLOR, marker="o", markersize=9,
                        linewidth=2, label="Entries tracked")]
-    LEGEND_X = 0.03
-    first = ax.legend(handles=kind_keys, frameon=False, loc="upper left",
-                      fontsize=small, handlelength=1.6,
-                      bbox_to_anchor=(LEGEND_X, 1.0))
-    ax.add_artist(first)
-    ax.legend(handles=line_key, frameon=False, loc="upper left", fontsize=small,
-              handlelength=1.6,
-              bbox_to_anchor=(LEGEND_X, 1.0 - 0.105 * len(kind_keys)))
+    fig.legend(handles=kind_keys + line_key, frameon=False, fontsize=small,
+               handlelength=1.6, ncol=3, loc="upper center",
+               bbox_to_anchor=(0.5, 0.20))
 
     fig.tight_layout()
+    fig.subplots_adjust(bottom=0.34)
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out}  ({size[0]}x{size[1]} in, {len(models)} models)")

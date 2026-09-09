@@ -152,18 +152,24 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                        linewidth=1.0, zorder=3)
                 bottom = [b + v for b, v in zip(bottom, vals)]
 
-        # Share of a category's tasks that the REUSE run solved on its first
-        # attempt: the determinism claim. As a RATE rather than a count, so
-        # categories with different numbers of tasks can be compared -- django
-        # contributes five tasks per model and astropy two, and the raw counts
-        # mostly measured that.
+        # The determinism claim, conditioned on there being something to be
+        # deterministic ABOUT: of the tasks a fresh run solved -- and so left a
+        # working skill for -- how many did the reuse run then get right on
+        # the first attempt? Scoring against all tasks instead would fold in
+        # every task no run ever solved, where a first-try miss says nothing
+        # about reuse. A rate, not a count, because categories hold different
+        # numbers of tasks.
         ax2 = ax.twinx()
         firsts = []
         for c in cats:
-            hit = sum(lookup.get((m, "reuse", c), {}).get("resolved_first_try", 0)
+            hit = sum(lookup.get((m, "reuse", c), {}).get("first_try_eligible", 0)
                       for m in group)
-            n = sum(lookup.get((m, "reuse", c), {}).get("tasks", 0) for m in group)
-            firsts.append(100.0 * hit / n if n else 0.0)
+            n = sum(lookup.get((m, "reuse", c), {}).get("eligible", 0)
+                    for m in group)
+            # A category no run ever solved has an empty denominator: there is
+            # no rate to draw, and drawing 0% would assert a failure that was
+            # never measured.
+            firsts.append(100.0 * hit / n if n else float("nan"))
         ax2.plot(range(len(cats)), firsts, color=DETERMINISM_COLOR,
                  marker="o", markersize=9, linewidth=2,
                  markeredgecolor=style["surface"], markeredgewidth=1.5,
@@ -172,7 +178,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
         # a weak result look like a strong one.
         ax2.set_ylim(0, 100)
         ax2.yaxis.set_major_formatter(PercentFormatter())
-        ax2.set_ylabel("Solved on first try",
+        ax2.set_ylabel("First-try solves\nof tasks with a skill",
                        color=DETERMINISM_COLOR)
         ax2.tick_params(axis="y", colors=DETERMINISM_COLOR)
         for side in ("top", "left"):
@@ -198,12 +204,11 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                                 for ax in axes]), default=1)
     tallest = max((b.get_y() + b.get_height() for ax in axes
                    for b in ax.patches), default=1)
-    axes[0].set_ylim(0, tallest * 1.45)
+    axes[0].set_ylim(0, tallest * 1.12)
 
     # One legend per encoding. Collapsing them into four combined entries
     # would imply four independent series and hide that colour and hatch are
     # answering two different questions.
-    small = plt.rcParams["legend.fontsize"] - (3 if size[0] < 6 else 0)
     kind_keys = [Patch(facecolor=style["palette"][i], edgecolor=style["surface"],
                        label=label) for i, (_, label) in enumerate(KINDS)]
     line_key = [Line2D([0], [0], color=DETERMINISM_COLOR, marker="o",
@@ -212,25 +217,19 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     mode_keys = [Patch(facecolor=style["surface"], hatch=hatch,
                        edgecolor=style["text_secondary"], label=label)
                  for _, hatch, label in MODES]
-    # Both legends are anchored to the SAME left edge and drawn `upper left`.
-    # Anchored right, each box is only as wide as its own longest label, so
-    # the two swatch columns land at different x and the key reads as two
-    # unrelated blocks instead of one.
-    LEGEND_X = 0.52
-    first = axes[0].legend(handles=kind_keys, frameon=False, loc="upper left",
-                           fontsize=small, handlelength=1.6,
-                           bbox_to_anchor=(LEGEND_X, 1.0))
-    axes[0].add_artist(first)
-    second = axes[0].legend(handles=mode_keys, frameon=False, loc="upper left",
-                            fontsize=small, handlelength=1.6,
-                            bbox_to_anchor=(LEGEND_X, 1.0 - 0.105 * len(kind_keys)))
-    axes[0].add_artist(second)
-    axes[0].legend(handles=line_key, frameon=False, loc="upper left",
-                   fontsize=small, handlelength=1.6,
-                   bbox_to_anchor=(LEGEND_X,
-                                   1.0 - 0.105 * (len(kind_keys) + len(mode_keys))))
+    # Below the axes, in one row-major block. Conditioning the rate on tasks
+    # that had a skill pushed the line up into the 70-100% band, which is
+    # exactly where an interior legend has to sit; outside, no future run's
+    # numbers can collide with it.
+    small = plt.rcParams["legend.fontsize"]
+    fig.legend(handles=kind_keys + mode_keys + line_key, frameon=False,
+               fontsize=small, handlelength=1.6, ncol=3,
+               loc="upper center", bbox_to_anchor=(0.5, 0.20))
 
     fig.tight_layout()
+    # Room underneath for the legend block, which lives in figure coordinates
+    # and is not part of the axes layout.
+    fig.subplots_adjust(bottom=0.34)
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out}  ({size[0]}x{size[1]} in, {len(cats)} categories)")

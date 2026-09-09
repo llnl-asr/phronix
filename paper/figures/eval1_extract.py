@@ -158,6 +158,9 @@ def collect(runs: list[Path]) -> list[dict]:
                 "tools_created": 0, "skills_retrieved": 0,
                 "skills_reused": 0, "tools_reused": 0,
                 "resolved_first_try": 0,
+                # Denominator and numerator of the determinism rate. Filled
+                # in by a second pass, because they need BOTH runs of a model.
+                "eligible": 0, "first_try_eligible": 0,
             }
         return table[key]
 
@@ -200,12 +203,63 @@ def collect(runs: list[Path]) -> list[dict]:
         for cat, n in tools_reused(run, learned).items():
             cell(model, mode, cat)["tools_reused"] += n
 
+    pair_up(runs, table)
     return sorted(table.values(), key=lambda r: (r["model"], r["mode"], r["category"]))
+
+
+def pair_up(runs: list[Path], table: dict) -> None:
+    """Join each model's fresh and reuse runs task by task.
+
+    Asking whether a reuse run got it right first time is only meaningful for
+    a task some earlier run actually solved: if nothing ever worked, there is
+    no successful skill to reuse and a first-try miss says nothing about
+    determinism. So the denominator is tasks the FRESH run solved -- every one
+    of which leaves a skill directory in the store, checked here rather than
+    assumed -- and the numerator is how many of those the reuse run then
+    solved on its first attempt.
+    """
+    by_model: dict[str, dict[str, dict]] = defaultdict(dict)
+    for run in runs:
+        got = read_run(run)
+        if got is None:
+            continue
+        manifest, rows = got
+        model = manifest.get("model", "?").replace("svc-dldl-", "")
+        mode = "fresh" if manifest.get("fresh") else "reuse"
+        skills_dir = run / ARM / "store" / ".phronix" / "capabilities" / "skills"
+        have = {d.name for d in skills_dir.iterdir()} if skills_dir.is_dir() else set()
+        by_model[model][mode] = {
+            r["instance_id"]: {
+                "repo": r.get("repo") or category_of(r["instance_id"]),
+                "resolved": bool(r.get("resolved")),
+                "tries": r.get("tries"),
+                # The skill the successful attempt left behind.
+                "skill": r["instance_id"].replace("__", "-") in have,
+            }
+            for r in rows
+        }
+
+    for model, modes in by_model.items():
+        fresh, reuse = modes.get("fresh"), modes.get("reuse")
+        if not fresh or not reuse:
+            continue
+        for task, f in fresh.items():
+            if not (f["resolved"] and f["skill"]):
+                continue
+            u = reuse.get(task)
+            if u is None:
+                continue
+            key = (model, "reuse", f["repo"])
+            if key not in table:
+                continue
+            table[key]["eligible"] += 1
+            table[key]["first_try_eligible"] += int(u["resolved"] and u["tries"] == 1)
 
 
 FIELDS = ["model", "mode", "category", "tasks", "resolved",
           "skills_created", "tools_created", "skills_retrieved",
-          "skills_reused", "tools_reused", "resolved_first_try"]
+          "skills_reused", "tools_reused", "resolved_first_try",
+          "eligible", "first_try_eligible"]
 
 
 def main() -> None:

@@ -57,21 +57,24 @@ its directory; anything neither names lands in `general`.
 
 ### The right-hand axis
 
-The line is the share of a category's tasks that the reuse run solved on its
-first attempt with no retry -- the determinism claim: the corpus told the run
-what to do rather than it searching for the answer again. Counted over the
-three models, first-try solves roughly double from fresh to reuse (7->16 nano,
-6->14 mini, 8->14 gpt-5.4) while total resolved barely moves.
+The line answers: of the tasks a fresh run SOLVED -- and so left a working
+skill for -- how many did the reuse run then solve on its first attempt?
 
-A rate, not a count, because the categories hold different numbers of tasks
-(five django per model against two astropy) and the raw counts largely
-measured that. The scale is pinned to 0-100% rather than fitted to the data,
-so a weak result cannot be auto-scaled into a strong-looking one.
+The denominator matters. Scored against every task in the category it folds
+in tasks no run ever solved, where there is no successful skill to reuse and a
+first-try miss says nothing about determinism. Conditioned properly the rate
+is 86% (nano, 12/14), 79% (mini, 11/14) and 67% (gpt-5.4, 14/21); against all
+tasks it read 33-53%, which was mostly measuring how hard the tasks were.
+
+Eligibility is checked, not assumed: every fresh-solved task is confirmed to
+have a skill directory in that run's store.
+
+A category whose denominator is empty is drawn as a gap, not as 0% -- zero
+would assert a failure that was never measured.
 
 It sits on a second axis because it measures TASKS, not capabilities. The two
 scales are not comparable by height; read the line only against the
 right-hand numbers.
-
 
 ## Eval 2 -- `eval2_tracking`
 
