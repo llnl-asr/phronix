@@ -12,6 +12,9 @@ Each evaluation is a `evalN_extract.py` (runs -> CSV) and a `evalN_plot.py`
     python eval3_extract.py --runs <run-dir-name> ...
     python eval3_plot.py
 
+    python eval4_extract.py --runs <run-dir-name> ...
+    python eval4_plot.py
+
 `figtools.py` holds the axis rules every figure obeys: when a plot carries a
 second y-axis, both axes get the SAME number of major ticks, so the two
 scales share one set of horizontal rules instead of interleaving at unrelated
@@ -140,3 +143,25 @@ learnt a second one.
 Research itself writes no tool modules -- it emits a plan and a skill, and the
 capability builder turns those into tools -- so the MCP half of the stack is
 counted from the capability tree, not from `research/`.
+
+
+## Eval 4 -- `eval4_tokens`
+
+End-to-end token cost of ONE attempt, fresh panel beside reuse. Colour carries
+the outcome and hatch the arm, so neither is read off colour alone. Green and
+red are the reserved status steps rather than categorical slots, because
+success and failure genuinely are a status -- and they always appear with a
+written label.
+
+**Per attempt, not per task.** Phronix retries and bare does not, so a
+per-task total compares a budget against a single shot. Bare's `tries` is
+always 1, which makes its per-attempt figure identical to its per-task figure;
+the five-attempt extrapolation lives in the CSV column `est_total_5` for the
+cost argument and does not change what the figure plots.
+
+**Split by outcome** because a failed attempt is not a cheap success -- it is
+a full budget spent reaching nothing, and averaging the two hides where the
+tokens went.
+
+Both panels rank categories by pooled attempt count, so they show the same
+categories in the same order and can be read across.
