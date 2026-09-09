@@ -211,7 +211,7 @@ FIELDS = ["model", "mode", "category", "tasks", "resolved",
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bench", type=Path, default=BENCH)
-    ap.add_argument("--out", type=Path, default=Path(__file__).parent / "capabilities_by_category.csv")
+    ap.add_argument("--out", type=Path, default=Path(__file__).parent / "eval1_capabilities.csv")
     ap.add_argument("--runs", nargs="*", default=None,
                     help="run directory names; default is every run under --bench/runs")
     args = ap.parse_args()

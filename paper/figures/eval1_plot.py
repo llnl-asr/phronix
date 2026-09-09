@@ -238,7 +238,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--csv", type=Path, default=HERE / "capabilities_by_category.csv")
+    ap.add_argument("--csv", type=Path, default=HERE / "eval1_capabilities.csv")
     ap.add_argument("--style", type=Path, default=HERE / "style.yaml")
     ap.add_argument("--models", nargs="*",
                     default=["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"])
@@ -246,7 +246,7 @@ def main() -> None:
                     help="named sizes from style.yaml (wide, column, square)")
     ap.add_argument("--top-n", type=int, default=None,
                     help="keep only the N busiest categories (default: per size)")
-    ap.add_argument("--out", type=Path, default=HERE / "capabilities_by_category")
+    ap.add_argument("--out", type=Path, default=HERE / "eval1_capabilities")
     args = ap.parse_args()
 
     style = load_style(args.style)

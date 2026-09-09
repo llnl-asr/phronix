@@ -1,0 +1,7 @@
+model,mode,run,tasks,skills_learned,tools_learned,entries_tracked,topics,entries_worked
+gpt-5.4,fresh,claude-0908-120319-1558056,30,138,100,1450,32,154
+gpt-5.4,reuse,claude-0908-183704-1083797,30,0,4,1245,32,29
+gpt-5.4-mini,fresh,claude-0908-104954-3730240,30,82,46,498,33,7
+gpt-5.4-mini,reuse,claude-0908-170305-3607725,30,0,4,731,30,0
+gpt-5.4-nano,fresh,claude-0908-084949-1507128,30,60,56,1024,30,16
+gpt-5.4-nano,reuse,claude-0908-145505-4150799,30,0,0,667,31,0

@@ -1,15 +1,19 @@
 # Figures
 
-Regenerate everything from the runs:
+Each evaluation is a `evalN_extract.py` (runs -> CSV) and a `evalN_plot.py`
+(CSV -> PDF). Pass the run directory names to the extractor:
 
-    python extract_capabilities.py --runs <run-dir-name> ...   # -> .csv
-    python plot_capabilities.py                                # -> .pdf
+    python eval1_extract.py --runs <run-dir-name> ...
+    python eval1_plot.py
+
+    python eval2_extract.py --runs <run-dir-name> ...
+    python eval2_plot.py
 
 `style.yaml` holds what every figure shares: the 18pt base font, the named
 canvas sizes (`wide` 18x4, `column` 8.5x4, `square` 4x4) and the validated
 categorical palette. Change it there, not in a script.
 
-## capabilities_by_category
+## Eval 1 -- `eval1_capabilities`
 
 How many capabilities phronix built per task category, and how many came back.
 
@@ -67,3 +71,27 @@ so a weak result cannot be auto-scaled into a strong-looking one.
 It sits on a second axis because it measures TASKS, not capabilities. The two
 scales are not comparable by height; read the line only against the
 right-hand numbers.
+
+
+## Eval 2 -- `eval2_tracking`
+
+Automatic tracking and knowledge creation, one bar per model. The stack is
+durable knowledge -- skills and MCP tools produced -- and the line is the raw
+tracking volume it was distilled from. Read together: a model that tracks
+heavily but converts little is doing bookkeeping, not learning.
+
+Fresh and reuse runs are summed per model. Learning is almost entirely the
+fresh run's doing (a reuse run finds the capability already written) while
+tracking happens in both, so the pair is the model's whole story.
+
+`entries_tracked` is attributed BY TIMESTAMP, not by counting the file. A
+reuse run's store arrives carrying the observation log of every run that
+promoted before it -- the nano reuse log opens with entries written by the
+gpt-5.4 fresh run two hours earlier -- so the file length would credit a run
+with tracking it inherited. Only entries at or after the run's own
+`created_at` are counted.
+
+`topics` is the number of distinct subjects the tracker filed under. It is in
+the CSV but not the figure: it barely moves across models (30-33 everywhere),
+which is itself the finding -- the topic vocabulary is set by the pipeline's
+stages, not by how much a model learns.
