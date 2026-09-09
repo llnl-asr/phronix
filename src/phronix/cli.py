@@ -93,11 +93,20 @@ def cmd_deploy(args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory(prefix="phronix-check-") as tmp:
             scratch = Path(tmp) / "root"
             scratch.mkdir()
+            # Harness directories accumulate state that deploy never touches
+            # and that can dwarf the project: a real one carries 8 GB of git
+            # worktrees, and copying it turned `--check` from a preview into a
+            # multi-minute disk copy. Skip anything deploy cannot write.
+            skip = shutil.ignore_patterns(
+                "worktrees", "projects", "shell-snapshots", "todos", "statsig",
+                "history", "__pycache__", "*.pyc",
+            )
             for name in (".claude", ".opencode", ".codex", ".github", ".vscode",
                          ".phronix", "CLAUDE.md", "AGENTS.md", ".mcp.json", ".gitignore"):
                 source = root / name
                 if source.is_dir():
-                    shutil.copytree(source, scratch / name, symlinks=True)
+                    shutil.copytree(source, scratch / name, symlinks=True,
+                                    ignore=skip)
                 elif source.exists():
                     shutil.copy2(source, scratch / name)
             # The Claude memory symlink points into ``~/.claude/projects/<slug>/``,

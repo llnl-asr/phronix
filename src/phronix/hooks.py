@@ -32,7 +32,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-HOOK_SCRIPT_NAME = "inject_context.py"
+# Namespaced, not the generic "inject_context.py": a project may already run
+# another framework whose hook has the obvious name. Sharing the filename
+# means whoever syncs last silently overwrites the other's script, and worse,
+# each one's "is this entry mine?" test matches the other's settings entry, so
+# the collision reports itself as "already current".
+HOOK_SCRIPT_NAME = "phronix_context_hook.py"
 
 #: The gate that refuses an edit until the task's skill has been read.
 GUARD_SCRIPT_NAME = "require_skill.py"
@@ -295,6 +300,11 @@ def sync_claude_hooks(root: Path) -> str:
     root = Path(root)
     script_status = _write_if_changed(
         root / ".claude" / "hooks" / HOOK_SCRIPT_NAME, _HOOK_SCRIPT, executable=True)
+    # The guard is advertised in PreToolUse below, so it has to be on disk for
+    # the same reason the context hook does. Writing only one of the two left
+    # every Edit gated on a script that was never installed.
+    guard_path = root / ".claude" / "hooks" / GUARD_SCRIPT_NAME
+    _write_if_changed(guard_path, _GUARD_SCRIPT, executable=True)
 
     # Never advertise a hook whose script is missing: Claude Code runs the
     # command on EVERY prompt, so a dangling path fails every turn.
@@ -322,9 +332,11 @@ def sync_claude_hooks(root: Path) -> str:
     hooks["UserPromptSubmit"] = others + [entry]
     # And the PreToolUse gate, merged the same additive way: a project's own
     # guards (an `rm` guard is the common one) must survive.
-    guard = render_claude_guard()
     kept = [e for e in (hooks.get("PreToolUse") or []) if not _is_ours(e)]
-    hooks["PreToolUse"] = kept + [guard]
+    # Same rule as the prompt hook: only advertise the gate once its script is
+    # actually there.
+    hooks["PreToolUse"] = kept + ([render_claude_guard()] if guard_path.is_file()
+                                  else [])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
     return "updated"

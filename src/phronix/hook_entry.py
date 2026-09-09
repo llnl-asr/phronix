@@ -1,7 +1,7 @@
 """Harness-neutral prompt-injection entry point: ``python3 -m phronix.hook_entry``.
 
 Reads a JSON hook payload on stdin, writes the context block on stdout. Claude
-Code and Codex CLI invoke the generated ``inject_context.py`` shims; the OpenCode
+Code and Codex CLI invoke the generated ``phronix_context_hook.py`` shims; the OpenCode
 plugin spawns this module directly. All three share this one implementation, so
 retrieval behaviour cannot drift between harnesses.
 

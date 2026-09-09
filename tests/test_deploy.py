@@ -48,7 +48,7 @@ class TestIdempotency:
                      ".codex/agents/phronix-router.toml",
                      ".claude/skills/phronix-self-learning",
                      ".claude/settings.json", ".mcp.json",
-                     ".claude/hooks/inject_context.py",
+                     ".claude/hooks/phronix_context_hook.py",
                      "CLAUDE.md", "AGENTS.md"):
             assert (project / path).exists(), path
 
