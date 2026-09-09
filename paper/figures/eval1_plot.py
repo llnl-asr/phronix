@@ -21,7 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
 from matplotlib.lines import Line2D
-from matplotlib.ticker import PercentFormatter
+from matplotlib.ticker import MultipleLocator, PercentFormatter
 from matplotlib.patches import Patch
 
 HERE = Path(__file__).parent
@@ -200,11 +200,14 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     axes[0].set_ylabel("# Capabilities")
     # Headroom for the legends, so they sit in empty space rather than on top
     # of the tallest stack.
-    top = max((sum(v) for v in [[b.get_height() for b in ax.patches]
-                                for ax in axes]), default=1)
+    # A fixed scale with round ticks, so the reader counts in 40s and two
+    # printings of this figure are comparable even if the data moves.
+    axes[0].set_ylim(0, 200)
+    axes[0].yaxis.set_major_locator(MultipleLocator(40))
     tallest = max((b.get_y() + b.get_height() for ax in axes
-                   for b in ax.patches), default=1)
-    axes[0].set_ylim(0, tallest * 2.55)
+                   for b in ax.patches), default=0)
+    if tallest > 200:
+        print(f"warning: tallest stack is {tallest:.0f}, clipped by the 0-200 axis")
 
     # One legend per encoding. Collapsing them into four combined entries
     # would imply four independent series and hide that colour and hatch are
@@ -221,15 +224,14 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     # conditioned on tasks that had a skill, so the free band is underneath it
     # rather than above the bars. Headroom on the left axis (below) shortens
     # the stacks until that band is genuinely clear.
-    # The band between the bar tops and the line's lowest point is shallow,
-    # so the legend has to be small to sit in it. The line is deliberately NOT
-    # in the legend: the violet right-hand axis already names it, and a fifth
-    # entry is what pushed the block down onto the bars.
-    small = plt.rcParams["legend.fontsize"] - 4
-    axes[0].legend(handles=kind_keys + mode_keys, frameon=False,
-                   fontsize=small, handlelength=1.4, ncol=2,
-                   columnspacing=1.2, labelspacing=0.35, handletextpad=0.5,
-                   loc="upper left", bbox_to_anchor=(0.34, 0.275))
+    # Top-aligned inside the plot. The rate line is drawn on the twin axes,
+    # which render after this one, so the line passes OVER the legend instead
+    # of the legend having to dodge it -- which is what forced the type down
+    # a size and the bars into a third of the canvas.
+    small = plt.rcParams["legend.fontsize"]
+    axes[0].legend(handles=kind_keys + mode_keys + line_key, frameon=False,
+                   fontsize=small, handlelength=1.6, ncol=2,
+                   loc="upper left", bbox_to_anchor=(0.22, 1.0))
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
