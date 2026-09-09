@@ -1,0 +1,39 @@
+# Shared figure style for every plot in the paper.
+#
+# One file so a reviewer's "make the fonts bigger" is one edit, not one per
+# script, and so two figures printed side by side in the same column agree.
+font:
+  # Camera-ready size. Everything else is derived from it rather than set
+  # independently, so the ratios survive a change of base size.
+  size: 18
+  family: sans-serif
+  sans_serif: [DejaVu Sans, Helvetica, Arial]
+
+# Named canvas sizes in inches, width x height. A figure asks for the one that
+# matches where it lands: full text width, one column, or a square inset.
+dimensions:
+  wide:    [18.0, 4.0]   # full-width strip, e.g. one panel per model
+  column:  [8.5, 4.0]    # single column
+  square:  [4.0, 4.0]    # small inset / teaser
+
+# Categorical palette: the validated slots from the house theme, in fixed
+# slot order. Series take slots by identity, never by rank, so adding or
+# dropping a series never repaints the others.
+palette:
+  - "#2a78d6"   # slot 1, blue
+  - "#eb6834"   # slot 2, orange
+  - "#1baf7a"   # slot 3, aqua
+  - "#eda100"   # slot 4, yellow
+  - "#4a3aa7"   # slot 7, violet
+
+# Chart surface and ink. Text wears ink tokens, never a series colour.
+surface: "#fcfcfb"
+text_primary: "#0b0b0b"
+text_secondary: "#52514e"
+
+axes:
+  grid: true
+  grid_axis: y
+  grid_alpha: 0.3
+  spines: [left, bottom]
+  bar_width: 0.8
