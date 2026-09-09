@@ -178,7 +178,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
         # a weak result look like a strong one.
         ax2.set_ylim(0, 100)
         ax2.yaxis.set_major_formatter(PercentFormatter())
-        ax2.set_ylabel("First-try solves\nof tasks with a skill",
+        ax2.set_ylabel("First-try solve",
                        color=DETERMINISM_COLOR)
         ax2.tick_params(axis="y", colors=DETERMINISM_COLOR)
         for side in ("top", "left"):
