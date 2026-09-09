@@ -16,17 +16,25 @@ How many capabilities phronix built per task category, and how many came back.
 Categories are the upstream repositories the SWE-bench tasks come from --
 the closest thing the benchmark has to a task type.
 
-The three series are counted from two different run modes and must not be
-summed. A **fresh** run starts with an empty store, so everything in it was
+Each category carries two stacked bars. A stack is total capabilities, split
+by colour into skills and MCP tools. The hatch says which run mode the number
+comes from -- so colour and hatch each carry one variable, and neither is read
+off colour alone.
+
+The two stacks answer different questions and must not be summed. A **fresh** run starts with an empty store, so everything in it was
 built during that run; a **reuse** run reads what the fresh runs promoted.
 The reuse bar is what makes the other two worth anything: a reuse run creates
 almost nothing because the capability it needed already existed.
+
+Left stack, plain: what a fresh run BUILT.
 
 * `skills_created` -- new skill directories, from each task's own record.
 * `tools_created` -- MCP tool modules the run promoted, de-duplicated across
   the run. Counted from `promoted`, not from the store on disk, because a
   reuse run's store arrives pre-filled and the directory listing would credit
   it with tools it inherited.
+Right stack, hatched: what a reuse run LOADED.
+
 * `skills_reused` -- learned skills retrieved. The framework's own
   `phronix-*` skills are excluded: they load on every task by design, so
   counting them would report the harness working rather than the corpus

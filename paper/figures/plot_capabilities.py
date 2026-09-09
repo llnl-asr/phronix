@@ -20,17 +20,32 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
+from matplotlib.patches import Patch
 
 HERE = Path(__file__).parent
 
 # Fixed slot order: each series owns a colour by identity. Dropping a model
 # from the figure must not repaint the series that remain.
-SERIES = [
-    ("skills_created", "fresh", "Skills created"),
-    ("tools_created", "fresh", "MCP tools created"),
-    ("skills_reused", "reuse", "Skills reused"),
-    ("tools_reused", "reuse", "MCP tools reused"),
+# Two encodings, each carrying one variable, so neither is read off colour
+# alone: COLOUR says what kind of capability it is, HATCH says which run mode
+# produced the number. A stack is therefore total capabilities, and the pair
+# of stacks in a category compares building against reusing.
+KINDS = [
+    ("skills", "Skills"),
+    ("tools", "MCP tools"),
 ]
+MODES = [
+    ("fresh", "", "Fresh (created)"),
+    ("reuse", "//", "Reuse (reused)"),
+]
+# Which CSV column holds each (kind, mode) cell. A fresh run's number is what
+# it built; a reuse run's is what it loaded. Different questions, same unit.
+FIELD = {
+    ("skills", "fresh"): "skills_created",
+    ("tools", "fresh"): "tools_created",
+    ("skills", "reuse"): "skills_reused",
+    ("tools", "reuse"): "tools_reused",
+}
 
 
 def load_style(path: Path) -> dict:
@@ -95,14 +110,15 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     volume: dict[str, int] = defaultdict(int)
     for r in rows:
         if r["model"] in models:
-            volume[r["category"]] += sum(r[k] for k, _, _ in SERIES)
+            volume[r["category"]] += sum(r[f] for f in FIELD.values())
     cats = [c for c, v in sorted(volume.items(), key=lambda kv: -kv[1]) if v]
     if top_n:
         cats = cats[:top_n]
 
     lookup = {(r["model"], r["mode"], r["category"]): r for r in rows}
     colors = style["palette"]
-    width = style["axes"]["bar_width"] / len(SERIES)
+    # Two bars per category, so each gets half the group's width.
+    width = style["axes"]["bar_width"] / len(MODES)
 
     panels = [(m, [m]) for m in models] if per_model else [
         (" + ".join(models), models)]
@@ -112,15 +128,23 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     axes = axes[0]
 
     for ax, (_label, group) in zip(axes, panels):
-        for si, (field, mode, label) in enumerate(SERIES):
-            vals = [sum(lookup.get((m, mode, c), {}).get(field, 0) for m in group)
-                    for c in cats]
-            offs = [i - style["axes"]["bar_width"] / 2 + width * (si + 0.5)
+        for mi, (mode, hatch, _) in enumerate(MODES):
+            offs = [i - style["axes"]["bar_width"] / 2 + width * (mi + 0.5)
                     for i in range(len(cats))]
-            ax.bar(offs, vals, width=width, label=label, color=colors[si],
-                   # A 2px surface gap between adjacent fills keeps the group
-                   # legible where two bars are near-equal.
-                   edgecolor=style["surface"], linewidth=1.0, zorder=3)
+            bottom = [0.0] * len(cats)
+            for ki, (kind, _) in enumerate(KINDS):
+                field = FIELD[(kind, mode)]
+                vals = [sum(lookup.get((m, mode, c), {}).get(field, 0)
+                            for m in group) for c in cats]
+                ax.bar(offs, vals, width=width, bottom=bottom,
+                       color=colors[ki], hatch=hatch,
+                       # A hatched bar needs a visible edge to draw the hatch
+                       # in; an unhatched one uses the surface colour so the
+                       # stacked segments read as separated rather than fused.
+                       edgecolor=style["text_secondary"] if hatch
+                       else style["surface"],
+                       linewidth=1.0, zorder=3)
+                bottom = [b + v for b, v in zip(bottom, vals)]
 
         ax.set_xticks(range(len(cats)))
         ax.set_xticklabels([short(c) for c in cats], rotation=45,
@@ -134,20 +158,34 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
         for side in style["axes"]["spines"]:
             ax.spines[side].set_color(style["text_secondary"])
 
-    # Upright and broken over two lines: a rotated label costs the reader a
-    # head-tilt, and at 18pt "# Capabilities" on one line pushes the plot area
-    # off the left of a single-column canvas.
-    axes[0].set_ylabel("#\nCapabilities", rotation=0, ha="center",
-                       va="center", labelpad=38)
-    # Headroom for the legend, so it sits in empty space instead of on top of
-    # the tallest bars -- which is what it does on the small canvases, where
-    # there is no slack anywhere inside the plot area.
-    top = max((b.get_height() for ax in axes for b in ax.patches), default=1)
-    axes[0].set_ylim(0, top * 1.32)
-    # One legend for the figure: the series mean the same thing in every panel,
-    # and three copies of it would cost space the categories need.
-    axes[0].legend(frameon=False, loc="upper right",
-                   fontsize=plt.rcParams["legend.fontsize"] - (3 if size[0] < 6 else 0))
+    axes[0].set_ylabel("#\nCapabilities", rotation=0, ha="center", va="center")
+    # Placed in axes coordinates rather than with a fixed pad: the pad is
+    # measured from the axis, so a run whose counts need an extra digit walks
+    # the tick labels straight through the text.
+    axes[0].yaxis.set_label_coords(-0.30, 0.5)
+    # Headroom for the legends, so they sit in empty space rather than on top
+    # of the tallest stack.
+    top = max((sum(v) for v in [[b.get_height() for b in ax.patches]
+                                for ax in axes]), default=1)
+    tallest = max((b.get_y() + b.get_height() for ax in axes
+                   for b in ax.patches), default=1)
+    axes[0].set_ylim(0, tallest * 1.38)
+
+    # One legend per encoding. Collapsing them into four combined entries
+    # would imply four independent series and hide that colour and hatch are
+    # answering two different questions.
+    small = plt.rcParams["legend.fontsize"] - (3 if size[0] < 6 else 0)
+    kind_keys = [Patch(facecolor=style["palette"][i], edgecolor=style["surface"],
+                       label=label) for i, (_, label) in enumerate(KINDS)]
+    mode_keys = [Patch(facecolor=style["surface"], hatch=hatch,
+                       edgecolor=style["text_secondary"], label=label)
+                 for _, hatch, label in MODES]
+    first = axes[0].legend(handles=kind_keys, frameon=False, loc="upper right",
+                           fontsize=small)
+    axes[0].add_artist(first)
+    axes[0].legend(handles=mode_keys, frameon=False, loc="upper right",
+                   fontsize=small, handlelength=1.6,
+                   bbox_to_anchor=(1.0, 1.0 - 0.13 * len(kind_keys)))
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
