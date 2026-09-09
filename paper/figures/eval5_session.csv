@@ -1,0 +1,5 @@
+session,arm,model,human_turns,assistant_turns,calls_total,calls_failed,repeats,steps_begun,steps_ended,steps_failed,skills_written,tools_written,tokens_in,tokens_out,tokens_cache,tokens_total,cost_usd
+07eb18ac,phronix,gpt-5.4,2,27,15,0,0,0,0,0,0,0,1506557,17105,2054144,3577806,0
+f00ce7cc,phronix,gpt-5.4,0,97,55,6,5,0,0,0,0,0,2195353,99609,11433088,13728050,0
+20bbeecd,phronix,gpt-5.4,2,10,5,4,0,0,0,0,0,0,365298,3642,721920,1090860,0
+b10127a3,phronix,gpt-5.4,0,4,1,0,0,0,0,0,0,0,337419,540,18432,356391,0

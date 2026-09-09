@@ -179,3 +179,38 @@ would rank categories by how much reuse succeeded.
 Colour carries the outcome and texture the arm, so neither is read off colour
 alone. Green and red are the reserved status steps, because success and
 failure genuinely are a status, and both carry a written label.
+
+
+## Eval 5 -- `eval5_session`
+
+One agentic pipeline session, measured, against a bare control.
+
+    # phronix arm: the interactive session you ran (or a headless log)
+    python eval5_extract.py --latest 1
+    python eval5_extract.py \
+        --phronix ~/.claude/projects/<slug>/<uuid>.jsonl \
+        --bare    ~/.claude/projects/<slug>/<other>.jsonl
+
+Both transcript shapes work: interactive sessions under
+`~/.claude/projects/<slug>/`, and headless `--output-format stream-json` logs.
+They carry the same records; the interactive one adds the human turns, which
+is the point of measuring it.
+
+**`human_turns` counts what the person actually typed** -- detected by
+`origin.kind == "human"`. Every other `user` record is a tool result being fed
+back, and counting those reports hundreds of "interactions" for a run nobody
+touched.
+
+**`repeats` is the retry signal.** The pipeline keeps no retry counter, so a
+step that cannot get past itself is only visible as the same tool called with
+the same arguments again. A call repeated with DIFFERENT arguments is
+progress and is not counted.
+
+**A step begun and never ended counts as failed** -- a collapsing step does
+not report its own collapse.
+
+The bare arm is `scripts/pecan-bare.sh` in the dftracer-agents repo: same
+task, same model, same gateway, but run from a scratch directory so the
+project's `.claude/` -- agents, skills, hooks, both MCP servers -- is out of
+scope. Sharing the project directory would hand the "bare" arm the pipeline's
+skills and make the comparison meaningless.
