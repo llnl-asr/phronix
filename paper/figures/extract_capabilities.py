@@ -87,6 +87,54 @@ def tools_promoted(rows: list[dict]) -> dict[str, int]:
     return out
 
 
+CALL_RE = re.compile(r"mcp__phronix__([A-Za-z0-9_]+?)x(\d+)")
+
+
+def learned_tool_names(runs: list[Path]) -> set[str]:
+    """Module names of every tool the corpus built, across all runs.
+
+    A phronix MCP call is either a framework tool or one the system wrote for
+    itself, and only the second kind is evidence of a capability being reused.
+    Rather than maintain a list of framework tool names -- which would go stale
+    the moment a service gains a method -- the learned names are taken from the
+    tool modules the runs actually promoted.
+    """
+    names: set[str] = set()
+    for run in runs:
+        for store in ((run / ARM / "store" / ".phronix"),):
+            root = store / "capabilities" / "tools"
+            if root.is_dir():
+                names |= {t.stem for t in root.rglob("*.py")
+                          if not t.name.startswith("__")}
+    return names
+
+
+def tools_reused(run: Path, learned: set[str]) -> dict[str, int]:
+    """Calls to learned tools during a run, charged to the calling task."""
+    trace = run / ARM / "trace.jsonl"
+    out: dict[str, int] = defaultdict(int)
+    if not trace.is_file():
+        return out
+    for line in trace.read_text(errors="replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("kind") != "tools":
+            continue
+        task = rec.get("task") or ""
+        # The task is the ground truth for the category here, unlike a tool
+        # sitting in the store: we know who made the call.
+        cat = category_of(task)
+        for chunk in rec.get("detail", []):
+            if not isinstance(chunk, str) or chunk.startswith("REJECTED"):
+                continue
+            for name, count in CALL_RE.findall(chunk):
+                if name in learned:
+                    out[cat] += int(count)
+    return out
+
+
 def read_run(run: Path) -> tuple[dict, list[dict]] | None:
     report = run / "report.json"
     results = run / ARM / "results.jsonl"
@@ -98,6 +146,7 @@ def read_run(run: Path) -> tuple[dict, list[dict]] | None:
 
 
 def collect(runs: list[Path]) -> list[dict]:
+    learned = learned_tool_names(runs)
     table: dict[tuple[str, str, str], dict] = {}
 
     def cell(model: str, mode: str, cat: str) -> dict:
@@ -106,7 +155,8 @@ def collect(runs: list[Path]) -> list[dict]:
             table[key] = {
                 "model": model, "mode": mode, "category": cat,
                 "tasks": 0, "resolved": 0, "skills_created": 0,
-                "tools_created": 0, "skills_retrieved": 0, "skills_reused": 0,
+                "tools_created": 0, "skills_retrieved": 0,
+                "skills_reused": 0, "tools_reused": 0,
             }
         return table[key]
 
@@ -129,18 +179,26 @@ def collect(runs: list[Path]) -> list[dict]:
                 1 for s in r.get("skills_created", []) if s.startswith("skills/")
             )
             c["skills_retrieved"] += len(r.get("skills_retrieved", []))
-            # Reuse across sessions is the claim being tested. Within-run
-            # reuse is counted too but it is the easy case.
-            c["skills_reused"] += len(r.get("skills_reused", []))
+            # Reuse of a LEARNED skill is the claim being tested. The
+            # framework's own skills (`phronix-*`) are loaded on every task by
+            # design, so counting them would report the harness working rather
+            # than the corpus paying off.
+            c["skills_reused"] += sum(
+                1 for s in r.get("skills_retrieved", [])
+                if not s.split("/")[0].startswith("phronix-")
+            )
 
         for cat, n in tools_promoted(rows).items():
             cell(model, mode, cat)["tools_created"] += n
+        for cat, n in tools_reused(run, learned).items():
+            cell(model, mode, cat)["tools_reused"] += n
 
     return sorted(table.values(), key=lambda r: (r["model"], r["mode"], r["category"]))
 
 
 FIELDS = ["model", "mode", "category", "tasks", "resolved",
-          "skills_created", "tools_created", "skills_retrieved", "skills_reused"]
+          "skills_created", "tools_created", "skills_retrieved",
+          "skills_reused", "tools_reused"]
 
 
 def main() -> None:
@@ -168,7 +226,8 @@ def main() -> None:
                 print(f"  {model:16s} {mode:5s}  tasks={sum(r['tasks'] for r in sel):3d} "
                       f"skills={sum(r['skills_created'] for r in sel):3d} "
                       f"tools={sum(r['tools_created'] for r in sel):3d} "
-                      f"reused={sum(r['skills_reused'] for r in sel):3d}")
+                      f"skills_reused={sum(r['skills_reused'] for r in sel):3d} "
+                      f"tools_reused={sum(r['tools_reused'] for r in sel):3d}")
 
 
 if __name__ == "__main__":

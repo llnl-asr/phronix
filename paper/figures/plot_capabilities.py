@@ -28,7 +28,8 @@ HERE = Path(__file__).parent
 SERIES = [
     ("skills_created", "fresh", "Skills created"),
     ("tools_created", "fresh", "MCP tools created"),
-    ("skills_reused", "reuse", "Capabilities reused"),
+    ("skills_reused", "reuse", "Skills reused"),
+    ("tools_reused", "reuse", "MCP tools reused"),
 ]
 
 
@@ -103,8 +104,6 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     colors = style["palette"]
     width = style["axes"]["bar_width"] / len(SERIES)
 
-    # Pooling the models is a different claim from showing them side by side,
-    # so the panel title says which one the reader is looking at.
     panels = [(m, [m]) for m in models] if per_model else [
         (" + ".join(models), models)]
 
@@ -112,7 +111,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                              squeeze=False)
     axes = axes[0]
 
-    for ax, (title, group) in zip(axes, panels):
+    for ax, (_label, group) in zip(axes, panels):
         for si, (field, mode, label) in enumerate(SERIES):
             vals = [sum(lookup.get((m, mode, c), {}).get(field, 0) for m in group)
                     for c in cats]
@@ -123,8 +122,6 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                    # legible where two bars are near-equal.
                    edgecolor=style["surface"], linewidth=1.0, zorder=3)
 
-        ax.set_title(title if per_model else "all models",
-                     color=style["text_primary"], pad=8)
         ax.set_xticks(range(len(cats)))
         ax.set_xticklabels([short(c) for c in cats], rotation=45,
                            ha="right", rotation_mode="anchor")
@@ -137,7 +134,11 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
         for side in style["axes"]["spines"]:
             ax.spines[side].set_color(style["text_secondary"])
 
-    axes[0].set_ylabel("Capabilities")
+    # Upright and broken over two lines: a rotated label costs the reader a
+    # head-tilt, and at 18pt "# Capabilities" on one line pushes the plot area
+    # off the left of a single-column canvas.
+    axes[0].set_ylabel("#\nCapabilities", rotation=0, ha="center",
+                       va="center", labelpad=38)
     # Headroom for the legend, so it sits in empty space instead of on top of
     # the tallest bars -- which is what it does on the small canvases, where
     # there is no slack anywhere inside the plot area.
@@ -160,7 +161,7 @@ def main() -> None:
     ap.add_argument("--style", type=Path, default=HERE / "style.yaml")
     ap.add_argument("--models", nargs="*",
                     default=["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"])
-    ap.add_argument("--sizes", nargs="*", default=["wide"],
+    ap.add_argument("--sizes", nargs="*", default=["column"],
                     help="named sizes from style.yaml (wide, column, square)")
     ap.add_argument("--top-n", type=int, default=None,
                     help="keep only the N busiest categories (default: per size)")
@@ -178,7 +179,7 @@ def main() -> None:
 
     for name in args.sizes:
         size = tuple(style["dimensions"][name])
-        suffix = "" if name == "wide" else f"-{name}"
+        suffix = "" if name == "column" else f"-{name}"
         fit = FITS.get(name, {"top_n": None, "per_model": True})
         build(rows, present, size,
               args.out.with_name(args.out.name + suffix + ".pdf"), style,

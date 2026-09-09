@@ -3,7 +3,7 @@
 Regenerate everything from the runs:
 
     python extract_capabilities.py --runs <run-dir-name> ...   # -> .csv
-    python plot_capabilities.py --sizes wide column square     # -> .pdf
+    python plot_capabilities.py                                # -> .pdf
 
 `style.yaml` holds what every figure shares: the 18pt base font, the named
 canvas sizes (`wide` 18x4, `column` 8.5x4, `square` 4x4) and the validated
@@ -27,7 +27,17 @@ almost nothing because the capability it needed already existed.
   the run. Counted from `promoted`, not from the store on disk, because a
   reuse run's store arrives pre-filled and the directory listing would credit
   it with tools it inherited.
-* `skills_reused` -- capabilities loaded from earlier learning.
+* `skills_reused` -- learned skills retrieved. The framework's own
+  `phronix-*` skills are excluded: they load on every task by design, so
+  counting them would report the harness working rather than the corpus
+  paying off.
+* `tools_reused` -- calls to a learned MCP tool, from the trace, charged to
+  the task that made the call. A call counts as learned when its name matches
+  a tool module the corpus promoted, so the framework's own services never
+  need to be listed and cannot go stale.
+
+Fresh runs show zero tool reuse. That is the measurement, not a gap: a fresh
+run writes tool modules but does not call them again within the same run.
 
 Tools are filed by subject rather than by the task that wrote them, so a tool
 is charged to a category by the repo named in its filename, falling back to
