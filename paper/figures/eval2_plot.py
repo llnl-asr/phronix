@@ -23,13 +23,16 @@ import matplotlib.pyplot as plt
 import yaml
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
-from matplotlib.ticker import MaxNLocator
+import figtools
 
 HERE = Path(__file__).parent
 
 # Violet: a categorical slot neither stacked series uses, so the line never
 # impersonates a bar.
 TRACKING_COLOR = "#4a3aa7"
+
+# Major intervals on BOTH y axes; see figtools for why they must match.
+TICK_INTERVALS = 5
 
 KINDS = [
     ("skills_learned", "Skills"),
@@ -100,7 +103,6 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     ax.set_xlabel("Model")
     ax.set_ylabel("# Learned")
     ax.set_xlim(-0.6, len(models) - 0.4)
-    ax.set_ylim(0, max(bottom) * 1.12)
     ax.grid(axis=style["axes"]["grid_axis"], alpha=style["axes"]["grid_alpha"],
             zorder=0)
     ax.set_axisbelow(True)
@@ -117,8 +119,10 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     ax2.plot(list(x), tracked, color=TRACKING_COLOR, marker="o", markersize=9,
              linewidth=2, markeredgecolor=style["surface"], markeredgewidth=1.5,
              zorder=5, clip_on=False)
-    ax2.set_ylim(0, max(tracked) * 1.12)
-    ax2.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=5))
+    # Same number of majors as the left axis, so the two scales share one set
+    # of gridlines rather than interleaving at unrelated heights.
+    figtools.pair_axes(ax, ax2, max(bottom) * 1.12, max(tracked) * 1.12,
+                       intervals=TICK_INTERVALS)
     ax2.set_ylabel("# Entries tracked", color=TRACKING_COLOR)
     ax2.tick_params(axis="y", colors=TRACKING_COLOR)
     for side in ("top", "left"):

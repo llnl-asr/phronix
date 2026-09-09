@@ -9,6 +9,13 @@ Each evaluation is a `evalN_extract.py` (runs -> CSV) and a `evalN_plot.py`
     python eval2_extract.py --runs <run-dir-name> ...
     python eval2_plot.py
 
+`figtools.py` holds the axis rules every figure obeys: when a plot carries a
+second y-axis, both axes get the SAME number of major ticks, so the two
+scales share one set of horizontal rules instead of interleaving at unrelated
+heights -- a reader must never be able to mistake a left-axis gridline for a
+level on the right-hand scale. The left axis also carries minor ticks; the
+right does not, since doubling the marks along that spine adds no precision.
+
 `style.yaml` holds what every figure shares: the 18pt base font, the named
 canvas sizes (`wide` 18x4, `column` 8.5x4, `square` 4x4) and the validated
 categorical palette. Change it there, not in a script.

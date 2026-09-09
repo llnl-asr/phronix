@@ -21,7 +21,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
 from matplotlib.lines import Line2D
-from matplotlib.ticker import MultipleLocator, PercentFormatter
+from matplotlib.ticker import PercentFormatter
+
+import figtools
 from matplotlib.patches import Patch
 
 HERE = Path(__file__).parent
@@ -29,6 +31,10 @@ HERE = Path(__file__).parent
 # Violet: a categorical slot none of the stacked series uses, so the line
 # never impersonates a bar.
 DETERMINISM_COLOR = "#4a3aa7"
+
+# Major intervals on BOTH y axes. Equal counts mean the left and right scales
+# share one set of horizontal rules instead of interleaving two.
+TICK_INTERVALS = 5
 
 # Fixed slot order: each series owns a colour by identity. Dropping a model
 # from the figure must not repaint the series that remain.
@@ -175,8 +181,9 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                  markeredgecolor=style["surface"], markeredgewidth=1.5,
                  zorder=5, clip_on=False)
         # Fixed full-range scale: a rate auto-scaled to its own maximum makes
-        # a weak result look like a strong one.
-        ax2.set_ylim(0, 100)
+        # a weak result look like a strong one. Ticked in 20s so it carries
+        # the same number of majors as the left axis -- see figtools.
+        figtools.set_ticks(ax2, 100, TICK_INTERVALS, minor=0, step=20)
         ax2.yaxis.set_major_formatter(PercentFormatter())
         ax2.set_ylabel("First-try solve",
                        color=DETERMINISM_COLOR)
@@ -201,9 +208,9 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     # Headroom for the legends, so they sit in empty space rather than on top
     # of the tallest stack.
     # A fixed scale with round ticks, so the reader counts in 40s and two
-    # printings of this figure are comparable even if the data moves.
-    axes[0].set_ylim(0, 200)
-    axes[0].yaxis.set_major_locator(MultipleLocator(40))
+    # printings of this figure are comparable even if the data moves. Five
+    # intervals here and five on the percentage axis: one set of gridlines.
+    figtools.set_ticks(axes[0], 200, TICK_INTERVALS, step=40)
     tallest = max((b.get_y() + b.get_height() for ax in axes
                    for b in ax.patches), default=0)
     if tallest > 200:
