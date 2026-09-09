@@ -30,13 +30,13 @@ SCALE = 1_000  # plot thousands of tokens; raw counts need six digits per tick
 # Reserved status steps: good and critical. Success and failure are a status,
 # not two categories, and they always carry a written label.
 OUTCOME = [
-    ("solved_per_try", "#0ca30c", "Solved"),
-    ("failed_per_try", "#d03b3b", "Failed"),
+    ("solved_per_task", "#0ca30c", "Solved"),
+    ("failed_per_task", "#d03b3b", "Failed"),
 ]
 # Three arms, told apart by texture so the two status colours keep their one
 # job. Phronix-fresh is the plain one; the other two are marked.
 GROUPS = [
-    ("bare", "///", "Bare"),
+    ("bare", "///", "Bare (x5 est.)"),
     ("phronix-fresh", "", "Phronix, fresh"),
     ("phronix-reuse", "\\\\", "Phronix, reuse"),
 ]
@@ -67,7 +67,7 @@ def read_rows(path: Path) -> list[dict]:
         for k in ("tasks", "attempts", "tokens_total", "solved_tasks",
                   "failed_tasks"):
             r[k] = int(r[k])
-        for k in ("tokens_per_try", "solved_per_try", "failed_per_try"):
+        for k in ("tokens_per_task", "solved_per_task", "failed_per_task"):
             r[k] = float(r[k])
     return rows
 
@@ -79,9 +79,13 @@ def short(category: str) -> str:
 def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
           top_n: int | None = 6) -> None:
     # Rank categories by pooled attempt count, so the busiest work leads.
+    # Rank by the work the FRESH arms did: the reuse group is a filtered
+    # subset by design, so letting it vote would rank categories by how much
+    # reuse succeeded rather than by how much work they represent.
     weight: dict[str, int] = {}
     for r in rows:
-        weight[r["category"]] = weight.get(r["category"], 0) + r["attempts"]
+        if r["group"] != "phronix-reuse":
+            weight[r["category"]] = weight.get(r["category"], 0) + r["attempts"]
     cats = sorted(weight, key=lambda c: -weight[c])
     if top_n:
         cats = cats[:top_n]
@@ -110,7 +114,7 @@ def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
     ax.set_xticks(range(n))
     ax.set_xticklabels([short(c) for c in cats])
     ax.set_xlabel("Task category")
-    ax.set_ylabel("Tokens per attempt (K)")
+    ax.set_ylabel("Tokens per task (K)")
     ax.set_xlim(-0.6, n - 0.4)
     ax.grid(axis=style["axes"]["grid_axis"], alpha=style["axes"]["grid_alpha"],
             zorder=0)

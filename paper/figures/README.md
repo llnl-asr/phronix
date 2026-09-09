@@ -147,27 +147,35 @@ counted from the capability tree, not from `research/`.
 
 ## Eval 4 -- `eval4_tokens`
 
-Token cost of ONE attempt, three arms per category, each split by outcome.
+Token cost of a TASK, three arms per category, each split by outcome.
 
-* **Bare** -- every bare task. Bare has no memory, so its fresh and reuse runs
-  are the same experiment twice; pooling them halves the noise.
+* **Bare (x5 est.)** -- every bare task, scaled by `--extrapolate` (default 5).
 * **Phronix, fresh** -- every phronix task in a fresh run.
-* **Phronix, reuse** -- only the tasks a reuse run could actually reuse
-  something for: those its own model solved in the fresh run, confirmed to
-  have left a skill directory behind. A task nothing ever solved has no reuse
-  to measure. There is no bare equivalent; bare reuses nothing.
+* **Phronix, reuse** -- reuse applying what was successfully learnt: tasks
+  whose own model solved them in the fresh run (leaving a skill, confirmed on
+  disk) and which the reuse run then solved on its FIRST attempt. By
+  construction there are no failures here; a retry would mean the corpus had
+  not supplied the answer, which is a different thing to measure.
 
-**The two segments sum correctly.** Both are divided by the group's TOTAL
-attempts, so they stack to the group's overall tokens-per-attempt and each
-segment is that total's share. Stacking two separately-averaged means would
-add up to nothing.
+**Per task, and bare scaled.** Per ATTEMPT, bare looks cheap for a reason that
+flatters it: it takes exactly one attempt and stops, win or lose. Measured
+that way bare came out at 334K against reuse's 828K, which says only that
+phronix carries more context per turn. Against the retry budget the comparison
+actually assumes, the order reverses: 1.67M for bare, 797K for reuse. The x5
+is an assumption, not a measurement -- it is the figure's main soft spot, and
+it is recorded per row in `bare_multiplier`.
+
+**Watch the token unit.** 88-92% of these counts are prompt-cache reads, which
+are billed at a fraction of fresh input. Phronix carries a large skill context
+that is re-read every turn, so raw token totals overstate its cost relative to
+dollars. The CSV keeps the totals; a cost-based version would favour phronix
+further.
+
+The two segments sum correctly: both are divided by the group's TASK count, so
+they stack to its overall tokens-per-task. Categories are ranked by the work
+the fresh arms did -- the reuse group is a filtered subset, and letting it vote
+would rank categories by how much reuse succeeded.
 
 Colour carries the outcome and texture the arm, so neither is read off colour
 alone. Green and red are the reserved status steps, because success and
 failure genuinely are a status, and both carry a written label.
-
-Per attempt, not per task: phronix retries and bare does not, so a per-task
-total compares a budget against a single shot. Bare's `tries` is always 1, so
-its per-attempt figure is also its per-task figure; the five-attempt
-extrapolation lives in the CSV column `est_total_5` and does not change what
-the figure plots.

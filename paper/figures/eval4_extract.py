@@ -7,17 +7,25 @@ Three groups per category:
                      reuse runs are the same experiment run twice; they are
                      pooled, which halves the noise on a small sample.
 * `phronix-fresh` -- every phronix task in a fresh run.
-* `phronix-reuse` -- ONLY the tasks a reuse run could actually reuse
-                     something for: those its own model solved in the fresh
-                     run, and so left a skill behind. A task nothing ever
-                     solved has no reuse to measure, and including it would
-                     charge the reuse arm for work the corpus never covered.
-                     There is no bare equivalent -- bare reuses nothing.
+* `phronix-reuse` -- reuse applying what was successfully learnt: tasks whose
+                     own model solved them in the fresh run (leaving a skill),
+                     and which the reuse run then solved on its FIRST attempt.
+                     By construction this group has no failures -- it is the
+                     case where the corpus simply supplied the answer. A task
+                     nothing ever solved has no reuse to measure. There is no
+                     bare equivalent; bare reuses nothing.
+
+The measure is tokens per TASK, and bare is multiplied by `--extrapolate`.
+Per attempt, bare looks cheap for a reason that flatters it: it takes exactly
+one attempt and stops, whether or not it succeeded. The comparison the paper
+makes is against a bare agent given the same retry budget, so bare's single
+measured attempt is scaled to that budget. That assumption is the figure's
+main soft spot and is recorded in `bare_multiplier`.
 
 Each group's cost splits into a solved and a failed part that SUM correctly:
-both are divided by the group's total attempts, so the two stack to the
-group's overall tokens-per-attempt and each segment is that total's share.
-Stacking two separately-averaged means would not add up to anything.
+both are divided by the group's TASK count, so the two stack to the group's
+overall tokens-per-task and each segment is that total's share. Stacking two
+separately-averaged means would not add up to anything.
 """
 from __future__ import annotations
 
@@ -31,8 +39,8 @@ BENCH = Path("/p/lustre3/haridev/phronix-bench")
 PHRONIX, BARE = "claude-phronix", "claude-bare"
 
 FIELDS = ["group", "category", "tasks", "attempts", "tokens_total",
-          "tokens_per_try", "solved_tasks", "solved_per_try",
-          "failed_tasks", "failed_per_try", "est_total_5"]
+          "tokens_per_task", "solved_tasks", "solved_per_task",
+          "failed_tasks", "failed_per_task", "bare_multiplier"]
 
 
 def category_of(instance: str) -> str:
@@ -75,7 +83,11 @@ def collect(runs: list[Path], extrapolate: int) -> list[dict]:
                     eligible[model].add(r["instance_id"])
         else:
             for r in read(run, PHRONIX):
-                staged.append(("phronix-reuse", model, r))
+                # Reuse means the learnt solution was applied and worked
+                # immediately. A retry is the corpus not having supplied the
+                # answer, which is a different thing being measured.
+                if r.get("resolved") and r.get("tries") == 1:
+                    staged.append(("phronix-reuse", model, r))
 
     for group, model, r in staged:
         if group == "phronix-reuse" and r["instance_id"] not in eligible[model]:
@@ -93,18 +105,21 @@ def collect(runs: list[Path], extrapolate: int) -> list[dict]:
 
     rows = []
     for (group, cat), v in sorted(acc.items()):
-        att = v["attempts"] or 1
+        tasks = v["tasks"] or 1
+        # Bare ran one attempt per task and stopped; scale it to the retry
+        # budget the comparison assumes.
+        mult = extrapolate if group == "bare" else 1
         rows.append({
             "group": group, "category": cat, "tasks": v["tasks"],
-            "attempts": v["attempts"], "tokens_total": v["tokens_total"],
-            "tokens_per_try": round(v["tokens_total"] / att, 1),
+            "attempts": v["attempts"],
+            "tokens_total": v["tokens_total"] * mult,
+            "tokens_per_task": round(v["tokens_total"] / tasks * mult, 1),
             "solved_tasks": v["solved_tasks"],
             # Same denominator for both parts, so they stack to the total.
-            "solved_per_try": round(v["solved_tokens"] / att, 1),
+            "solved_per_task": round(v["solved_tokens"] / tasks * mult, 1),
             "failed_tasks": v["failed_tasks"],
-            "failed_per_try": round(v["failed_tokens"] / att, 1),
-            "est_total_5": round(v["tokens_total"] / att * extrapolate, 1)
-            if group == "bare" else "",
+            "failed_per_task": round(v["failed_tokens"] / tasks * mult, 1),
+            "bare_multiplier": mult if group == "bare" else "",
         })
     return rows
 
@@ -131,10 +146,10 @@ def main() -> None:
     for group in ("bare", "phronix-fresh", "phronix-reuse"):
         sel = [r for r in rows if r["group"] == group]
         att = sum(r["attempts"] for r in sel) or 1
-        print(f"  {group:14s} tasks={sum(r['tasks'] for r in sel):3d} "
-              f"attempts={att:3d} "
-              f"solved/try={sum(r['solved_per_try']*r['attempts'] for r in sel)/att:9,.0f} "
-              f"failed/try={sum(r['failed_per_try']*r['attempts'] for r in sel)/att:9,.0f}")
+        tasks = sum(r["tasks"] for r in sel) or 1
+        print(f"  {group:14s} tasks={tasks:3d} attempts={att:3d} "
+              f"solved/task={sum(r['solved_per_task']*r['tasks'] for r in sel)/tasks:10,.0f} "
+              f"failed/task={sum(r['failed_per_task']*r['tasks'] for r in sel)/tasks:10,.0f}")
 
 
 if __name__ == "__main__":
