@@ -21,7 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
 from matplotlib.lines import Line2D
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import PercentFormatter
 from matplotlib.patches import Patch
 
 HERE = Path(__file__).parent
@@ -152,21 +152,27 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                        linewidth=1.0, zorder=3)
                 bottom = [b + v for b, v in zip(bottom, vals)]
 
-        # Tasks solved on the first attempt in the REUSE run: the determinism
-        # claim. It lives on its own axis because it counts tasks, not
-        # capabilities -- the two curves are not comparable by height, and the
-        # right-hand scale is labelled so nobody reads them as one.
+        # Share of a category's tasks that the REUSE run solved on its first
+        # attempt: the determinism claim. As a RATE rather than a count, so
+        # categories with different numbers of tasks can be compared -- django
+        # contributes five tasks per model and astropy two, and the raw counts
+        # mostly measured that.
         ax2 = ax.twinx()
-        firsts = [sum(lookup.get((m, "reuse", c), {}).get("resolved_first_try", 0)
-                      for m in group) for c in cats]
+        firsts = []
+        for c in cats:
+            hit = sum(lookup.get((m, "reuse", c), {}).get("resolved_first_try", 0)
+                      for m in group)
+            n = sum(lookup.get((m, "reuse", c), {}).get("tasks", 0) for m in group)
+            firsts.append(100.0 * hit / n if n else 0.0)
         ax2.plot(range(len(cats)), firsts, color=DETERMINISM_COLOR,
                  marker="o", markersize=9, linewidth=2,
                  markeredgecolor=style["surface"], markeredgewidth=1.5,
                  zorder=5, clip_on=False)
-        ax2.set_ylim(0, max(firsts + [1]) * 1.38)
-        # Whole tasks only: a tick at 12.5 solved tasks is not a thing.
-        ax2.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=5))
-        ax2.set_ylabel("# solved on first try (reuse)",
+        # Fixed full-range scale: a rate auto-scaled to its own maximum makes
+        # a weak result look like a strong one.
+        ax2.set_ylim(0, 100)
+        ax2.yaxis.set_major_formatter(PercentFormatter())
+        ax2.set_ylabel("Solved on first try (reuse)",
                        color=DETERMINISM_COLOR)
         ax2.tick_params(axis="y", colors=DETERMINISM_COLOR)
         for side in ("top", "left"):
@@ -192,7 +198,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                                 for ax in axes]), default=1)
     tallest = max((b.get_y() + b.get_height() for ax in axes
                    for b in ax.patches), default=1)
-    axes[0].set_ylim(0, tallest * 1.38)
+    axes[0].set_ylim(0, tallest * 1.45)
 
     # One legend per encoding. Collapsing them into four combined entries
     # would imply four independent series and hide that colour and hatch are
@@ -202,7 +208,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                        label=label) for i, (_, label) in enumerate(KINDS)]
     line_key = [Line2D([0], [0], color=DETERMINISM_COLOR, marker="o",
                        markersize=9, linewidth=2,
-                       label="Solved first try (reuse)")]
+                       label="% solved first try (reuse)")]
     mode_keys = [Patch(facecolor=style["surface"], hatch=hatch,
                        edgecolor=style["text_secondary"], label=label)
                  for _, hatch, label in MODES]
@@ -217,12 +223,12 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     axes[0].add_artist(first)
     second = axes[0].legend(handles=mode_keys, frameon=False, loc="upper left",
                             fontsize=small, handlelength=1.6,
-                            bbox_to_anchor=(LEGEND_X, 1.0 - 0.13 * len(kind_keys)))
+                            bbox_to_anchor=(LEGEND_X, 1.0 - 0.105 * len(kind_keys)))
     axes[0].add_artist(second)
     axes[0].legend(handles=line_key, frameon=False, loc="upper left",
                    fontsize=small, handlelength=1.6,
                    bbox_to_anchor=(LEGEND_X,
-                                   1.0 - 0.13 * (len(kind_keys) + len(mode_keys))))
+                                   1.0 - 0.105 * (len(kind_keys) + len(mode_keys))))
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")

@@ -53,11 +53,17 @@ its directory; anything neither names lands in `general`.
 
 ### The right-hand axis
 
-`resolved_first_try` counts tasks a reuse run solved on its first attempt with
-no retry -- the determinism claim: the corpus told the run what to do rather
-than it searching for the answer again. Aggregated over the three models it
-roughly doubles from fresh to reuse (7->16 nano, 6->14 mini, 8->14 gpt-5.4).
+The line is the share of a category's tasks that the reuse run solved on its
+first attempt with no retry -- the determinism claim: the corpus told the run
+what to do rather than it searching for the answer again. Counted over the
+three models, first-try solves roughly double from fresh to reuse (7->16 nano,
+6->14 mini, 8->14 gpt-5.4) while total resolved barely moves.
 
-It sits on a second axis because it counts TASKS, not capabilities. The two
-scales are not comparable by height and the line is not a series in the
-stacks; read it only against the right-hand numbers.
+A rate, not a count, because the categories hold different numbers of tasks
+(five django per model against two astropy) and the raw counts largely
+measured that. The scale is pinned to 0-100% rather than fitted to the data,
+so a weak result cannot be auto-scaled into a strong-looking one.
+
+It sits on a second axis because it measures TASKS, not capabilities. The two
+scales are not comparable by height; read the line only against the
+right-hand numbers.
