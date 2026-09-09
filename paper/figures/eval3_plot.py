@@ -25,9 +25,10 @@ from matplotlib.patches import Patch
 import figtools
 
 HERE = Path(__file__).parent
-# Six intervals so the left axis can be ticked in whole attempts (0-6) --
-# an axis of attempts should not offer to read 4.5 of them.
-TICK_INTERVALS = 6
+# Whole attempts on the left axis -- an axis of attempts should not offer to
+# read 4.5 of them -- with enough intervals that the bars clear the top third,
+# which is where the legend sits.
+TICK_INTERVALS = 8
 
 # Attempt series (left axis). Colours are slots the research stack does not
 # use, so a cost bar can never be mistaken for a knowledge bar.
@@ -131,7 +132,7 @@ def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
 
     # Both axes get the same number of majors, so one set of horizontal rules
     # serves both scales.
-    figtools.pair_axes(ax, ax2, 0, max(bottom) * 1.12,
+    figtools.pair_axes(ax, ax2, 0, max(bottom) * 1.5,
                        intervals=TICK_INTERVALS, left_step=1)
 
     keys = [Patch(facecolor=c, hatch=h,
@@ -139,14 +140,13 @@ def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
                   label=lab) for _, c, h, lab in ATTEMPTS]
     keys += [Patch(facecolor=c, edgecolor=style["surface"], label=lab)
              for _, c, lab in RESEARCH]
-    # Five entries and four bars per category leave no interior gap worth the
-    # risk, so the key sits below the axes.
-    fig.legend(handles=keys, frameon=False, fontsize=plt.rcParams["legend.fontsize"],
-               handlelength=1.6, ncol=3, loc="upper center",
-               bbox_to_anchor=(0.5, 0.16))
+    # Inside, across the top: the headroom above keeps every bar clear of it.
+    ax.legend(handles=keys, frameon=False,
+              fontsize=plt.rcParams["legend.fontsize"], handlelength=1.6,
+              ncol=3, loc="upper left", bbox_to_anchor=(0.0, 1.0),
+              columnspacing=1.4)
 
     fig.tight_layout()
-    fig.subplots_adjust(bottom=0.40)
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out}  ({size[0]}x{size[1]} in, {n} categories)")
