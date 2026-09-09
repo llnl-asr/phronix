@@ -157,6 +157,7 @@ def collect(runs: list[Path]) -> list[dict]:
                 "tasks": 0, "resolved": 0, "skills_created": 0,
                 "tools_created": 0, "skills_retrieved": 0,
                 "skills_reused": 0, "tools_reused": 0,
+                "resolved_first_try": 0,
             }
         return table[key]
 
@@ -173,6 +174,12 @@ def collect(runs: list[Path]) -> list[dict]:
             c = cell(model, mode, cat)
             c["tasks"] += 1
             c["resolved"] += int(bool(r.get("resolved")))
+            # Solved on the first attempt, with no retry: the run went
+            # straight to a working patch. Against a reuse run this is the
+            # determinism claim -- the corpus told it what to do rather than
+            # it searching for the answer again.
+            c["resolved_first_try"] += int(
+                bool(r.get("resolved")) and r.get("tries") == 1)
             # `skills_created` mixes skill directories with the tool
             # directories a task wrote into; only the former are one-per-skill.
             c["skills_created"] += sum(
@@ -198,7 +205,7 @@ def collect(runs: list[Path]) -> list[dict]:
 
 FIELDS = ["model", "mode", "category", "tasks", "resolved",
           "skills_created", "tools_created", "skills_retrieved",
-          "skills_reused", "tools_reused"]
+          "skills_reused", "tools_reused", "resolved_first_try"]
 
 
 def main() -> None:

@@ -50,3 +50,14 @@ run writes tool modules but does not call them again within the same run.
 Tools are filed by subject rather than by the task that wrote them, so a tool
 is charged to a category by the repo named in its filename, falling back to
 its directory; anything neither names lands in `general`.
+
+### The right-hand axis
+
+`resolved_first_try` counts tasks a reuse run solved on its first attempt with
+no retry -- the determinism claim: the corpus told the run what to do rather
+than it searching for the answer again. Aggregated over the three models it
+roughly doubles from fresh to reuse (7->16 nano, 6->14 mini, 8->14 gpt-5.4).
+
+It sits on a second axis because it counts TASKS, not capabilities. The two
+scales are not comparable by height and the line is not a series in the
+stacks; read it only against the right-hand numbers.
