@@ -204,7 +204,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                                 for ax in axes]), default=1)
     tallest = max((b.get_y() + b.get_height() for ax in axes
                    for b in ax.patches), default=1)
-    axes[0].set_ylim(0, tallest * 1.12)
+    axes[0].set_ylim(0, tallest * 2.55)
 
     # One legend per encoding. Collapsing them into four combined entries
     # would imply four independent series and hide that colour and hatch are
@@ -217,19 +217,21 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     mode_keys = [Patch(facecolor=style["surface"], hatch=hatch,
                        edgecolor=style["text_secondary"], label=label)
                  for _, hatch, label in MODES]
-    # Below the axes, in one row-major block. Conditioning the rate on tasks
-    # that had a skill pushed the line up into the 70-100% band, which is
-    # exactly where an interior legend has to sit; outside, no future run's
-    # numbers can collide with it.
-    small = plt.rcParams["legend.fontsize"]
-    fig.legend(handles=kind_keys + mode_keys + line_key, frameon=False,
-               fontsize=small, handlelength=1.6, ncol=3,
-               loc="upper center", bbox_to_anchor=(0.5, 0.20))
+    # Inside, low and to the right: the rate line runs high once it is
+    # conditioned on tasks that had a skill, so the free band is underneath it
+    # rather than above the bars. Headroom on the left axis (below) shortens
+    # the stacks until that band is genuinely clear.
+    # The band between the bar tops and the line's lowest point is shallow,
+    # so the legend has to be small to sit in it. The line is deliberately NOT
+    # in the legend: the violet right-hand axis already names it, and a fifth
+    # entry is what pushed the block down onto the bars.
+    small = plt.rcParams["legend.fontsize"] - 4
+    axes[0].legend(handles=kind_keys + mode_keys, frameon=False,
+                   fontsize=small, handlelength=1.4, ncol=2,
+                   columnspacing=1.2, labelspacing=0.35, handletextpad=0.5,
+                   loc="upper left", bbox_to_anchor=(0.34, 0.275))
 
     fig.tight_layout()
-    # Room underneath for the legend block, which lives in figure coordinates
-    # and is not part of the axes layout.
-    fig.subplots_adjust(bottom=0.34)
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out}  ({size[0]}x{size[1]} in, {len(cats)} categories)")
