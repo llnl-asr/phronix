@@ -514,8 +514,94 @@ def listing() -> List[Dict[str, Any]]:
     return out
 
 
-def load_all(mcp: Any) -> Dict[str, Any]:
-    """Import every visible capability and register its tools on *mcp*.
+#: Above this many learned capabilities, they stop being registered as
+#: individual MCP tools and are reached through one dispatcher instead.
+#:
+#: Every registered tool's name, description and JSON schema is re-sent on
+#: EVERY request. At ~1,150 capabilities that came to 370 KB -- about 95k
+#: tokens, half a 200k window -- before the task prompt was even added, and
+#: the harness compacted, refilled, and compacted again until it gave up with
+#: "Autocompact is thrashing". Reuse runs, which inherit every earlier run's
+#: capabilities, degraded in exact step with the count: 203 tools cost 11% of
+#: attempts, 847 cost 98%. Learning more must not make the system worse at
+#: using what it learned.
+DISPATCH_THRESHOLD = 64
+
+
+class _ToolRecorder:
+    """Stands in for the MCP server while a capability registers itself.
+
+    Capabilities call ``@mcp.tool()``; handing them this instead captures the
+    function rather than publishing a schema. Anything else a capability
+    reaches for is delegated to the real server, so a module that does more
+    than declare tools still works.
+    """
+
+    def __init__(self, server: Any) -> None:
+        self._server = server
+        self.tools: Dict[str, Any] = {}
+
+    def tool(self, *args: Any, **kwargs: Any) -> Any:
+        def capture(fn: Any) -> Any:
+            self.tools[kwargs.get("name") or fn.__name__] = fn
+            return fn
+        # Supports both `@mcp.tool` and `@mcp.tool(name=...)`.
+        if args and callable(args[0]) and not kwargs:
+            return capture(args[0])
+        return capture
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._server, item)
+
+
+def _register_dispatcher(mcp: Any, tools: Dict[str, Any]) -> None:
+    """Publish ONE tool that can call any recorded capability."""
+
+    @mcp.tool()
+    def capability_call(name: str, arguments: Dict[str, Any] | None = None) -> Any:
+        """Run a learned capability by name.
+
+        `name` comes from capability_list or capability_search. `arguments` is
+        a mapping of that capability's parameters.
+        """
+        fn = tools.get(name)
+        if fn is None:
+            near = [n for n in tools if name in n][:8]
+            return {"error": f"no capability named {name!r}",
+                    "did_you_mean": near,
+                    "hint": "call capability_list or capability_search to find one"}
+        try:
+            return fn(**(arguments or {}))
+        except TypeError as exc:
+            # A wrong argument set is the common caller error; say what the
+            # capability actually takes rather than surfacing a raw TypeError.
+            import inspect
+            try:
+                sig = str(inspect.signature(fn))
+            except (TypeError, ValueError):
+                sig = "(unknown)"
+            return {"error": f"{type(exc).__name__}: {exc}",
+                    "expected": f"{name}{sig}"}
+
+    @mcp.tool()
+    def capability_search(query: str, limit: int = 20) -> Dict[str, Any]:
+        """Find learned capabilities whose name matches `query`.
+
+        The way to reach a capability when there are too many to list.
+        """
+        q = (query or "").lower().strip()
+        hits = [n for n in sorted(tools) if q in n.lower()]
+        return {"total": len(tools), "matched": len(hits),
+                "names": hits[:max(1, limit)]}
+
+
+def load_all(mcp: Any, threshold: int | None = None) -> Dict[str, Any]:
+    """Import every visible capability and make its tools reachable on *mcp*.
+
+    Up to *threshold* capabilities they are registered as ordinary MCP tools.
+    Past it they are reached through ``capability_call``, because the schema
+    for every registered tool is re-sent on every request and a large learned
+    store otherwise crowds out the task itself. See DISPATCH_THRESHOLD.
 
     One failing capability must not take the server down with it: a broken module
     is caught, reported with its traceback, and skipped, so the other tools still
@@ -525,6 +611,13 @@ def load_all(mcp: Any) -> Dict[str, Any]:
     """
     loaded: List[str] = []
     failed: List[Dict[str, str]] = []
+
+    limit = DISPATCH_THRESHOLD if threshold is None else threshold
+    # Decided BEFORE importing anything: the choice is about how many there
+    # are, and a capability must be registered the same way as its siblings.
+    dispatched = len(visible_files()) > limit
+    recorder = _ToolRecorder(mcp) if dispatched else None
+    target = recorder if dispatched else mcp
 
     # Capabilities live inside a project's committed `.phronix/` tree, so a normal
     # import drops a `__pycache__` there — untracked churn in a directory whose
@@ -544,7 +637,7 @@ def load_all(mcp: Any) -> Dict[str, Any]:
                 register = getattr(module, ENTRY_POINT, None)
                 if not callable(register):
                     raise AttributeError(f"no callable {ENTRY_POINT}(mcp)")
-                register(mcp)
+                register(target)
                 loaded.append(Path(filename).stem)
             except Exception as exc:
                 failed.append({
@@ -557,4 +650,9 @@ def load_all(mcp: Any) -> Dict[str, Any]:
     finally:
         sys.dont_write_bytecode = previous
 
-    return {"loaded": loaded, "failed": failed}
+    if recorder is not None:
+        _register_dispatcher(mcp, recorder.tools)
+
+    return {"loaded": loaded, "failed": failed,
+            "dispatched": dispatched,
+            "tools": len(recorder.tools) if recorder is not None else len(loaded)}
