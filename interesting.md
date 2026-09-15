@@ -422,39 +422,6 @@ TOTAL  10 task(s)     1 pass    9 fail    0 run    10% of finished      1.3M tok
 - skills written: **0**   attempts that loaded one: **10**
 - `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0831-211616 --once`
 
-### smoke10-reuse — `claude-0901-000018`  (5 task(s), 4 node(s))
-
-```
-TOTAL  10 task(s)     2 pass    8 fail    0 run    20% of finished      1.4M tok    $35.47   [###################!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-```
-
-- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0901-000018`
-- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke10-reuse-235746.log` (16/16 ready)
-- skills written: **348**   attempts that loaded one: **8**
-- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0901-000018 --once`
-
-### smoke11-reuse — `claude-0901-085709`  (5 task(s), 4 node(s))
-
-```
-TOTAL  10 task(s)     2 pass    8 fail    0 run    20% of finished      1.6M tok    $37.53   [###################!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-```
-
-- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0901-085709`
-- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke11-reuse-085438.log` (16/16 ready)
-- skills written: **348**   attempts that loaded one: **11**
-- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0901-085709 --once`
-
-### smoke15-reuse — `claude-0901-112401`  (5 task(s), 4 node(s))
-
-```
-TOTAL  10 task(s)     3 pass    7 fail    0 run    30% of finished      1.6M tok    $30.89   [#############################!!!!!!!!!!!!!!!!!!!!!!!!!!!
-```
-
-- run: `/p/lustre5/haridev/phronix-bench/runs/claude-0901-112401`
-- fleet: `/p/lustre5/haridev/llm-tuolumne/logs/deploy-smoke15-reuse-112130.log` (16/16 ready)
-- skills written: **348**   attempts that loaded one: **8**
-- `scripts/top.sh /p/lustre5/haridev/phronix-bench/runs/claude-0901-112401 --once`
-
 ### m20-gptoss120-fresh — `claude-0901-215052-1150614`  (20 task(s), 16 node(s))
 
 ```
@@ -510,3 +477,454 @@ claude-phronix 14 pass 16 fail 0 run 47% 4.4M tok $89.00 avg 22m17s/task
 - MCP server across transcripts: 71 connected, 15 failed. The failures are the
   6 task-arms counted as PIPELINE; a phronix arm whose server did not start is
   a plain agent, so those six are not comparable.
+
+### livai-gpt-5.4 — `claude-0908-120319-1558056`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4 (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    31 pass   29 fail    0 run    52% of finished      5.5M tok   $115.91   [##################################################!!!!!!
+claude-bare 10 pass 20 fail 0 run 33% 1.1M tok $19.64 avg 7m56s/task
+claude-phronix 21 pass 9 fail 0 run 70% 4.4M tok $96.27 avg 39m45s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0908-120319-1558056`
+- fleet: `(none)` (hosted)
+- skills written: **34**   attempts that loaded one: **37**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0908-120319-1558056 --once`
+
+### livai-gpt-5.5 — `claude-0908-212044-1256290`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    30 pass   30 fail    0 run    50% of finished      2.3M tok    $80.59   [#################################################!!!!!!!
+claude-bare 8 pass 22 fail 0 run 27% 615k tok $12.95 avg 5m58s/task
+claude-phronix 22 pass 8 fail 0 run 73% 1.7M tok $67.64 avg 40m43s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0908-212044-1256290`
+- fleet: `(none)` (hosted)
+- skills written: **71**   attempts that loaded one: **32**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0908-212044-1256290 --once`
+
+### livai-gpt-5.6-luna — `claude-0909-012043-3275458`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-luna (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    27 pass   33 fail    0 run    45% of finished      166k tok    $98.98   [############################################!!!!!!!!!!!!
+claude-bare 11 pass 19 fail 0 run 37% 46.6k tok $13.21 avg 3m54s/task
+claude-phronix 16 pass 14 fail 0 run 53% 119k tok $85.77 avg 29m16s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0909-012043-3275458`
+- fleet: `(none)` (hosted)
+- skills written: **35**   attempts that loaded one: **38**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0909-012043-3275458 --once`
+
+### livai-gpt-5.6-sol — `claude-0909-044553-3251827`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    46 pass   14 fail    0 run    77% of finished      169k tok    $64.91   [########################################################
+claude-bare 20 pass 10 fail 0 run 67% 59.3k tok $17.42 avg 6m06s/task
+claude-phronix 26 pass 4 fail 0 run 87% 110k tok $47.49 avg 20m17s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0909-044553-3251827`
+- fleet: `(none)` (hosted)
+- skills written: **61**   attempts that loaded one: **12**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0909-044553-3251827 --once`
+
+### livai-gpt-5.5-reuse3 — `claude-0909-105949-640638`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    37 pass   23 fail    0 run    62% of finished      2.1M tok    $43.65   [########################################################
+claude-bare 12 pass 18 fail 0 run 40% 688k tok $12.97 avg 6m14s/task
+claude-phronix 25 pass 5 fail 0 run 83% 1.4M tok $30.68 avg 18m46s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0909-105949-640638`
+- fleet: `(none)` (hosted)
+- skills written: **151**   attempts that loaded one: **41**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0909-105949-640638 --once`
+
+## The reported matrix
+
+<!-- model-matrix:start -->
+
+| Model | Iter | Mode | Run folder | Bare | Phronix | Status | Note |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `gpt-5.4` | -- | fresh | `claude-0908-120319-1558056` | 11/30 | 22/30 | done |  |
+| `gpt-5.4` | 1 | fresh | `claude-0909-182247-131224` | 5/30 | 18/30 | timeout | 1 timed out |
+| `gpt-5.4` | 1 | reuse | `claude-0909-231949-2043929` | 5/30 | 18/30 | timeout | 1 timed out |
+| `gpt-5.4` | 1 | reuse | `claude-0910-093114-2436945` | 8/30 | 27/30 | done |  |
+| `gpt-5.4` | 1 | reuse | `claude-0910-151930-1277697` | 0/30 | 0/30 | timeout | 30 timed out |
+| `gpt-5.4` | 1 | reuse | `claude-0910-181805-325691` | 0/30 | 0/30 | timeout | 30 timed out |
+| `gpt-5.4` | 2 | reuse | `claude-0909-233332-3035551` | 9/30 | 16/30 | timeout | 13 timed out |
+| `gpt-5.4` | 2 | reuse | `claude-0910-110500-870645` | 10/30 | 27/30 | done |  |
+| `gpt-5.4` | 2 | reuse | `claude-0910-162557-4012779` | 0/30 | 0/30 | timeout | 30 timed out |
+| `gpt-5.4` | 2 | reuse | `claude-0910-191133-671811` | 0/30 | -- | timeout | 21 timed out |
+| `gpt-5.4` | 3 | fresh | `claude-0910-132919-1166086` | 10/30 | 21/30 | timeout | 8 timed out |
+| `gpt-5.4` | 3 | fresh | `claude-0910-172616-1961981` | 0/30 | -- | stopped |  |
+| `gpt-5.5` | -- | fresh | `claude-0908-212044-1256290` | 9/30 | 23/30 | done |  |
+| `gpt-5.5` | -- | reuse | `claude-0909-092834-1618536` | 12/30 | 26/30 | timeout | 1 timed out |
+| `gpt-5.5` | -- | reuse | `claude-0909-105949-640638` | 12/30 | 26/30 | done |  |
+| `gpt-5.5` | 1 | fresh | `claude-0909-172255-3798808` | 10/30 | 22/30 | done |  |
+| `gpt-5.5` | 1 | fresh | `claude-0910-144431-3952093` | 0/30 | 0/30 | timeout | 30 timed out |
+| `gpt-5.5` | 1 | reuse | `claude-0909-231939-888128` | 4/30 | 25/30 | timeout | 2 timed out |
+| `gpt-5.5` | 1 | reuse | `claude-0910-181435-661926` | 0/30 | 0/30 | timeout | 30 timed out |
+| `gpt-5.5` | 2 | fresh | `claude-0910-155310-352154` | 0/30 | 0/30 | timeout | 30 timed out |
+| `gpt-5.5` | 2 | reuse | `claude-0910-001054-3736231` | 10/30 | 13/30 | timeout | 17 timed out |
+| `gpt-5.5` | 2 | reuse | `claude-0910-093040-3661779` | 4/30 | 27/30 | done |  |
+| `gpt-5.5` | 2 | reuse | `claude-0910-191207-2051825` | 0/30 | -- | timeout | 8 timed out |
+| `gpt-5.5` | 3 | fresh | `claude-0910-125509-248863` | 6/30 | 22/30 | timeout | 2 timed out |
+| `gpt-5.5` | 4 | reuse | `claude-0910-132903-261665` | 5/30 | 26/30 | timeout | 3 timed out |
+| `gpt-5.6-sol` | -- | fresh | `claude-0909-044553-3251827` | 20/30 | 27/30 | done |  |
+| `gpt-5.6-sol` | -- | fresh | `claude-0909-130234-1320366` | 18/30 | 25/30 | done |  |
+| `gpt-5.6-sol` | -- | reuse | `claude-0909-140710-1565500` | 19/30 | 27/30 | done |  |
+| `gpt-5.6-sol` | 1 | fresh | `claude-0909-155241-3703869` | 21/30 | 27/30 | done |  |
+| `gpt-5.6-sol` | 1 | fresh | `claude-0910-144432-4016350` | 0/30 | 0/30 | timeout | 30 timed out |
+| `gpt-5.6-sol` | 1 | reuse | `claude-0909-221630-3551411` | 13/30 | 27/30 | done |  |
+| `gpt-5.6-sol` | 1 | reuse | `claude-0910-093112-2250883` | 21/30 | 27/30 | done |  |
+| `gpt-5.6-sol` | 1 | reuse | `claude-0910-181436-3769438` | 0/30 | 0/30 | timeout | 30 timed out |
+| `gpt-5.6-sol` | 2 | reuse | `claude-0910-001041-2285370` | 22/30 | 21/30 | timeout | 8 timed out |
+| `gpt-5.6-sol` | 2 | reuse | `claude-0910-110450-3699565` | 21/30 | 27/30 | done |  |
+| `gpt-5.6-sol` | 2 | reuse | `claude-0910-191218-3209404` | 0/30 | -- | timeout | 9 timed out |
+| `gpt-5.6-sol` | 3 | fresh | `claude-0910-132956-4012643` | 21/30 | 25/30 | timeout | 7 timed out |
+| `gpt-5.6-sol` | 3 | reuse | `claude-0910-015226-2880830` | 22/30 | 26/30 | timeout | 1 timed out |
+| `gpt-5.6-sol` | 4 | reuse | `claude-0910-032851-1493617` | 20/30 | 4/30 | timeout | 26 timed out |
+
+Reuse runs started before the capability dispatcher landed (`547269e`, 2026-09-09 09:24) are omitted: until then every learned capability was its own MCP tool, so a reuse run saw ~1150 of them and a fresh run saw almost none. That handicapped one arm of each pair and not the other. Fresh runs from before it are kept -- their store was empty, so there was nothing to bloat the tool list with.
+
+<!-- model-matrix:end -->
+
+### m2-5.6-sol-reuse-1 — `claude-0909-221630-3551411`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL  25 task(s)    22 pass    3 fail    0 run    88% of finished     98.7k tok    $23.68   [########################################################
+claude-phronix 22 pass 3 fail 0 run 88% 98.7k tok $23.68 avg 10m50s/task 5 queued
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0909-221630-3551411`
+- fleet: `(none)` (hosted)
+- skills written: **240**   attempts that loaded one: **30**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0909-221630-3551411 --once`
+
+### m2-5.4-reuse-2 — `claude-0910-001008-3141358`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4 (livai-api.llnl.gov)`
+
+```
+TOTAL   0 task(s)     0 pass    0 fail    0 run      - of finished         0 tok         -   [........................................................
+
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-001008-3141358`
+- fleet: `(none)` (hosted)
+- skills written: **0**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-001008-3141358 --once`
+
+### m2-5.6-sol-reuse-2 — `claude-0910-001041-2285370`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL   0 task(s)     0 pass    0 fail    0 run      - of finished         0 tok         -   [........................................................
+
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-001041-2285370`
+- fleet: `(none)` (hosted)
+- skills written: **221**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-001041-2285370 --once`
+
+### m2-5.5-reuse-2 — `claude-0910-001054-3736231`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL   0 task(s)     0 pass    0 fail    0 run      - of finished         0 tok         -   [........................................................
+
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-001054-3736231`
+- fleet: `(none)` (hosted)
+- skills written: **48**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-001054-3736231 --once`
+
+### m2-5.6-sol-reuse-4 — `claude-0910-032851-1493617`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL   0 task(s)     0 pass    0 fail    0 run      - of finished         0 tok         -   [........................................................
+
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-032851-1493617`
+- fleet: `(none)` (hosted)
+- skills written: **71**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-032851-1493617 --once`
+
+### m3-5.5-reuse-1 — `claude-0910-085640-456792`  (30 task(s), 8 node(s))
+
+- model: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-085640-456`
+
+```
+TOTAL   0 task(s)     0 pass    0 fail    0 run      - of finished         0 tok         -   [........................................................
+
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-085640-456792`
+- fleet: `(none)` (hosted)
+- skills written: **0**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-085640-456792 --once`
+
+### m3-5.4-reuse-1 — `claude-0910-093114-2436945`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4 (livai-api.llnl.gov)`
+
+```
+TOTAL   7 task(s)     3 pass    4 fail    0 run    43% of finished      892k tok    $14.46   [##########################################!!!!!!!!!!!!!!
+claude-phronix 3 pass 4 fail 0 run 43% 892k tok $14.46 avg 20m44s/task 23 queued
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-093114-2436945`
+- fleet: `(none)` (hosted)
+- skills written: **240**   attempts that loaded one: **13**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-093114-2436945 --once`
+
+### m3-sol-reuse-1 — `claude-0910-093112-2250883`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL  11 task(s)     7 pass    4 fail    0 run    64% of finished     71.8k tok    $17.59   [########################################################
+claude-phronix 7 pass 4 fail 0 run 64% 71.8k tok $17.59 avg 15m34s/task 19 queued
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-093112-2250883`
+- fleet: `(none)` (hosted)
+- skills written: **240**   attempts that loaded one: **17**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-093112-2250883 --once`
+
+### m3-5.5-reuse-2 — `claude-0910-093040-3661779`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    30 pass   30 fail    0 run    50% of finished      1.7M tok    $34.17   [#################################################!!!!!!!
+claude-bare 4 pass 26 fail 0 run 13% 483k tok $7.00 avg 2m05s/task
+claude-phronix 26 pass 4 fail 0 run 87% 1.2M tok $27.17 avg 12m20s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-093040-3661779`
+- fleet: `(none)` (hosted)
+- skills written: **240**   attempts that loaded one: **36**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-093040-3661779 --once`
+
+### m3-5.4-reuse-2 — `claude-0910-110500-870645`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4 (livai-api.llnl.gov)`
+
+```
+TOTAL  47 task(s)    31 pass   16 fail    0 run    66% of finished      3.3M tok    $44.82   [########################################################
+claude-bare 5 pass 12 fail 0 run 29% 1.0M tok $12.12 avg 6m13s/task 13 queued
+claude-phronix 26 pass 4 fail 0 run 87% 2.3M tok $32.70 avg 14m54s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-110500-870645`
+- fleet: `(none)` (hosted)
+- skills written: **240**   attempts that loaded one: **40**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-110500-870645 --once`
+
+### m3-sol-reuse-2 — `claude-0910-110450-3699565`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)    47 pass   13 fail    0 run    78% of finished      190k tok    $47.88   [########################################################
+claude-bare 21 pass 9 fail 0 run 70% 88.7k tok $12.85 avg 4m00s/task
+claude-phronix 26 pass 4 fail 0 run 87% 101k tok $35.03 avg 13m36s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-110450-3699565`
+- fleet: `(none)` (hosted)
+- skills written: **240**   attempts that loaded one: **38**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-110450-3699565 --once`
+
+### m3-5.5-fresh-3 — `claude-0910-125509-248863`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL   2 task(s)     0 pass    0 fail    2 run      - of finished      1.5M tok         -   [........................................................
+claude-phronix 0 pass 0 fail 2 run - 1.5M tok - avg 0s/task 28 queued
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-125509-248863`
+- fleet: `(none)` (hosted)
+- skills written: **1**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-125509-248863 --once`
+
+### m3-5.4-fresh-3 — `claude-0910-132919-1166086`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4 (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)    20 pass    3 fail    7 run    87% of finished     12.6M tok    $45.16   [########################################################
+claude-phronix 20 pass 3 fail 7 run 87% 12.6M tok $45.16 avg 22m45s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-132919-1166086`
+- fleet: `(none)` (hosted)
+- skills written: **34**   attempts that loaded one: **25**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-132919-1166086 --once`
+
+### m3-sol-fresh-3 — `claude-0910-142831-38356`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL  60 task(s)     0 pass   30 fail   30 run     0% of finished         0 tok         -   [!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!.......
+claude-bare 0 pass 30 fail 0 run 0% 0 tok - avg 6m51s/task
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-142831-38356`
+- fleet: `(none)` (hosted)
+- skills written: **0**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-142831-38356 --once`
+
+### m4-sol-fresh-1 — `claude-0910-144432-4016350`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-144432-4016350`
+- fleet: `(none)` (hosted)
+- skills written: **0**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-144432-4016350 --once`
+
+### m4-5.5-fresh-1 — `claude-0910-144431-3952093`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-144431-3952093`
+- fleet: `(none)` (hosted)
+- skills written: **0**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-144431-3952093 --once`
+
+### m3-5.5-reuse-4 — `claude-0910-145849-507494`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-145849-507494`
+- fleet: `(none)` (hosted)
+- skills written: **298**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-145849-507494 --once`
+
+### m4-5.4-reuse-1 — `claude-0910-151930-1277697`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4 (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-151930-1277697`
+- fleet: `(none)` (hosted)
+- skills written: **298**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-151930-1277697 --once`
+
+### m4-5.5-fresh-2 — `claude-0910-155310-352154`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-155310-352154`
+- fleet: `(none)` (hosted)
+- skills written: **0**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-155310-352154 --once`
+
+### m4-5.4-reuse-2 — `claude-0910-162557-4012779`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4 (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-162557-4012779`
+- fleet: `(none)` (hosted)
+- skills written: **298**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-162557-4012779 --once`
+
+### m5-sol-reuse-1 — `claude-0910-181436-3769438`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.6-sol (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-181436-3769438`
+- fleet: `(none)` (hosted)
+- skills written: **298**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-181436-3769438 --once`
+
+### m5-5.5-reuse-1 — `claude-0910-181435-661926`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.5 (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-181435-661926`
+- fleet: `(none)` (hosted)
+- skills written: **298**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-181435-661926 --once`
+
+### m5-5.4-reuse-1 — `claude-0910-181805-325691`  (30 task(s), 8 node(s))
+
+- model: `svc-dldl-gpt-5.4 (livai-api.llnl.gov)`
+
+```
+TOTAL  30 task(s)     0 pass    0 fail   30 run      - of finished         0 tok         -   [........................................................
+claude-phronix 0 pass 0 fail 30 run - 0 tok - avg 0s/task
+```
+
+- run: `/p/lustre3/haridev/phronix-bench/runs/claude-0910-181805-325691`
+- fleet: `(none)` (hosted)
+- skills written: **298**   attempts that loaded one: **0**
+- `scripts/top.sh /p/lustre3/haridev/phronix-bench/runs/claude-0910-181805-325691 --once`

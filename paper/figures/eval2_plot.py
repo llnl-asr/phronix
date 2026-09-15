@@ -75,15 +75,32 @@ def read_rows(path: Path) -> list[dict]:
     return rows
 
 
+FIELDS_USED = ("skills_learned", "tools_learned", "entries_tracked", "topics")
+
+
+def summarise(rows: list[dict], models: list[str]) -> dict:
+    """model -> field -> total across every run and both modes.
+
+    A total, not a per-run average. This figure asks how much durable
+    knowledge a model produced and how much tracking it did to get there, and
+    both are cumulative: averaging answers "what does one run typically do"
+    and scales every bar by how many runs happen to be in hand, which measures
+    compute spent rather than the model.
+
+    Modes are summed because a model's fresh and reuse runs are one story told
+    in two halves -- learning is almost entirely the fresh half's doing, while
+    tracking happens in both.
+    """
+    out: dict[str, dict] = {}
+    for model in models:
+        mine = [r for r in rows if r["model"] == model]
+        out[model] = {f: sum(r[f] for r in mine) for f in FIELDS_USED}
+    return out
+
+
 def build(rows: list[dict], models: list[str], size: tuple[float, float],
           out: Path, style: dict) -> None:
-    # Sum the run modes: one bar per model, not one per run.
-    total: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for r in rows:
-        if r["model"] in models:
-            for field in ("skills_learned", "tools_learned", "entries_tracked",
-                          "topics"):
-                total[r["model"]][field] += r[field]
+    total = summarise(rows, models)
 
     colors = style["palette"]
     x = range(len(models))
@@ -121,7 +138,8 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
              zorder=5, clip_on=False)
     # Same number of majors as the left axis, so the two scales share one set
     # of gridlines rather than interleaving at unrelated heights.
-    figtools.pair_axes(ax, ax2, max(bottom) * 1.12, max(tracked) * 1.12,
+    head_left, head_right = max(bottom), max(tracked)
+    figtools.pair_axes(ax, ax2, head_left * 1.12, head_right * 1.12,
                        intervals=TICK_INTERVALS)
     ax2.set_ylabel("# Entries tracked", color=TRACKING_COLOR)
     ax2.tick_params(axis="y", colors=TRACKING_COLOR)
@@ -140,6 +158,7 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
                handlelength=1.6, ncol=3, loc="upper center",
                bbox_to_anchor=(0.5, 0.20))
 
+
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.34)
     fig.savefig(out, bbox_inches="tight")
@@ -151,8 +170,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--csv", type=Path, default=HERE / "eval2_tracking.csv")
     ap.add_argument("--style", type=Path, default=HERE / "style.yaml")
-    ap.add_argument("--models", nargs="*",
-                    default=["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"])
+    ap.add_argument("--models", nargs="*", default=figtools.MODELS,
+                    help="models along the x axis, in this order")
     ap.add_argument("--size", default="column",
                     help="named size from style.yaml")
     ap.add_argument("--out", type=Path, default=HERE / "eval2_tracking.pdf")

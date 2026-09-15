@@ -21,7 +21,7 @@
 # it. That distinction is why `phase` is recorded at retrieval time.
 set -uo pipefail
 
-BENCH=/p/lustre5/haridev/phronix-bench
+BENCH=/p/lustre3/haridev/phronix-bench
 RUN="${1:-$(ls -dt "$BENCH"/runs/*/ 2>/dev/null | head -1)}"
 RUN="${RUN%/}"
 
@@ -34,10 +34,36 @@ for arm in "$RUN"/*/; do
   echo "=== $(basename "$arm") ==="
   python3 - "$arm" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
 arm = Path(sys.argv[1])
+
+# Reclassify `learned` by name here rather than trusting the field in the log.
+#
+# The field is written at retrieval time by `_is_learned`, and every log from
+# before that function was fixed says `learned: []` on runs that were in fact
+# reusing a carried answer on nearly every task. Recomputing against the store
+# named by PHRONIX_CARRY makes an old log readable and a new one no worse: the
+# store is the same object the run retrieved from.
+_carry = os.environ.get("PHRONIX_CARRY", "")
+_classify = None
+if _carry:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
+    try:
+        os.chdir(str(Path(_carry).parent))
+        from phronix.skills import _is_learned
+        _classify = _is_learned
+    except Exception as exc:
+        print(f"  (name-based reclassification unavailable: {exc})")
+
+
+def learned_of(rec):
+    names = rec.get("skills") or []
+    if _classify is None:
+        return set(rec.get("learned") or [])
+    return {n for n in names if _classify(n)}
 rows = []
 learned_all, capability_all = set(), set()
 
@@ -59,7 +85,7 @@ for task_dir in sorted(arm.glob("tasks/*/")):
             # `learned` is recorded at retrieval time by layer, because a name
             # alone cannot say who wrote it: a learned skill about flask is
             # named for flask exactly like a shipped one would be.
-            mine = set(rec.get("learned") or [])
+            mine = learned_of(rec)
             learned.update(mine)
             if rec.get("phase") == "solve":
                 in_solve.update(mine)

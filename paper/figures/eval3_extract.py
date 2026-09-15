@@ -49,25 +49,40 @@ def category_of(text: str) -> str:
     return CROSS_CUTTING
 
 
-FIELDS = ["category", "bare_tasks", "bare_attempts_est",
+FIELDS = ["model", "mode", "run", "category", "bare_tasks", "bare_attempts_est",
           "solved_tasks", "solved_attempts_mean",
           "failed_tasks", "failed_attempts_mean",
           "research_topics", "research_tools"]
 
 
 def collect(runs: list[Path], bare_retries: int) -> list[dict]:
-    solved: dict[str, list[int]] = defaultdict(list)
-    failed: dict[str, list[int]] = defaultdict(list)
-    bare: dict[str, int] = defaultdict(int)
+    # Keyed by (model, run, category), not by category alone.
+    #
+    # Pooling the models produced ONE figure for a three-model sweep, so a
+    # category's bar was an average over models that differ by more than the
+    # thing being measured. Keeping the run as well is what makes repeats
+    # separable: five runs of one condition are five rows, and the figure can
+    # show a mean with its spread instead of a single number whose stability
+    # nobody can see.
+    solved: dict[tuple, list[int]] = defaultdict(list)
+    failed: dict[tuple, list[int]] = defaultdict(list)
+    bare: dict[tuple, int] = defaultdict(int)
     # Topics and tools are named things: a run that revisits a topic has not
-    # learnt a second one, so they are de-duplicated across the whole sweep
-    # rather than summed per run.
-    topics: dict[str, set[str]] = defaultdict(set)
-    tools: dict[str, set[str]] = defaultdict(set)
+    # learnt a second one, so they are de-duplicated WITHIN a run. Across runs
+    # they must not be, or a repeat would silently erase its own findings by
+    # having investigated the same subject as the run before it.
+    topics: dict[tuple, set[str]] = defaultdict(set)
+    tools: dict[tuple, set[str]] = defaultdict(set)
+    seen: set[tuple] = set()
 
     for run in runs:
         if not (run / "report.json").is_file():
             continue
+        manifest = json.loads((run / "report.json").read_text()).get("manifest", {})
+        model = manifest.get("model", "?").replace("svc-dldl-", "")
+        mode = "fresh" if manifest.get("fresh") else "reuse"
+        rid = run.name
+        seen.add((model, rid))
         for arm in (PHRONIX, BARE):
             results = run / arm / "results.jsonl"
             if not results.is_file():
@@ -77,19 +92,20 @@ def collect(runs: list[Path], bare_retries: int) -> list[dict]:
                     continue
                 r = json.loads(line)
                 cat = r.get("repo") or category_of(r["instance_id"])
+                key = (model, mode, rid, cat)
                 if arm == BARE:
-                    bare[cat] += 1
+                    bare[key] += 1
                 elif r.get("resolved"):
-                    solved[cat].append(r["tries"])
+                    solved[key].append(r["tries"])
                 else:
-                    failed[cat].append(r["tries"])
+                    failed[key].append(r["tries"])
 
         store = run / PHRONIX / "store" / ".phronix"
         topic_dir = store / "research" / "skills"
         if topic_dir.is_dir():
             for d in topic_dir.iterdir():
                 if d.is_dir():
-                    topics[category_of(d.name)].add(d.name)
+                    topics[(model, mode, rid, category_of(d.name))].add(d.name)
         # Research itself writes no tool modules -- it emits a plan and a
         # skill, and the capability builder turns those into tools. The MCP
         # half of the stack therefore comes from the capability tree.
@@ -104,21 +120,25 @@ def collect(runs: list[Path], bare_retries: int) -> list[dict]:
                         cat = category_of(stem)
                         if cat == CROSS_CUTTING:
                             cat = category_of(Path(p).parts[2])
-                        tools[cat].add(p)
+                        tools[(model, mode, rid, cat)].add(p)
 
     rows = []
     mean = lambda v: round(sum(v) / len(v), 3) if v else 0.0
-    for cat in sorted(set(solved) | set(failed) | set(bare)):
+    for key in sorted(set(solved) | set(failed) | set(bare)):
+        model, mode, rid, cat = key
         rows.append({
+            "model": model,
+            "mode": mode,
+            "run": rid,
             "category": cat,
-            "bare_tasks": bare[cat],
+            "bare_tasks": bare[key],
             "bare_attempts_est": bare_retries,
-            "solved_tasks": len(solved[cat]),
-            "solved_attempts_mean": mean(solved[cat]),
-            "failed_tasks": len(failed[cat]),
-            "failed_attempts_mean": mean(failed[cat]),
-            "research_topics": len(topics[cat]),
-            "research_tools": len(tools[cat]),
+            "solved_tasks": len(solved[key]),
+            "solved_attempts_mean": mean(solved[key]),
+            "failed_tasks": len(failed[key]),
+            "failed_attempts_mean": mean(failed[key]),
+            "research_topics": len(topics[key]),
+            "research_tools": len(tools[key]),
         })
     return rows
 

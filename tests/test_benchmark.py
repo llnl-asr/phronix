@@ -628,3 +628,271 @@ def test_baseline_cache_is_ignored_when_the_runner_changed(tmp_path, monkeypatch
                                          on_event=said.append)
     assert measured.get("ran") is None
     assert again["runner"] == runner_mod._runner_signature(instance)
+
+
+class TestRetrievalLogAttribution:
+    """Which task a retrieval is attributed to, with tasks running as threads.
+
+    One arm object serves every task in its arm and `--parallel-tasks 30` runs
+    thirty of them concurrently over it, so a plain attribute was last-writer-
+    wins. Observed on a real 30-task run: 3 of 30 task logs held any solve
+    record and one of them held 38 — one per task in the list, so a task
+    appeared to have read every other task's answer while solving. Every
+    per-task reuse figure came from those files.
+    """
+
+    def _arm(self):
+        from tests.benchmark.arms import Arm
+
+        return Arm()
+
+    def test_each_thread_keeps_its_own_log(self, tmp_path):
+        import threading
+
+        arm = self._arm()
+        seen, errors = {}, []
+
+        def run(index):
+            mine = tmp_path / f"task-{index}" / "retrievals.jsonl"
+            arm.retrieval_log = mine
+            # Let every other thread assign before anyone reads, which is what
+            # makes this fail against a plain attribute rather than pass by
+            # luck of scheduling.
+            barrier.wait(timeout=10)
+            try:
+                seen[index] = arm.retrieval_log
+            except Exception as exc:      # pragma: no cover - diagnostic
+                errors.append(exc)
+
+        count = 12
+        barrier = threading.Barrier(count)
+        threads = [threading.Thread(target=run, args=(i,)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+
+        assert not errors
+        assert len(seen) == count
+        for index, path in seen.items():
+            assert path == tmp_path / f"task-{index}" / "retrievals.jsonl"
+
+    def test_an_unbound_thread_has_no_log(self, tmp_path):
+        import threading
+
+        arm = self._arm()
+        arm.retrieval_log = tmp_path / "main.jsonl"
+        found = []
+
+        # A thread the task spawns inherits nothing, so it writes nowhere
+        # rather than into whichever task set the attribute last. Threads that
+        # should log — the tracker, the learner — bind explicitly.
+        thread = threading.Thread(target=lambda: found.append(arm.retrieval_log))
+        thread.start()
+        thread.join(timeout=10)
+        assert found == [None]
+
+    def test_a_spawned_thread_can_bind_its_own(self, tmp_path):
+        import threading
+
+        arm = self._arm()
+        target = tmp_path / "arm" / "retrievals.jsonl"
+        found = []
+
+        def run():
+            arm.bind_retrieval_log(target)
+            found.append(arm.retrieval_log)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        thread.join(timeout=10)
+        assert found == [target]
+
+
+class TestSharedCarryRootIsSafe:
+    """Concurrent promotion into ONE carry root must not corrupt the store.
+
+    The sweep runs several jobs at once against a single shared carry root,
+    and `promote_store` runs per TASK -- thirty tasks a run, several runs at a
+    time, all writing into one directory. Before publishes were atomic, a
+    `shutil.copy2` onto an existing path truncated it and streamed the bytes
+    in, so a reader could observe a half-written SKILL.md and a second writer
+    could interleave with the first.
+    """
+
+    def _carry(self, tmp_path, name, body):
+        store = tmp_path / f"store-{name}" / ".phronix"
+        skill = store / "capabilities" / "skills" / "some-task"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(body)
+        return store
+
+    def test_a_reader_never_sees_a_partial_file(self, tmp_path):
+        import threading
+
+        from tests.benchmark.isolation import promote_store, seed_store
+
+        carry = tmp_path / "carry" / ".phronix"
+        # Big enough that a non-atomic copy is observably mid-flight.
+        bodies = ["A" * 400_000, "B" * 400_000]
+        stores = [self._carry(tmp_path, str(i), b) for i, b in enumerate(bodies)]
+        promote_store(stores[0], carry)
+
+        stop = threading.Event()
+        seen: list[str] = []
+        errors: list[Exception] = []
+
+        def promoter():
+            try:
+                while not stop.is_set():
+                    for store in stores:
+                        promote_store(store, carry)
+            except Exception as exc:      # pragma: no cover - diagnostic
+                errors.append(exc)
+
+        def reader():
+            try:
+                while not stop.is_set():
+                    into = tmp_path / "reader" / ".phronix"
+                    got = seed_store(into, carry)
+                    del got
+                    f = into / "capabilities" / "skills" / "some-task" / "SKILL.md"
+                    if f.is_file():
+                        seen.append(f.read_text())
+            except Exception as exc:      # pragma: no cover - diagnostic
+                errors.append(exc)
+
+        threads = [threading.Thread(target=promoter), threading.Thread(target=reader)]
+        for t in threads:
+            t.start()
+        stop.wait(3.0)
+        stop.set()
+        for t in threads:
+            t.join(timeout=20)
+
+        assert not errors
+        assert seen, "the reader never managed to read the file"
+        # Every observation must be one of the two COMPLETE bodies. A torn
+        # read is a different length, or the two letters mixed in one file.
+        for body in seen:
+            assert body in bodies, (
+                f"partial or interleaved read: {len(body)} bytes, "
+                f"starts {body[:8]!r}, ends {body[-8:]!r}")
+
+    def test_in_flight_temporaries_are_never_seeded(self, tmp_path):
+        from tests.benchmark.isolation import _TMP_PREFIX, seed_store
+
+        carry = tmp_path / "carry" / ".phronix"
+        skills = carry / "capabilities" / "skills" / "some-task"
+        skills.mkdir(parents=True)
+        (skills / "SKILL.md").write_text("real")
+        (skills / f"{_TMP_PREFIX}123-abc-SKILL.md").write_text("half written")
+
+        got = seed_store(tmp_path / "into" / ".phronix", carry)
+        assert not any(_TMP_PREFIX in name for name in got["seeded"])
+        assert any(name.endswith("SKILL.md") for name in got["seeded"])
+
+
+class TestRescoreColouredOutput:
+    """Re-deriving a verdict from pytest output the parser could not read.
+
+    pytest colours its short summary when it believes it has a terminal, and
+    `_passed_node_ids` matched on a literal `PASSED ` prefix -- so a fully
+    green suite scored zero. Measured: 100 of 1,443 stored evaluations
+    recorded a target test as failing that their own output names as PASSED.
+    """
+
+    def _evaluation(self, coloured: bool) -> dict:
+        mark = "\x1b[32mPASSED\x1b[0m" if coloured else "PASSED"
+        name = "\x1b[1mtest_target\x1b[0m" if coloured else "test_target"
+        out = "\n".join([
+            f"{mark} pkg/tests/test_x.py::{name}",
+            f"{mark} pkg/tests/test_x.py::test_keep_a",
+            f"{mark} pkg/tests/test_x.py::test_keep_b",
+            "3 passed in 0.02s",
+        ])
+        return {
+            "resolved": False,
+            "fail_to_pass_passed": 0, "fail_to_pass_total": 1,
+            "pass_to_pass_passed": 0, "pass_to_pass_total": 2,
+            "fail_to_pass_failing": ["pkg/tests/test_x.py::test_target"],
+            "fail_to_pass_passing": [],
+            "regressions": [],
+            "pre_existing_failures": ["pkg/tests/test_x.py::test_keep_a",
+                                      "pkg/tests/test_x.py::test_keep_b"],
+            "output_tail": out,
+        }
+
+    def test_a_green_suite_is_rescored_as_resolved(self):
+        from scripts.rescore import verdict
+
+        got = verdict(self._evaluation(coloured=True))
+        assert got is not None
+        assert got["resolved"] is True
+        assert got["fail_to_pass_passed"] == 1
+        assert got["pass_to_pass_passed"] == 2
+        assert got["fail_to_pass_failing"] == []
+        # Nothing is left filed as pre-existing: those entries were put there
+        # by the broken parse, not by a genuinely broken test.
+        assert got["pre_existing_failures"] == []
+
+    def test_an_uncoloured_record_that_already_agrees_is_left_alone(self):
+        from scripts.rescore import verdict
+
+        clean = self._evaluation(coloured=False)
+        clean.update(resolved=True, fail_to_pass_passed=1, pass_to_pass_passed=2,
+                     fail_to_pass_failing=[], pre_existing_failures=[],
+                     fail_to_pass_passing=["pkg/tests/test_x.py::test_target"])
+        assert verdict(clean) is None
+
+    def test_a_genuinely_failing_target_stays_failed(self):
+        from scripts.rescore import verdict
+
+        bad = self._evaluation(coloured=True)
+        # The target is absent from the summary: it really did not pass.
+        bad["output_tail"] = "\n".join([
+            "\x1b[32mPASSED\x1b[0m pkg/tests/test_x.py::test_keep_a",
+            "\x1b[32mPASSED\x1b[0m pkg/tests/test_x.py::test_keep_b",
+            "\x1b[31mFAILED\x1b[0m pkg/tests/test_x.py::test_target",
+            "2 passed, 1 failed in 0.02s",
+        ])
+        got = verdict(bad)
+        assert got is not None                     # p2p did move
+        assert got["resolved"] is False
+        assert got["fail_to_pass_failing"] == ["pkg/tests/test_x.py::test_target"]
+
+    def test_no_passing_lines_at_all_is_not_touched(self):
+        from scripts.rescore import verdict
+
+        dead = self._evaluation(coloured=True)
+        dead["output_tail"] = "collection error: ImportError"
+        assert verdict(dead) is None
+
+
+class TestRescoreNeverDowngrades:
+    """The correction may only ever ADD passes, never remove them.
+
+    `output_tail` is capped at 2000 characters and observed starting mid-word,
+    so a target test whose PASSED line scrolled off the top is simply not
+    visible. Read naively that looks identical to a failure -- and a first cut
+    of the rescorer duly turned a resolved pylint record into `1/1 -> 0/1`
+    against a truncated buffer.
+    """
+
+    def test_a_recorded_pass_survives_a_truncated_tail(self):
+        from scripts.rescore import verdict
+
+        target = "tests/test_self.py::test_target"
+        record = {
+            "resolved": True,
+            "fail_to_pass_passed": 1, "fail_to_pass_total": 1,
+            "pass_to_pass_passed": 3, "pass_to_pass_total": 3,
+            "fail_to_pass_failing": [],
+            "fail_to_pass_passing": [target],
+            "regressions": [], "pre_existing_failures": [],
+            # The tail kept some other test's lines and lost the target's.
+            "output_tail": "PASSED tests/test_self.py::test_other\n3 passed\n",
+        }
+        got = verdict(record)
+        assert got is None or (got["resolved"] and got["fail_to_pass_passed"] == 1), (
+            "a recorded pass must never be revoked because the tail truncated it")

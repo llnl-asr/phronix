@@ -1,0 +1,23 @@
+arm,stage,check,outcome,evidence
+phronix,setup,correct toolchain and MPI used,pass,"kept the site default intel-classic mpicc; binary links mvapich2-2.3.7-intel-classic-2021.6.0/libmpi.so.12, the stack the loaded modules provide"
+phronix,setup,isolated per-run environment,pass,"workspaces/ior/20260911_043848/venv, created per session"
+phronix,setup,DFTracer installed from specified GitLab develop,repaired,"install failed on a private GitHub default; the TOOL's default was repointed to LC GitLab over SSH and the fix persists for later runs; 7 retries, 4 tool-source repairs"
+phronix,annotate,I/O-relevant functions annotated,pass,"29/35 C files, 418 DFTRACER_C_FUNCTION_START regions, covering ior.c, utilities.c and the aiori backends"
+phronix,annotate,entry points carry INIT/FINI,repaired,"validator returned CONDITIONAL FAIL on ordering in main(); fixed and re-verified. INIT/FINI present in ior.c, mdtest-main.c and md-workbench-main.c"
+phronix,annotate,annotated sources compile,repaired,"clang_syntax_check 53 passed / 20 failed across iterations, converged to all-pass before the build"
+phronix,annotate,independent validation performed,pass,validate_annotations x5 plus a separate validator subagent that reviewed the diff and rejected it once
+phronix,build,annotated build succeeds with macros,repaired,session_build_annotated x13 with 7 repairs to the BUILD TOOL itself (autoreconf -I config); application sources left alone
+phronix,build,instrumentation linked and verified,pass,"libdftracer_core.so.4.2.1 confirmed present in the annotated binary, checked rather than assumed"
+phronix,smoke,binary runs to completion,pass,"rc=0, IOR POSIX 4 MiB, write 298.95 MiB/s read 273.46 MiB/s"
+bare,setup,correct toolchain and MPI used,fail,"module load gcc/11.2.1 repointed mpicc at a DIFFERENT MPI: binary links mvapich2-2.3.7-gcc-11.2.1/libmpi.so.12, not the intel-classic stack the session had loaded, then ran it under flux"
+bare,setup,isolated per-run environment,pass,venv/ created under the run's own work directory
+bare,setup,DFTracer installed from specified GitLab develop,workaround,"installed from the given URL, but only after swapping the compiler to dodge a std::filesystem link error rather than passing -lstdc++fs"
+bare,annotate,I/O-relevant functions annotated,fail,"2/35 C files, 9 regions: ior.c and aiori-POSIX.c only. utilities.c, the other aiori backends and every other entry point are unannotated"
+bare,annotate,entry points carry INIT/FINI,fail,"INIT/FINI in ior.c only; mdtest-main.c and md-workbench-main.c were never annotated, so those entry points emit nothing"
+bare,annotate,annotated sources compile,pass,built without a syntax-repair cycle
+bare,annotate,independent validation performed,fail,no validation or lint step of any kind; correctness was inferred from the build succeeding
+bare,build,annotated build succeeds with macros,workaround,"edited the APPLICATION's configure.ac, dropping AC_PREREQ 2.71 to 2.69 to fit the available autoconf; built out-of-tree first and had to redo it in-tree"
+bare,build,instrumentation linked and verified,pass,checked the binary links libdftracer_core.so and references the C API symbols
+bare,smoke,binary runs to completion,pass,smoke test exited 0 under flux run -n 2
+phronix,smoke,ran on the session MPI stack,pass,"binary links mvapich2-2.3.7-intel-classic-2021.6.0, the stack the loaded modules provide, and was launched with flux"
+bare,smoke,ran on the session MPI stack,fail,binary links mvapich2-2.3.7-gcc-11.2.1 -- a different MPI build from the one the session had loaded -- and was launched under flux regardless

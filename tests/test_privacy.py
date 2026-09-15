@@ -141,3 +141,39 @@ class TestFixtureExemption:
         assert privacy.exemption_reason(text)
         # Exempt from BLOCKING, not from detection: the identifiers are still found.
         assert privacy.find_identifiers(text)
+
+
+class TestRedactionSwitch:
+    """Redaction is for publication, not for the local store.
+
+    Rewriting `/p/lustre3/<user>/...` to `$SCRATCH_ROOT` is right when
+    knowledge leaves the machine and wrong when a skill is recording a path an
+    agent will later act on: the instruction "read the task history at
+    `$SCRATCH_ROOT/...`" cannot resolve, and an agent handed one created a
+    directory of that literal name and mirrored an old run into it. 61 carried
+    files held such paths; the run where all 30 tasks inherited one scored
+    0/30 on both arms.
+    """
+
+    PATH = "Read /p/lustre3/haridev/phronix-bench/runs/x/tracker.md first"
+
+    def test_on_by_default(self, monkeypatch):
+        from phronix.privacy import anonymize
+
+        monkeypatch.delenv("PHRONIX_PRIVACY", raising=False)
+        assert "$SCRATCH_ROOT" in anonymize(self.PATH)
+
+    def test_off_records_the_text_exactly(self, monkeypatch):
+        from phronix.privacy import anonymize
+
+        monkeypatch.setenv("PHRONIX_PRIVACY", "off")
+        assert anonymize(self.PATH) == self.PATH
+
+    def test_the_upstream_gate_ignores_the_switch(self, monkeypatch):
+        """`contribute` is publication and must never be weakened by it."""
+        from phronix.privacy import find_identifiers
+
+        monkeypatch.setenv("PHRONIX_PRIVACY", "off")
+        # Still reports what it WOULD rewrite, so promotion still blocks.
+        assert find_identifiers(self.PATH), (
+            "privacy=off must not blind the check that guards publication")

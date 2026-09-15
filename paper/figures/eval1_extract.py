@@ -109,8 +109,27 @@ def learned_tool_names(runs: list[Path]) -> set[str]:
     return names
 
 
+#: The dispatcher every learned capability is reached through since the tool
+#: surface was collapsed (`547269e`). Before that a learned tool appeared in
+#: the trace under its own name; after it, the name is an ARGUMENT and the
+#: MCP call is always this one.
+DISPATCH = "capability_call"
+
+
 def tools_reused(run: Path, learned: set[str]) -> dict[str, int]:
-    """Calls to learned tools during a run, charged to the calling task."""
+    """Calls to learned tools during a run, charged to the calling task.
+
+    Two call shapes, because the framework changed underneath this metric.
+
+    A run from before the capability tool surface was collapsed into a
+    dispatcher calls `mcp__phronix__apply_flask_4992_binary_config_fix`
+    directly, and the name matches a promoted module. A run from after it
+    calls `mcp__phronix__capability_call` and passes the name as an argument,
+    so NO learned name ever appears as an MCP tool name -- and this function,
+    matching on names alone, returned zero for every such run while the trace
+    plainly showed the capabilities being used. Counting only the first shape
+    would report the dispatcher change as a collapse in reuse.
+    """
     trace = run / ARM / "trace.jsonl"
     out: dict[str, int] = defaultdict(int)
     if not trace.is_file():
@@ -130,7 +149,7 @@ def tools_reused(run: Path, learned: set[str]) -> dict[str, int]:
             if not isinstance(chunk, str) or chunk.startswith("REJECTED"):
                 continue
             for name, count in CALL_RE.findall(chunk):
-                if name in learned:
+                if name in learned or name == DISPATCH:
                     out[cat] += int(count)
     return out
 
@@ -147,13 +166,16 @@ def read_run(run: Path) -> tuple[dict, list[dict]] | None:
 
 def collect(runs: list[Path]) -> list[dict]:
     learned = learned_tool_names(runs)
-    table: dict[tuple[str, str, str], dict] = {}
+    table: dict[tuple[str, str, str, str], dict] = {}
 
-    def cell(model: str, mode: str, cat: str) -> dict:
-        key = (model, mode, cat)
+    # Keyed by RUN as well as model and mode, so repeats of one condition stay
+    # separate rows. Summed, five runs look like one large run and the figure
+    # can no longer say how stable any of it is.
+    def cell(model: str, mode: str, rid: str, cat: str) -> dict:
+        key = (model, mode, rid, cat)
         if key not in table:
             table[key] = {
-                "model": model, "mode": mode, "category": cat,
+                "model": model, "mode": mode, "run": rid, "category": cat,
                 "tasks": 0, "resolved": 0, "skills_created": 0,
                 "tools_created": 0, "skills_retrieved": 0,
                 "skills_reused": 0, "tools_reused": 0,
@@ -171,10 +193,11 @@ def collect(runs: list[Path]) -> list[dict]:
         manifest, rows = got
         model = manifest.get("model", "?").replace("svc-dldl-", "")
         mode = "fresh" if manifest.get("fresh") else "reuse"
+        rid = run.name
 
         for r in rows:
             cat = r.get("repo") or category_of(r["instance_id"])
-            c = cell(model, mode, cat)
+            c = cell(model, mode, rid, cat)
             c["tasks"] += 1
             c["resolved"] += int(bool(r.get("resolved")))
             # Solved on the first attempt, with no retry: the run went
@@ -199,12 +222,13 @@ def collect(runs: list[Path]) -> list[dict]:
             )
 
         for cat, n in tools_promoted(rows).items():
-            cell(model, mode, cat)["tools_created"] += n
+            cell(model, mode, rid, cat)["tools_created"] += n
         for cat, n in tools_reused(run, learned).items():
-            cell(model, mode, cat)["tools_reused"] += n
+            cell(model, mode, rid, cat)["tools_reused"] += n
 
     pair_up(runs, table)
-    return sorted(table.values(), key=lambda r: (r["model"], r["mode"], r["category"]))
+    return sorted(table.values(),
+                  key=lambda r: (r["model"], r["mode"], r["run"], r["category"]))
 
 
 def pair_up(runs: list[Path], table: dict) -> None:
@@ -218,7 +242,15 @@ def pair_up(runs: list[Path], table: dict) -> None:
     assumed -- and the numerator is how many of those the reuse run then
     solved on its first attempt.
     """
-    by_model: dict[str, dict[str, dict]] = defaultdict(dict)
+    # What every FRESH run of a model solved and left a skill for, pooled.
+    #
+    # Pooled rather than paired run-to-run: with repeats there is no natural
+    # pairing between fresh repeat 3 and reuse repeat 3, and inventing one
+    # would make eligibility depend on submission order. A task is eligible if
+    # some fresh run of that model actually left a working skill for it, which
+    # is the condition the rate is asking about.
+    solved_with_skill: dict[str, dict[str, str]] = defaultdict(dict)
+    reuse_runs: list[tuple[str, str, dict]] = []
     for run in runs:
         got = read_run(run)
         if got is None:
@@ -228,7 +260,7 @@ def pair_up(runs: list[Path], table: dict) -> None:
         mode = "fresh" if manifest.get("fresh") else "reuse"
         skills_dir = run / ARM / "store" / ".phronix" / "capabilities" / "skills"
         have = {d.name for d in skills_dir.iterdir()} if skills_dir.is_dir() else set()
-        by_model[model][mode] = {
+        seen = {
             r["instance_id"]: {
                 "repo": r.get("repo") or category_of(r["instance_id"]),
                 "resolved": bool(r.get("resolved")),
@@ -238,25 +270,27 @@ def pair_up(runs: list[Path], table: dict) -> None:
             }
             for r in rows
         }
+        if mode == "fresh":
+            for task, f in seen.items():
+                if f["resolved"] and f["skill"]:
+                    solved_with_skill[model][task] = f["repo"]
+        else:
+            reuse_runs.append((model, run.name, seen))
 
-    for model, modes in by_model.items():
-        fresh, reuse = modes.get("fresh"), modes.get("reuse")
-        if not fresh or not reuse:
-            continue
-        for task, f in fresh.items():
-            if not (f["resolved"] and f["skill"]):
-                continue
-            u = reuse.get(task)
+    # Charged to the reuse RUN that did it, so the rate has a spread too.
+    for model, rid, seen in reuse_runs:
+        for task, repo in solved_with_skill.get(model, {}).items():
+            u = seen.get(task)
             if u is None:
                 continue
-            key = (model, "reuse", f["repo"])
+            key = (model, "reuse", rid, repo)
             if key not in table:
                 continue
             table[key]["eligible"] += 1
             table[key]["first_try_eligible"] += int(u["resolved"] and u["tries"] == 1)
 
 
-FIELDS = ["model", "mode", "category", "tasks", "resolved",
+FIELDS = ["model", "mode", "run", "category", "tasks", "resolved",
           "skills_created", "tools_created", "skills_retrieved",
           "skills_reused", "tools_reused", "resolved_first_try",
           "eligible", "first_try_eligible"]

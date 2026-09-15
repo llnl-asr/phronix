@@ -2029,9 +2029,41 @@ class Arm:
         #: cannot pin and every turn pays full prefill.
         self.pinned_models: List[str] = []
         self.timeout_s = timeout_s
-        #: Set per task by the runner. One arm object per arm, so this stays
-        #: correct with arms running concurrently.
-        self.retrieval_log: Optional[Path] = None
+        #: Set per task by the runner, and read per THREAD.
+        #:
+        #: One arm object serves every task in its arm, and tasks run
+        #: concurrently as threads over that one object. A plain attribute was
+        #: therefore last-writer-wins: with `--parallel-tasks 30`, whichever
+        #: task most recently entered the runner owned the path, and all thirty
+        #: tasks' retrievals were written into that one task's file. Measured on
+        #: a 30-task run, 3 of 30 task logs held any solve record at all and one
+        #: of them held 38 — one per task in the list. Every per-task reuse
+        #: figure computed from those files was fiction.
+        #:
+        #: Thread-local because the thread IS the task here. A thread the task
+        #: spawns does not inherit it, which is why the tracker binds its own
+        #: (same task, so the same file) and the learner binds the arm's (not
+        #: any task's work, so not any task's file).
+        self._retrieval_log = threading.local()
+
+    @property
+    def retrieval_log(self) -> Optional[Path]:
+        """This thread's retrieval log, or None if it has not been bound."""
+        return getattr(self._retrieval_log, "path", None)
+
+    @retrieval_log.setter
+    def retrieval_log(self, path: Optional[Path]) -> None:
+        self._retrieval_log.path = path
+
+    def bind_retrieval_log(self, path: Optional[Path]) -> None:
+        """Adopt *path* for the calling thread.
+
+        For threads the task spawns. `threading.local` deliberately does not
+        inherit, so a tracker or learner thread starts with nothing bound and
+        would otherwise write its retrievals nowhere. Each binds the file its
+        own work belongs to, which is the whole point of the split.
+        """
+        self.retrieval_log = path
 
     #: A plan is incomplete without something to measure and something to
     #: measure it on.
@@ -2402,6 +2434,9 @@ class Arm:
                 return
 
             def cycle() -> None:
+                # Same task, so the same file — but a new thread, which
+                # inherits no thread-local and would otherwise log nowhere.
+                self.bind_retrieval_log(Path(task_dir) / "retrievals.jsonl")
                 while not state.stop.is_set():
                     state.stop.wait(self.TRACK_CYCLE_S)
                     self._fold_events(instance, store_root, task_dir, state,
@@ -3872,6 +3907,17 @@ still wrong.
         # agent, which is the most misleading state this benchmark has.
         env.setdefault("MCP_TIMEOUT", "120000")
         env.setdefault("MCP_TOOL_TIMEOUT", "120000")
+        # The benchmark writes to a local store, not to anywhere published, so
+        # redaction buys nothing here and costs correctness: a skill that
+        # records `read the history at /p/lustre3/<user>/...` has that path
+        # rewritten to `$SCRATCH_ROOT/...`, and the next run follows an
+        # instruction that cannot resolve — observed creating a directory of
+        # that literal name and mirroring an old run into it, across all 30
+        # tasks of a run that then scored 0/30 on both arms.
+        #
+        # `phronix contribute` is the boundary that matters, and it scans with
+        # `find_identifiers`, which ignores this flag.
+        env.setdefault("PHRONIX_PRIVACY", "off")
         if getattr(self, "retrieval_log", None):
             env["PHRONIX_RETRIEVAL_LOG"] = str(self.retrieval_log)
         # Session isolation and reuse travel with every phronix invocation:
@@ -8421,6 +8467,12 @@ It is the plan itself, not background reading.
 
         def cycle() -> None:
             from phronix import bus, research as research_mod
+
+            # The learner serves the whole arm, so its retrievals belong to the
+            # arm and to no task in it. Writing them into whichever task
+            # happened to be last is what made one task's log hold every other
+            # task's answers.
+            self.bind_retrieval_log(Path(workdir) / "retrievals.jsonl")
 
             # Binding is what makes this the consumer: a second one would fail
             # to bind and fall back to the file, which is the correct outcome

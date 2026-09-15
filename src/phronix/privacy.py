@@ -315,6 +315,31 @@ def suspects(text: str, extra_users: Optional[List[str]] = None) -> List[Tuple[s
 # The redactor
 # ---------------------------------------------------------------------------
 
+#: Set to a false value to record text exactly as it is.
+#:
+#: Redaction protects a person when knowledge LEAVES the machine, and
+#: `phronix contribute` is where that happens. In a local benchmark it is pure
+#: cost, and worse than cost: skills record operational paths, and rewriting
+#: `/p/lustre3/<user>/...` to `$SCRATCH_ROOT` turns a working instruction into
+#: one that cannot resolve. Measured, an agent told to "read the task history
+#: at `$SCRATCH_ROOT/...`" created a directory of that literal name and mirrored
+#: an old run into it; 61 carried files held such paths, and the run where all
+#: 30 tasks inherited one scored 0/30 on both arms.
+#:
+#: So: off is a choice the runner makes, on is the default, and the upstream
+#: path never reads this flag at all -- see `contribute`, which redacts
+#: unconditionally because that is the boundary that matters.
+PRIVACY_ENV = "PHRONIX_PRIVACY"
+
+
+def redaction_enabled() -> bool:
+    """Whether text on its way into the store should be redacted."""
+    import os
+
+    return os.environ.get(PRIVACY_ENV, "on").strip().lower() not in (
+        "0", "off", "false", "no")
+
+
 def anonymize(
     text: str,
     extra_users: Optional[List[str]] = None,
@@ -331,6 +356,9 @@ def anonymize(
             their shape and only the username inside them is replaced, so hunk
             offsets and ``-pN`` strip counts survive.
     """
+    if not redaction_enabled():
+        return text
+
     subs = list(_IDENTITY_ONLY if preserve_structure else _SUBS)
     subs.extend(_compiled_learned(preserve_structure))
     for user in extra_users or []:

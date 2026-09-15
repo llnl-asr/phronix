@@ -448,3 +448,81 @@ class TestRankingRegressions:
         result = skills.search("widgets", kinds=["pitfall", "lesson"])
         assert result["status"] == "no_match" or all(
             r["blocks"] for r in result.get("results", []))
+
+
+class TestIsLearned:
+    """`_is_learned` is what every reuse figure is computed from.
+
+    It was wrong for months in the direction that is hardest to notice: it
+    searched `capabilities/tasks/*/<name>`, which is one of the two trees
+    answers are filed under and the layout that tree had before it flattened,
+    so every carried answer came back `False`. The benchmark then reported
+    `0/30 tasks used a learned skill while solving` on runs that were loading a
+    prior run's answer on a third of their tasks. A classifier nothing checks
+    is a number nothing checks.
+    """
+
+    def test_a_filed_answer_is_learned(self, isolated_layers):
+        store = isolated_layers["store"]
+        home = skill_home_under(store, "astropy-astropy-6938")
+        home.mkdir(parents=True)
+        (home / "SKILL.md").write_text("# astropy-astropy-6938\n")
+        assert skills._is_learned("astropy-astropy-6938")
+
+    def test_a_run_written_method_skill_is_learned(self, isolated_layers):
+        home = isolated_layers["store"] / "skills" / "some-method"
+        home.mkdir(parents=True)
+        (home / "SKILL.md").write_text("# some-method\n")
+        assert skills._is_learned("some-method")
+
+    def test_a_bundled_method_skill_is_not_learned(self, isolated_layers):
+        from phronix.layers import layers
+
+        bundled = next(l for l in layers() if l.name == "bundled")
+        shipped = sorted(p.name for p in (bundled.root / "skills").iterdir()
+                         if (p / "SKILL.md").is_file())
+        assert shipped, "the bundled layer should ship method skills"
+        assert not skills._is_learned(shipped[0])
+
+    def test_an_unknown_name_is_not_learned(self, isolated_layers):
+        assert not skills._is_learned("nothing-has-this-name")
+
+
+class TestDuplicateSections:
+    """Repeated `## X` headings in a skill or lessons file.
+
+    `split_sections` keys by heading, so a second `## Pitfalls` hides the
+    first from the lookup that decides where a new block goes -- and the next
+    write appends a third. Observed in a carried skill as
+    `## Pitfalls / ## Lessons / ## Pitfalls / ## Lessons`, with the pitfalls
+    stranded under one copy and the lessons under another.
+    """
+
+    DOUBLED = ("# Lessons — x\n\n## Pitfalls\n\n### P1 — a\n\nbody a\n\n"
+               "## Lessons\n\n## Pitfalls\n\n### P2 — b\n\nbody b\n\n"
+               "## Lessons\n\n### L1 — c\n\nbody c\n")
+
+    def test_headings_are_folded_keeping_every_block(self):
+        from phronix.skill_schema import merge_duplicate_sections, parse_blocks
+
+        out = merge_duplicate_sections(self.DOUBLED)
+        assert [l for l in out.splitlines() if l.startswith("## ")] == [
+            "## Pitfalls", "## Lessons"]
+        # Folding must not lose learning: every block survives.
+        assert {b["label"] for b in parse_blocks(out)} == {"P1", "P2", "L1"}
+
+    def test_a_clean_file_is_unchanged_in_shape(self):
+        from phronix.skill_schema import merge_duplicate_sections
+
+        clean = "# Lessons — x\n\n## Pitfalls\n\n### P1 — a\n\nbody\n"
+        out = merge_duplicate_sections(clean)
+        assert [l for l in out.splitlines() if l.startswith("## ")] == ["## Pitfalls"]
+        assert "### P1 — a" in out and "body" in out
+
+    def test_a_new_block_lands_under_the_folded_heading(self):
+        from phronix.skill_schema import parse_blocks, upsert_block
+
+        out = upsert_block(self.DOUBLED, "Pitfalls", "P3", "c", "body c")
+        assert [l for l in out.splitlines() if l.startswith("## ")] == [
+            "## Pitfalls", "## Lessons"]
+        assert {b["label"] for b in parse_blocks(out)} == {"P1", "P2", "L1", "P3"}

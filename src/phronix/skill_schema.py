@@ -478,8 +478,49 @@ def scaffold_lessons(name: str) -> str:
     return LESSONS_TEMPLATE.format(name=name)
 
 
+def merge_duplicate_sections(body: str) -> str:
+    """Fold repeated ``## X`` headings into the first one, keeping order.
+
+    `split_sections` keys by heading, so a file carrying two `## Pitfalls`
+    collapses to the last and every earlier block becomes invisible to the
+    lookup that decides where the next one goes. Observed in a carried skill:
+    `## Pitfalls / ## Lessons / ## Pitfalls / ## Lessons`, with P1-P3 stranded
+    under the first heading and L1 under the second pair -- the file still
+    rendered, and retrieval still found the blocks, but each write saw only
+    half the file it was appending to.
+
+    Folding rather than deleting: the blocks are real learning, and the only
+    thing wrong is that they were filed under a second copy of their own
+    heading.
+    """
+    matches = list(_SECTION_RE.finditer(body))
+    if not matches:
+        return body
+    head = body[:matches[0].start()]
+    order: List[str] = []
+    bucket: Dict[str, List[str]] = {}
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        name = match.group(1).strip()
+        key = name.lower()
+        content = body[match.end():end].strip("\n")
+        if key not in bucket:
+            order.append(name)
+            bucket[key] = []
+        if content:
+            bucket[key].append(content)
+    out = [head.rstrip("\n")] if head.strip() else []
+    for name in order:
+        joined = "\n\n".join(bucket[name.lower()])
+        out.append(f"## {name}\n\n{joined}".rstrip() if joined else f"## {name}")
+    return "\n\n".join(out).rstrip("\n") + "\n"
+
+
 def upsert_block(text: str, section: str, label: str, title: str, body: str) -> str:
     """Insert or replace a labelled block under *section*, creating it if absent."""
+    # Fold any repeated headings first, or the section lookup below sees only
+    # the last copy and appends yet another.
+    text = merge_duplicate_sections(text)
     header = f"### {label} — {title}"
     entry = f"{header}\n\n{body.strip()}\n"
 

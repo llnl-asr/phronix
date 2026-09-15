@@ -933,6 +933,47 @@ def promote_to_source(store_root: Path) -> Dict[str, Any]:
     return {"promoted": carried, "destination": str(destination)}
 
 
+#: Marks a publish that is still in flight. Both directory walks skip it, or
+#: a run seeding itself mid-promotion would copy a half-written temporary in
+#: as though it were a skill.
+_TMP_PREFIX = ".tmp-publish-"
+
+
+def _publish(src: Path, dst: Path) -> None:
+    """Copy `src` to `dst` so no reader can ever observe a partial file.
+
+    `shutil.copy2` straight onto `dst` TRUNCATES it and then streams the
+    bytes in. That is safe when one run owns the destination and unsafe the
+    moment the carry root is shared, which is exactly how the sweep uses it:
+    `promote_store` runs per TASK, so thirty tasks per run times several runs
+    in parallel are all writing into one directory. Two of them promoting the
+    same skill interleave into one file, and a run seeding itself while a
+    promotion is mid-flight reads a truncated SKILL.md and stores it as
+    knowledge.
+
+    Writing to a temporary name in the SAME directory and renaming makes the
+    publish atomic: `os.replace` on POSIX either has happened or has not, so a
+    reader sees the old complete file or the new complete file. Concurrent
+    writers still race, but each lands a whole file and the last one wins --
+    which is the merge semantics this function already has.
+
+    Same directory matters: a rename across filesystems is a copy, and the
+    atomicity is lost. `.tmp-<pid>-<unique>` keeps two writers from colliding
+    on the temporary itself.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f"{_TMP_PREFIX}{os.getpid()}-{uuid.uuid4().hex[:8]}-{dst.name}")
+    try:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def promote_store(store_root: Path, carry_root: Path) -> Dict[str, Any]:
     """Write what a run learned back into the durable project layer.
 
@@ -976,7 +1017,9 @@ def promote_store(store_root: Path, carry_root: Path) -> Dict[str, Any]:
         if not source.is_dir():
             continue
         for path in sorted(source.rglob("*")):
-            if not path.is_file() or not _differs_from_bundled(path, store_root):
+            if not path.is_file() or path.name.startswith(_TMP_PREFIX):
+                continue
+            if not _differs_from_bundled(path, store_root):
                 continue
             # Per-session research is working state, not a result. It is folded
             # into the common folder by research.sync_session when the session
@@ -988,8 +1031,7 @@ def promote_store(store_root: Path, carry_root: Path) -> Dict[str, Any]:
             try:
                 if target.is_file() and target.read_bytes() == path.read_bytes():
                     continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, target)
+                _publish(path, target)
                 promoted.append(str(path.relative_to(store_root)))
             except OSError:
                 continue
@@ -1035,15 +1077,17 @@ def seed_store(store_root: Path, carry_root: Path,
         if not source.is_dir():
             continue
         for path in sorted(source.rglob("*")):
-            if not path.is_file():
+            if not path.is_file() or path.name.startswith(_TMP_PREFIX):
                 continue
             if (method_tools_only
                     and not path.name.startswith(METHOD_CAPABILITY_PREFIX)):
                 continue
             target = store_root / path.relative_to(carry_root)
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, target)
+                # Atomic here too. The destination is this run's private
+                # store, but a half-written file in it is just as wrong, and
+                # `.tmp-` names would otherwise be picked up as content.
+                _publish(path, target)
                 seeded.append(str(path.relative_to(carry_root)))
             except OSError:
                 continue

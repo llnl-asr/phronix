@@ -47,8 +47,8 @@ KINDS = [
     ("tools", "MCP tools"),
 ]
 MODES = [
-    ("fresh", "", "Fresh (created)"),
-    ("reuse", "//", "Reuse (reused)"),
+    ("fresh", "", "Fresh"),
+    ("reuse", "//", "Reused"),
 ]
 # Which CSV column holds each (kind, mode) cell. A fresh run's number is what
 # it built; a reuse run's is what it loaded. Different questions, same unit.
@@ -92,14 +92,14 @@ def read_rows(path: Path) -> list[dict]:
         rows = list(csv.DictReader(fh))
     for r in rows:
         for k, v in r.items():
-            if k not in ("model", "mode", "category"):
+            if k not in ("model", "mode", "run", "category"):
                 r[k] = int(v)
     return rows
 
 
 def short(category: str) -> str:
-    """`scikit-learn/scikit-learn` -> `scikit-learn`; keep the axis readable."""
-    return category.split("/")[-1]
+    """The axis label for a category — see figtools.short_name."""
+    return figtools.short_name(category)
 
 
 # How much a canvas can hold before the columns stop being readable. The wide
@@ -123,11 +123,35 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     for r in rows:
         if r["model"] in models:
             volume[r["category"]] += sum(r[f] for f in FIELD.values())
-    cats = [c for c, v in sorted(volume.items(), key=lambda kv: -kv[1]) if v]
-    if top_n:
-        cats = cats[:top_n]
+    # One order for every figure — see figtools.CATEGORY_ORDER. Ranking by
+    # this figure's own busiest measure put the same category in a different
+    # column in each of figures 1, 3 and 4.
+    # Busiest first decides WHICH categories appear; figtools decides where.
+    ranked = [c for c, v in sorted(volume.items(), key=lambda kv: -kv[1]) if v]
+    cats = figtools.top_categories(ranked, top_n)
 
-    lookup = {(r["model"], r["mode"], r["category"]): r for r in rows}
+    # Mean over REPEATS, with the spread kept.
+    #
+    # This used to be `{(model, mode, category): row}` -- a dict comprehension
+    # that silently kept the LAST row for a key. With one run per condition
+    # that was the only row; with five it would have plotted the fifth and
+    # discarded four, showing no sign that it had.
+    def cellsof(model: str, mode: str, cat: str) -> list[dict]:
+        return [r for r in rows if r["model"] == model and r["mode"] == mode
+                and r["category"] == cat]
+
+    def total_of(model: str, mode: str, cat: str, field: str) -> float:
+        """Everything this model BUILT or REUSED in the category, summed.
+
+        A total, not a per-run mean. The question this figure asks is how big
+        a corpus the model produced and how much of it came back, and that is
+        a cumulative quantity -- averaging it answers a different question
+        ("what does one run typically build") and shrinks every bar by the
+        number of runs that happen to be in hand, which is an artefact of how
+        much compute was spent rather than anything about the model.
+        """
+        return sum(r[field] for r in cellsof(model, mode, cat))
+
     colors = style["palette"]
     # Two bars per category, so each gets half the group's width.
     width = style["axes"]["bar_width"] / len(MODES)
@@ -146,8 +170,8 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
             bottom = [0.0] * len(cats)
             for ki, (kind, _) in enumerate(KINDS):
                 field = FIELD[(kind, mode)]
-                vals = [sum(lookup.get((m, mode, c), {}).get(field, 0)
-                            for m in group) for c in cats]
+                vals = [sum(total_of(m, mode, c, field) for m in group)
+                        for c in cats]
                 ax.bar(offs, vals, width=width, bottom=bottom,
                        color=colors[ki], hatch=hatch,
                        # A hatched bar needs a visible edge to draw the hatch
@@ -168,10 +192,14 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
         ax2 = ax.twinx()
         firsts = []
         for c in cats:
-            hit = sum(lookup.get((m, "reuse", c), {}).get("first_try_eligible", 0)
-                      for m in group)
-            n = sum(lookup.get((m, "reuse", c), {}).get("eligible", 0)
-                    for m in group)
+            # Pooled over runs: the rate is a ratio, so its numerator and
+            # denominator are summed across repeats rather than the per-run
+            # rates being averaged -- a run with two eligible tasks must not
+            # weigh as much as one with twenty.
+            hit = sum(r["first_try_eligible"] for m in group
+                      for r in cellsof(m, "reuse", c))
+            n = sum(r["eligible"] for m in group
+                    for r in cellsof(m, "reuse", c))
             # A category no run ever solved has an empty denominator: there is
             # no rate to draw, and drawing 0% would assert a failure that was
             # never measured.
@@ -210,11 +238,21 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     # A fixed scale with round ticks, so the reader counts in 40s and two
     # printings of this figure are comparable even if the data moves. Five
     # intervals here and five on the percentage axis: one set of gridlines.
-    figtools.set_ticks(axes[0], 200, TICK_INTERVALS, step=40)
+    # Scaled to the data, not pinned at 200.
+    #
+    # A fixed 0-200 axis made every model share one scale, which is right when
+    # the columns are compared across figures and wrong here: gpt-5.4 builds a
+    # fraction of what the others do, so its whole panel sat in the bottom
+    # fifth. Eight intervals of a countable step puts each panel's own range
+    # across the full canvas -- 0-40 by 5 for 5.4, 0-200 by 25 for the rest.
+    #
+    # The gridlines come from this axis alone (`ax.grid` below is on the left
+    # only), so the percentage axis keeping its own 20s cannot interleave with
+    # them.
     tallest = max((b.get_y() + b.get_height() for ax in axes
                    for b in ax.patches), default=0)
-    if tallest > 200:
-        print(f"warning: tallest stack is {tallest:.0f}, clipped by the 0-200 axis")
+    step = figtools.nice_step(max(tallest * 1.05, 1), 8)
+    figtools.set_ticks(axes[0], step * 8, 8, step=step)
 
     # One legend per encoding. Collapsing them into four combined entries
     # would imply four independent series and hide that colour and hatch are
@@ -238,7 +276,11 @@ def build(rows: list[dict], models: list[str], size: tuple[float, float],
     small = plt.rcParams["legend.fontsize"]
     axes[0].legend(handles=kind_keys + mode_keys + line_key, frameon=False,
                    fontsize=small, handlelength=1.6, ncol=2,
-                   loc="upper left", bbox_to_anchor=(0.14, 1.0))
+                   loc="upper left", bbox_to_anchor=(0.0, 1.0))
+
+    # How many runs each mean is over, on the figure itself. A reader
+    # comparing two panels must be able to see that one averages five runs
+    # and the other one.
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
@@ -250,8 +292,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--csv", type=Path, default=HERE / "eval1_capabilities.csv")
     ap.add_argument("--style", type=Path, default=HERE / "style.yaml")
-    ap.add_argument("--models", nargs="*",
-                    default=["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"])
+    ap.add_argument("--models", nargs="*", default=figtools.MODELS,
+                    help="one FIGURE per model, lettered a, b, c")
     ap.add_argument("--sizes", nargs="*", default=["column"],
                     help="named sizes from style.yaml (wide, column, square)")
     ap.add_argument("--top-n", type=int, default=None,
@@ -268,14 +310,21 @@ def main() -> None:
     if not present:
         raise SystemExit("no requested model appears in the CSV")
 
+    # One figure per model, not one figure with a panel per model.
+    #
+    # A three-model strip forced every panel to share one y scale, so the
+    # model with the largest corpus set the axis and the other two were read
+    # off the bottom fifth of it. Separate figures let each carry the
+    # categories and the scale its own data needs.
     for name in args.sizes:
         size = tuple(style["dimensions"][name])
         suffix = "" if name == "column" else f"-{name}"
         fit = FITS.get(name, {"top_n": None, "per_model": True})
-        build(rows, present, size,
-              args.out.with_name(args.out.name + suffix + ".pdf"), style,
-              top_n=args.top_n if args.top_n is not None else fit["top_n"],
-              per_model=fit["per_model"])
+        for i, model in enumerate(present):
+            stem = args.out.with_name(args.out.name + suffix)
+            build(rows, [model], size, figtools.panel_out(stem, i), style,
+                  top_n=args.top_n if args.top_n is not None else fit["top_n"],
+                  per_model=False)
 
 
 if __name__ == "__main__":

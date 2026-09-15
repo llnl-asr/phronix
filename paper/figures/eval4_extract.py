@@ -38,7 +38,7 @@ from pathlib import Path
 BENCH = Path("/p/lustre3/haridev/phronix-bench")
 PHRONIX, BARE = "claude-phronix", "claude-bare"
 
-FIELDS = ["group", "category", "tasks", "attempts", "tokens_total",
+FIELDS = ["model", "run", "group", "category", "tasks", "attempts", "tokens_total",
           "tokens_per_task", "solved_tasks", "solved_per_task",
           "failed_tasks", "failed_per_task", "bare_multiplier"]
 
@@ -55,7 +55,12 @@ def read(run: Path, arm: str) -> list[dict]:
 
 
 def collect(runs: list[Path], extrapolate: int) -> list[dict]:
-    # (group, category) -> per-outcome tokens and attempts
+    # (model, run, group, category) -> per-outcome tokens and attempts.
+    #
+    # Model, because pooling a three-model sweep into one figure averages over
+    # the very thing being compared. Run, because five repeats of a condition
+    # have to stay five rows for a figure to show their spread; summed, the
+    # variance is gone before the plotter ever sees it.
     acc: dict[tuple, dict] = defaultdict(lambda: defaultdict(int))
     # model -> tasks its FRESH run solved, which is what makes a reuse task
     # eligible.
@@ -70,13 +75,14 @@ def collect(runs: list[Path], extrapolate: int) -> list[dict]:
         mode = "fresh" if manifest.get("fresh") else "reuse"
         model = manifest.get("model", "?").replace("svc-dldl-", "")
 
+        rid = run.name
         for r in read(run, BARE):
-            staged.append(("bare", None, r))
+            staged.append(("bare", model, rid, r))
         if mode == "fresh":
             skills = run / PHRONIX / "store" / ".phronix" / "capabilities" / "skills"
             have = {d.name for d in skills.iterdir()} if skills.is_dir() else set()
             for r in read(run, PHRONIX):
-                staged.append(("phronix-fresh", None, r))
+                staged.append(("phronix-fresh", model, rid, r))
                 # Confirmed, not assumed: the solved task really did leave a
                 # skill directory behind.
                 if r.get("resolved") and r["instance_id"].replace("__", "-") in have:
@@ -87,13 +93,17 @@ def collect(runs: list[Path], extrapolate: int) -> list[dict]:
                 # immediately. A retry is the corpus not having supplied the
                 # answer, which is a different thing being measured.
                 if r.get("resolved") and r.get("tries") == 1:
-                    staged.append(("phronix-reuse", model, r))
+                    staged.append(("phronix-reuse", model, rid, r))
 
-    for group, model, r in staged:
+    # Eligibility is pooled over the model's fresh runs, not paired run to
+    # run: with repeats, a task one fresh repeat solved left a skill that a
+    # later reuse run could genuinely use, and pairing by run index would call
+    # that ineligible on a scheduling detail.
+    for group, model, rid, r in staged:
         if group == "phronix-reuse" and r["instance_id"] not in eligible[model]:
             continue
         cat = r.get("repo") or category_of(r["instance_id"])
-        cell = acc[(group, cat)]
+        cell = acc[(model, rid, group, cat)]
         outcome = "solved" if r.get("resolved") else "failed"
         cell["tasks"] += 1
         cell[f"{outcome}_tasks"] += 1
@@ -104,12 +114,13 @@ def collect(runs: list[Path], extrapolate: int) -> list[dict]:
         cell[f"{outcome}_tokens"] += tokens
 
     rows = []
-    for (group, cat), v in sorted(acc.items()):
+    for (model, rid, group, cat), v in sorted(acc.items()):
         tasks = v["tasks"] or 1
         # Bare ran one attempt per task and stopped; scale it to the retry
         # budget the comparison assumes.
         mult = extrapolate if group == "bare" else 1
         rows.append({
+            "model": model, "run": rid,
             "group": group, "category": cat, "tasks": v["tasks"],
             "attempts": v["attempts"],
             "tokens_total": v["tokens_total"] * mult,

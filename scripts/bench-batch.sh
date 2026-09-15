@@ -22,7 +22,7 @@ PROJECT=/usr/WS2/haridev/phronix
 source "$PROJECT/scripts/bench-root.sh"
 PBENCH=$(bench_root)
 
-SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch; PAIR=""; CARRY_NAME=""
+SUBMIT=""; NODES=8; WALL=""; QUEUE=pbatch; PAIR=""; CARRY_NAME=""; CAP=""
 PASS_THROUGH=(); CARRY_FROM=""
 SIZE=30; INDEX=1; PARALLEL=30; MODEL=""; NAME=""; SOURCE_LIST=""; HOSTED=""; REUSE=""; AFTER=""
 # Which cluster this batch is for. Everything that differs between them —
@@ -42,6 +42,14 @@ FLEET_NODES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --submit)   SUBMIT=1; shift;;
+    # How long this batch may SPEND, enforced by the script itself.
+    #
+    # Not the same thing as `-t`, and the difference is the point. `-t` is the
+    # allocation: when it expires Flux kills the broker mid-write, and what the
+    # run had learned in its last task is lost along with any record of which
+    # tasks never came back. The cap is checked between passes, so the script
+    # stops on its own terms with time in hand to checkpoint and finalise.
+    --cap)      CAP="$2"; shift 2;;
     -N|--nodes) NODES="$2"; shift 2;;
     -t|--time)  WALL="$2"; shift 2;;
     -q|--queue) QUEUE="$2"; shift 2;;
@@ -187,6 +195,7 @@ if [ -n "$SUBMIT" ]; then
                  --fleet "$FLEET" --fleet-nodes "$FLEET_NODES" \
                  ${SOURCE_LIST:+--source "$SOURCE_LIST"} \
                  ${HOSTED:+--hosted} ${REUSE:+--reuse} ${PAIR:+--pair} \
+                 ${CAP:+--cap "$CAP"} \
                  ${CARRY_NAME:+--carry "$CARRY_NAME"} \
                  ${CARRY_FROM:+--carry-from "$CARRY_FROM"} \
                  "${PASS_THROUGH[@]}" \
@@ -297,15 +306,39 @@ rlog=$PBENCH/$NAME-launch.log
 
 # Defined HERE, above its first use: bash resolves a function when it is
 # CALLED, so the supervisor loop below would have found nothing.
-seconds_of() {   # 90 | 90s | 30m | 2h | 1d -> seconds
-    case "$1" in
-      *d) echo $(( ${1%d} * 86400 ));;
-      *h) echo $(( ${1%h} * 3600 ));;
-      *m) echo $(( ${1%m} * 60 ));;
-      *s) echo $(( ${1%s} ));;
-      ''|*[!0-9]*) echo 0;;
-      *)  echo $(( $1 * 60 ));;      # bare number: flux reads it as minutes
+#: Set when a pass could not start a run at all (see the manifest check in
+#: the pass loop). Reported at the end so the job's exit status says so.
+FAILED_LAUNCH=0
+
+#: How many task-arms the previous pass left unfinished, so a pass that frees
+#: none can be told from one that is still making headway.
+prev_left=-1
+
+#: Set when the pass loop stopped because the batch ran out of its own budget.
+CAPPED=0
+
+#: Where `finalize-run.py` promotes what a stopped run had learned.
+CARRY_STORE_FOR_FINALIZE=${PHRONIX_CARRY:-/p/lustre3/haridev/phronix-bench/carry}/.phronix
+
+seconds_of() {   # 90 | 90s | 30m | 2h | 1.5h | 1d -> seconds
+    # Through awk, not bash arithmetic, because the wall time is not always a
+    # whole number. `-t 2.5h` is a reasonable thing to ask for -- a run takes
+    # under two hours, so six was three times too much -- and bash has no
+    # floats, so `$(( 2.5 * 3600 ))` is a syntax error that leaves the limit
+    # EMPTY. Every later `[ "$limit" -gt ... ]` then failed with "integer
+    # expression expected" and the supervisor lost its wall guard entirely.
+    local v=$1 unit mult
+    case "$v" in
+      *d) unit=${v%d}; mult=86400;;
+      *h) unit=${v%h}; mult=3600;;
+      *m) unit=${v%m}; mult=60;;
+      *s) unit=${v%s}; mult=1;;
+      *)  unit=$v;     mult=60;;     # bare number: flux reads it as minutes
     esac
+    case "$unit" in
+      ''|*[!0-9.]*|*.*.*) echo 0; return;;
+    esac
+    awk -v u="$unit" -v m="$mult" 'BEGIN { printf "%d\n", u * m }'
 }
 
 # The run is SUPERVISED, not launched once.
@@ -374,6 +407,27 @@ leave_a_note() {
           echo "- skills written: **$skills**   attempts that loaded one: **$used**"
           echo "- \`scripts/top.sh $out --once\`"
         } >> "$PROJECT/$NOTES"
+    fi
+    # Checkpoint the learning and write down what never came back.
+    #
+    # Runs whether the pass loop ended at the cap, on a stuck tail, or
+    # normally: a run that stopped for ANY reason with task-arms outstanding
+    # should say so in its own results rather than leave them missing for a
+    # reader to misinterpret as a smaller task list.
+    if [ -n "${out:-}" ] && [ -f "$out/manifest.json" ]; then
+        reason="stopped with work outstanding"
+        [ "${CAPPED:-0}" = 1 ] && reason="reached the ${CAP} run cap"
+        python3 "$PROJECT/scripts/finalize-run.py" "$out" \
+            --carry "$CARRY_STORE_FOR_FINALIZE" --reason "$reason" 2>&1 |
+            while read -r line; do say "$line"; done
+    fi
+
+    if [ "${FAILED_LAUNCH:-0}" = 1 ]; then
+        # Said plainly and carried into the exit status. A batch that never
+        # started a run must not read as a completion -- in the notes, in the
+        # job state, or to whatever is watching the queue.
+        say "batch $NAME FAILED: no run was produced"
+        return 1
     fi
     say "batch $NAME done"
 }
@@ -464,6 +518,22 @@ while [ "$pass" -lt "$ATTEMPTS" ]; do
         while pgrep -f "benchmark.cli run" >/dev/null 2>&1; do sleep 60; done
     fi
 
+    # Did the pass produce a RUN at all, before asking what it has left?
+    #
+    # `left` is parsed out of `top.sh`, and a run that never started has
+    # nothing to parse -- so `left` came back 0 and the next line called it
+    # finished. That is how a full filesystem was reported as success: the
+    # runner died on `Disk quota exceeded` before writing its manifest, the
+    # batch said "run finished" in the same second it said "pass 1 started",
+    # and four jobs in a row landed in the notes as COMPLETED having measured
+    # nothing. A missing manifest is the difference between "did the work and
+    # has none left" and "never got as far as starting".
+    if [ -z "${out:-}" ] || [ ! -f "$out/manifest.json" ]; then
+        say "pass $pass produced no run (see $rlog) — FAILED, not finished"
+        FAILED_LAUNCH=1
+        break
+    fi
+
     # Did it get through the list? `top.sh --once` reports what is left; a run
     # with nothing running and nothing queued is done, however it ended.
     left=$("$PROJECT/scripts/top.sh" "${out:-}" --once 2>/dev/null |
@@ -473,6 +543,34 @@ while [ "$pass" -lt "$ATTEMPTS" ]; do
         break
     fi
     say "pass $pass ended with ${left} task-arm(s) unfinished; resuming"
+
+    # Out of the budget this batch was given? Stop while there is still time
+    # to close the run properly.
+    cap_s=$(seconds_of "${CAP:-0}")
+    if [ "${cap_s:-0}" -gt 0 ] &&
+       [ $(( $(date +%s) - STARTED )) -ge "$cap_s" ]; then
+        say "reached the ${CAP} cap with ${left} task-arm(s) unfinished; finalising"
+        CAPPED=1
+        break
+    fi
+
+    # A pass that freed nothing will not free anything next time either.
+    #
+    # The tail of a run is one or two task-arms that never come back --
+    # measured today, `psf__requests-2317` sat in `research` while 5.4 and sol
+    # each ended pass 1 with 7 and 11 outstanding and pass 2 with exactly the
+    # same 7 and 11. Every further pass re-attempts the same wedged arms for
+    # another twenty minutes and ends where it started, which is what walks a
+    # run into its wall guard with 28 of 30 tasks long since decided.
+    #
+    # So progress, not attempts, is the budget: two consecutive passes that
+    # leave the same number outstanding means those arms are stuck, and the
+    # run stops and reports them as unfinished rather than paying for a third.
+    if [ "${left:-0}" -eq "${prev_left:--1}" ]; then
+        say "pass $pass freed nothing (still ${left}); those task-arm(s) are stuck — stopping"
+        break
+    fi
+    prev_left=$left
 
     # Out of wall clock is not a reason to start another pass.
     limit_s=$(seconds_of "$WALL")

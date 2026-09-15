@@ -74,7 +74,12 @@ FIELDS = ["model", "mode", "run", "tasks", "skills_learned", "tools_learned",
 
 
 def collect(runs: list[Path]) -> list[dict]:
-    out: dict[tuple[str, str], dict] = {}
+    # Keyed by RUN as well as model and mode.
+    #
+    # `out[(model, mode)] = ...` kept whichever run came last, so fourteen runs
+    # produced six rows and every cell reported n=1 -- the figure could not
+    # show a spread because the extract had already thrown it away, silently.
+    out: dict[tuple[str, str, str], dict] = {}
     for run in runs:
         report, results = run / "report.json", run / ARM / "results.jsonl"
         if not (report.is_file() and results.is_file()):
@@ -88,7 +93,7 @@ def collect(runs: list[Path]) -> list[dict]:
         entries, topics, worked = tracking(
             run / ARM / "store" / ".phronix", run_start(manifest))
 
-        out[(model, mode)] = {
+        out[(model, mode, run.name)] = {
             "model": model, "mode": mode, "run": run.name, "tasks": len(rows),
             "skills_learned": skills, "tools_learned": tools,
             "entries_tracked": entries, "topics": topics,

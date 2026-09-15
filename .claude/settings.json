@@ -187,7 +187,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/inject_context.py",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/inject_context.py\"",
             "statusMessage": "Loading relevant project memory...",
             "timeout": 15
           }

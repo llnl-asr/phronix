@@ -1033,6 +1033,29 @@ def _as_list(value: Any) -> List[str]:
     return []
 
 
+#: pytest colours its short summary when it thinks it has a terminal, and the
+#: colour lands INSIDE the words this module matches on.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove terminal colour codes before anything tries to read the text.
+
+    Not cosmetic. `PASSED astropy/...::test_rst_with_header_rows` arrives as
+    `\x1b[32mPASSED\x1b[0m astropy/...::\x1b[1mtest_rst...\x1b[0m`, so a
+    `startswith("PASSED ")` test is False for every line and the run scores
+    zero passes out of a suite that passed completely.
+
+    Measured on astropy__astropy-14182: pytest printed `10 passed in 0.03s`
+    and named the target test PASSED in its summary, while the evaluation
+    recorded `fail_to_pass_passed: 0` and filed all nine pass-to-pass tests as
+    pre-existing failures. That instance is 0-for-66 across both arms, which
+    is what a scoring bug looks like from the outside — a task nobody can ever
+    solve.
+    """
+    return _ANSI_RE.sub("", text or "")
+
+
 def _passed_node_ids(output: str) -> List[str]:
     """Node ids pytest reported as PASSED, from its ``-rA`` short summary.
 
@@ -1042,7 +1065,7 @@ def _passed_node_ids(output: str) -> List[str]:
     did *not* pass.
     """
     ids: List[str] = []
-    for line in output.splitlines():
+    for line in strip_ansi(output).splitlines():
         stripped = line.strip()
         if stripped.startswith("PASSED "):
             ids.append(stripped[len("PASSED "):].strip())
@@ -1203,7 +1226,7 @@ def _any_test_ran(output: str) -> bool:
     marks each outcome with a keyword, and its final line counts them.
     """
     markers = ("PASSED ", "FAILED ", "ERROR ", "SKIPPED ", "XFAIL ", "XPASS ")
-    for line in output.splitlines():
+    for line in strip_ansi(output).splitlines():
         stripped = line.strip()
         if stripped.startswith(markers) or any(m.strip() in stripped
                                                for m in ("passed", "failed")

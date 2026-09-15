@@ -15,6 +15,52 @@ Each evaluation is a `evalN_extract.py` (runs -> CSV) and a `evalN_plot.py`
     python eval4_extract.py --runs <run-dir-name> ...
     python eval4_plot.py
 
+## Models, panels and repeats
+
+The paper reports three models -- `gpt-5.4`, `gpt-5.5`, `gpt-5.6-sol` -- named
+once in `figtools.MODELS` and read from there by every plotter.
+
+**Evals 1, 3 and 4 emit one figure per model**, lettered by position:
+`eval1_capabilitiesa.pdf` is 5.4, `...b.pdf` is 5.5, `...c.pdf` is 5.6-sol.
+A letter rather than the model name, because the prose cites "figure 1b" and a
+model rename must not invalidate the reference. They were one figure with a
+panel per model, which forced all three to share a y scale: the model with the
+largest corpus set the axis and the other two were read off the bottom fifth
+of it.
+
+**Eval 2 stays a single figure**, models along the x axis -- that comparison is
+the figure's subject rather than a way of splitting it.
+
+### Variance
+
+Every value is a mean over repeated runs, drawn with the spread across those
+runs, so a difference between two bars can be read against how much either
+wanders on its own. The CSVs therefore carry a `run` column and one row per
+run; nothing is summed at extract time.
+
+* The error bar is the SAMPLE standard deviation (n-1) across runs.
+* It sits on the TOTAL of a stacked bar, never on each segment -- the segments
+  are parts of one measured height, and intervals up the side of one column
+  cannot be added by eye. Where two segments are counted separately per run,
+  their spreads add in quadrature.
+* **A single run gets no error bar at all**, rather than one of zero length. A
+  zero-length bar asserts perfect stability, which is the opposite of what one
+  run measures. Every figure carries `n=` in its lower right so the two cases
+  are never confused.
+
+**Repeats are grouped within a condition before conditions are combined**, and
+the ordering matters. A model contributes a fresh run and a reuse run; treating
+those as two repeats reports the fresh-versus-reuse difference -- the largest
+signal in the sweep -- as though it were noise. So eval 2 and eval 3 average
+repeats within each mode first and combine the modes afterwards. Eval 4 needs
+no such care: its `group` column already separates the arms. Eval 1 keys on
+mode directly.
+
+One case looks like a mistake and is not: the **bare** arm shows n=2 with a
+single fresh/reuse pair, because a bare arm runs in both and phronix's
+knowledge policy means nothing to it. Those two really are repeats of one
+condition, and the spread they show is real.
+
 `figtools.py` holds the axis rules every figure obeys: when a plot carries a
 second y-axis, both axes get the SAME number of major ticks, so the two
 scales share one set of horizontal rules instead of interleaving at unrelated
@@ -214,3 +260,58 @@ task, same model, same gateway, but run from a scratch directory so the
 project's `.claude/` -- agents, skills, hooks, both MCP servers -- is out of
 scope. Sharing the project directory would hand the "bare" arm the pipeline's
 skills and make the comparison meaningless.
+
+
+### By phase -- `eval5_pipeline`
+
+    python eval5_steps.py <headless-run>.jsonl     # -> eval5_steps.csv
+                                                   #    eval5_phases.csv
+    python eval5_plot.py                           # -> rendered/eval5_pipeline.pdf
+
+`eval5_extract.py` answers what the session cost in total; this answers where
+the effort went. A phase that succeeded on its first call and a phase that
+needed twelve retries both end in success, and only the second is evidence of
+anything.
+
+**Four phases, not the pipeline's own steps.** `setup`, `annotate`, `build`,
+`smoke` -- the things a bare run also does, so the bare arm can be laid
+alongside without inventing steps it never had. `annotate` takes validation
+and the init/fini fix with it: both exist only because annotation happened,
+and splitting them would credit annotation with less work than it caused.
+`eval5_steps.csv` keeps the per-step detail behind the rollup.
+
+**Read the headless stream, not the session transcript.** The orchestrator's
+transcript under `~/.claude/projects/` holds only its own 170 calls -- the
+annotation and validation subagents write no sidechain records there, so their
+216 calls are invisible. The stream-json log has all 405. Measuring the
+transcript undercounts the run by more than half.
+
+**Failures belong to the phase that made the CALL**, not the phase open when
+the result came back: an annotation subagent's failure is annotation's.
+
+**Colour is the outcome, hatching is the kind.** Green succeeded and red
+failed -- the reserved status steps every other figure here uses, so success
+and failure read the same way across the paper. Skills and MCP tools are told
+apart by texture within the stack, which leaves the status colours one job.
+
+**Four bars per phase: two arms, each split success and failed.** The bare
+baseline is a placeholder emitted by `--empty-arm` until that run exists; its
+bars are empty by construction, not by measurement.
+
+**The smoke test has calls but no tokens.** It runs inside the build step, so
+its capability calls can be separated by tool name and its tokens cannot. The
+token lines break at `smoke` rather than dropping to zero -- a gap says "not
+measured here", a zero would claim the smoke test was free.
+
+**The token axis is logarithmic, and input includes cache reads.** Input runs
+four orders of magnitude above output -- 28-40M against 1-3K per phase -- so a
+linear axis would lay the output line flat on zero and read as missing data.
+Counting only `input_tokens` is worse: it reports 280 tokens for a phase that
+consumed tens of millions, because 88-92% of this run is cache reads. Those
+are context the model was actually sent, cheaper per token but not absent, so
+they count here; the dollar view belongs in `cost_usd`.
+
+The shape is the result. The failures and all 11 tool repairs sit in `setup`
+and `build`; `annotate` is the largest phase by far and never failed once,
+running on skills that already knew the job. The failures are the self-healing,
+and they stop once the tool is fixed.

@@ -1,0 +1,9 @@
+order,step,calls_ok,calls_failed,repeats,repairs,seconds,ended,skills_ok,skills_failed,tools_ok,tools_failed,other_ok,other_failed,tokens_in,tokens_out,turns,gen_chars
+1,(setup),16,0,1,0,0,0,2,0,8,0,6,0,0,0,25,40738
+2,STEP 1: session setup + detect,57,8,11,4,1419,1,0,0,12,5,45,3,0,0,115,19874
+3,STEP 2: build annotated baseline (no macros) + validate structure,70,9,24,7,421,1,0,0,7,6,63,3,0,0,130,25954
+4,STEP 3: whole-project annotation,7,0,0,0,916,1,0,0,4,0,3,0,0,0,14,20540
+5,STEP: dftracer-annotate-c (IOR),165,0,11,0,567,1,0,0,136,0,29,0,0,0,165,31326
+6,STEP: dftracer-validate-c,51,0,9,0,208,1,0,0,19,0,32,0,0,0,51,11718
+7,STEP: fix-init-fini-ordering,16,0,6,0,27,1,0,0,8,0,8,0,0,0,16,3229
+8,STEP 4-5: build annotated + smoke test,6,0,1,0,48,1,0,0,3,0,3,0,0,0,12,1321

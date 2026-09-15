@@ -1,0 +1,9 @@
+arm,phase,skills_ok,skills_failed,tools_ok,tools_failed,other_ok,other_failed,calls,tokens_in,tokens_out,tokens_in_per_call,tokens_out_per_call,repairs,seconds
+phronix,setup,2,0,20,5,51,3,81,10734411,24671,132524,305,4,1419
+phronix,annotate,0,0,167,0,72,0,239,18861894,27196,78920,114,0,1718
+phronix,build,0,0,9,6,66,3,84,10811086,11054,128703,132,7,469
+phronix,smoke,0,0,1,0,0,0,1,76674,48,76674,48,0,0
+bare,setup,0,0,0,0,33,0,33,2716490,7569,82318,229,0,0
+bare,annotate,0,0,0,0,40,1,41,2988139,15448,72881,377,0,0
+bare,build,0,0,0,0,15,0,15,1312970,4109,87531,274,0,0
+bare,smoke,0,0,0,0,5,0,5,452748,4159,90550,832,0,0

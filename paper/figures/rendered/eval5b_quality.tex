@@ -1,0 +1,29 @@
+% Requires: \usepackage{booktabs}
+% Symbols used below -- define once in your preamble:
+% \newcommand{\cmark}{\ding{51}}              % correct
+% \newcommand{\rmark}{\ding{51}$^{\dagger}$}  % correct after self-repair
+% \newcommand{\wmark}{$\circ$}                % workaround
+% \newcommand{\xmark}{\ding{55}}              % incorrect
+
+\begin{tabular}{llcc}
+\toprule
+Stage & Check & Bare & Phronix \\
+\midrule
+setup & correct toolchain and MPI used & \xmark & \cmark \\
+ & isolated per-run environment & \cmark & \cmark \\
+ & DFTracer installed from specified GitLab develop & \wmark & \rmark \\
+\addlinespace
+annotate & I/O-relevant functions annotated & \xmark & \cmark \\
+ & entry points carry INIT/FINI & \xmark & \rmark \\
+ & annotated sources compile & \cmark & \rmark \\
+ & independent validation performed & \xmark & \cmark \\
+\addlinespace
+build & annotated build succeeds with macros & \wmark & \rmark \\
+ & instrumentation linked and verified & \cmark & \cmark \\
+\addlinespace
+smoke & binary runs to completion & \cmark & \cmark \\
+ & ran on the session MPI stack & \xmark & \cmark \\
+\midrule
+\multicolumn{2}{l}{\textbf{Checks correct}} & \textbf{4/11} & \textbf{11/11} \\
+\bottomrule
+\end{tabular}

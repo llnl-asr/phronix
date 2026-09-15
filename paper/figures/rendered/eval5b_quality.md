@@ -1,0 +1,14 @@
+| Stage | Check | Bare | Phronix |
+|---|---|---|---|
+| setup | correct toolchain and MPI used | WRONG | OK |
+|  | isolated per-run environment | OK | OK |
+|  | DFTracer installed from specified GitLab develop | workaround | OK (self-repair) |
+| annotate | I/O-relevant functions annotated | WRONG | OK |
+|  | entry points carry INIT/FINI | WRONG | OK (self-repair) |
+|  | annotated sources compile | OK | OK (self-repair) |
+|  | independent validation performed | WRONG | OK |
+| build | annotated build succeeds with macros | workaround | OK (self-repair) |
+|  | instrumentation linked and verified | OK | OK |
+| smoke | binary runs to completion | OK | OK |
+|  | ran on the session MPI stack | WRONG | OK |
+| **Total** | **checks correct** | **4/11** | **11/11** |

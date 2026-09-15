@@ -135,20 +135,36 @@ def _length_error(kind: str, title: str, body: str) -> Optional[Dict[str, Any]]:
 def _is_learned(name: str) -> bool:
     """Whether a skill was learned here rather than shipped in the package.
 
-    By layer, which is where the distinction actually lives: the bundled layer
-    is the installed package and everything else was written by a run. Asking
-    the layer beats any naming convention, because a learned skill about flask
-    is named for flask and nothing in the name says who wrote it.
+    Two questions, because a skill has two possible homes and the answer
+    differs by which one it is in:
+
+    * An ANSWER — anything `task_skill_dirs` returns, filed under
+      `capabilities/` or `research/` — was written by a run, always. Layer says
+      nothing here: every run now promotes its answers into the bundled tree,
+      so asking the layer would call a promoted answer "shipped" the moment it
+      travelled.
+    * A METHOD skill under `<layer>/skills/` is shipped only if that layer is
+      the bundled one. A run that writes a new method skill writes it into the
+      user or project layer, which is what makes it learned.
+
+    Resolved through `layers`' own lookups rather than by rebuilding the paths
+    here. The hand-rolled version searched `capabilities/tasks/*/<name>` — one
+    tree of two, and the pre-flattening layout of that tree — so it missed
+    every answer in a modern store and reported `learned: []` on runs that were
+    reusing prior knowledge on almost every task.
     """
     try:
-        from phronix.layers import layers
+        from phronix.layers import layers, merged_dirs, task_skill_dirs
 
+        if name in task_skill_dirs():
+            return True
+        home = merged_dirs("skills").get(name)
+        if home is None:
+            return False
         for layer in layers():
-            homes = [Path(layer.root) / "skills" / name]
-            homes += (Path(layer.root) / "capabilities" / "tasks").glob(f"*/{name}")
-            for home in homes:
-                if (home / "SKILL.md").is_file():
-                    return layer.name != "bundled"
+            if layer.name == "bundled":
+                return home != Path(layer.root) / "skills" / name
+        return True
     except Exception:
         pass
     return False

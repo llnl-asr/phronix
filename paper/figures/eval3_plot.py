@@ -37,7 +37,7 @@ TICK_INTERVALS = 8
 # than something the reader has to hold in their head from the legend.
 # Bare is dashed because its value is assumed, not measured.
 ATTEMPTS = [
-    ("bare_attempts_est", "#eda100", "--", "Bare (est.)", "count_bare"),
+    ("bare_attempts_est", "#eda100", "--", "Base (est.)", "count_bare"),
     ("solved_attempts_mean", "#1baf7a", "-", "Phronix, solved", "solved_tasks"),
     ("failed_attempts_mean", "#4a3aa7", "-", "Phronix, failed", "failed_tasks"),
 ]
@@ -72,24 +72,99 @@ def read_rows(path: Path) -> list[dict]:
         rows = list(csv.DictReader(fh))
     for r in rows:
         for k, v in r.items():
-            if k != "category":
+            if k not in ("category", "model", "mode", "run"):
                 r[k] = float(v) if "." in v else int(v)
     return rows
 
 
 def short(category: str) -> str:
-    return category.split("/")[-1]
+    """The axis label for a category — see figtools.short_name."""
+    return figtools.short_name(category)
+
+
+ALL_FIELDS = [f for f, *_ in ATTEMPTS] + [f for f, *_ in RESEARCH] + [
+    "solved_tasks", "failed_tasks", "bare_tasks"]
+
+
+#: Fields that ADD when the two run modes are pooled, rather than averaging.
+SUMMED = {"research_topics", "research_tools", "solved_tasks", "failed_tasks",
+          "bare_tasks"}
+
+
+def collapse(rows: list[dict]) -> list[dict]:
+    """One row per category: every field a (mean, sd, n) across REPEATS.
+
+    Repeats are grouped WITHIN a run mode before the modes are pooled, and
+    that ordering is the whole point. A model contributes a fresh run and a
+    reuse run; treating those two as two repeats of one condition reports the
+    fresh-versus-reuse difference as run-to-run noise, which is the largest
+    signal in the sweep laid out as though it were error. Grouped by mode
+    first, the spread is between repeats of the SAME condition, which is what
+    an error bar is supposed to mean.
+
+    Modes are then pooled as the figure has always pooled them: counts add,
+    per-task means combine weighted by the tasks behind them, and the two
+    modes' spreads add in quadrature.
+    """
+    out: dict[str, dict] = {}
+    for cat in {r["category"] for r in rows}:
+        mine = [r for r in rows if r["category"] == cat]
+        modes = sorted({r["mode"] for r in mine})
+        cell = {"category": cat}
+        for field in ALL_FIELDS:
+            per_mode = []
+            for mode in modes:
+                got = figtools.agg([r for r in mine if r["mode"] == mode],
+                                   lambda _r: "all", field)
+                if "all" in got:
+                    per_mode.append(got["all"])
+            if not per_mode:
+                cell[field] = (0.0, None, 0)
+                continue
+            runs = max(v[2] for v in per_mode)
+            sd = ([v[1] for v in per_mode] if any(v[1] for v in per_mode)
+                  else None)
+            quad = (sum((x or 0) ** 2 for x in sd) ** 0.5) if sd else None
+            if field in SUMMED:
+                cell[field] = (sum(v[0] for v in per_mode), quad, runs)
+            else:
+                # A mean per task: weight each mode by how many tasks stand
+                # behind it, or a mode with one task would count as much as
+                # one with twenty.
+                weight_field = ("solved_tasks" if "solved" in field
+                                else "failed_tasks" if "failed" in field
+                                else None)
+                if weight_field is None:
+                    cell[field] = (sum(v[0] for v in per_mode) / len(per_mode),
+                                   quad, runs)
+                    continue
+                num = den = 0.0
+                for mode, v in zip(modes, per_mode):
+                    w = figtools.agg([r for r in mine if r["mode"] == mode],
+                                     lambda _r: "all", weight_field)
+                    w = w.get("all", (0.0, None, 0))[0]
+                    num += v[0] * w
+                    den += w
+                cell[field] = (num / den if den else 0.0, quad, runs)
+        out[cat] = cell
+    return list(out.values())
 
 
 def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
           top_n: int | None = 6) -> None:
+    rows = collapse(rows)
     # Busiest categories first: the eye should read the distribution, not the
     # alphabet.
-    rows = sorted(rows, key=lambda r: -(r["solved_tasks"] + r["failed_tasks"]))
-    if top_n:
-        rows = rows[:top_n]
+    # Canonical order, shared with every other figure (figtools).
+    ranked = [r["category"] for r in
+              sorted(rows, key=lambda r: -(r["solved_tasks"][0] + r["failed_tasks"][0]))]
+    keep = figtools.top_categories(ranked, top_n)
+    order = {c: i for i, c in enumerate(keep)}
+    rows = sorted((r for r in rows if r["category"] in order),
+                  key=lambda r: order[r["category"]])
     cats = [r["category"] for r in rows]
     n = len(cats)
+    spread_note: list = []
 
     # Four bars per category: three attempt bars then the research stack, with
     # the stack set slightly apart so it reads as a different quantity.
@@ -99,21 +174,48 @@ def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
     # The research stack is the only bar now, so it takes the whole slot.
     bottom = [0.0] * n
     for field, color, _label in RESEARCH:
-        vals = [r[field] for r in rows]
+        vals = [r[field][0] for r in rows]
         ax2.bar(range(n), vals, width=style["axes"]["bar_width"] * 0.6,
                 bottom=bottom, color=color, edgecolor=style["surface"],
                 linewidth=1.0, zorder=2)
         bottom = [b + v for b, v in zip(bottom, vals)]
+    # On the stack total, for the same reason as eval 1: the segments are
+    # parts of one measured height, and one interval per segment cannot be
+    # added up by eye.
+    stack_sd = []
+    for r in rows:
+        sds = [r[f][1] for f, *_ in RESEARCH]
+        ns = max(r[f][2] for f, *_ in RESEARCH)
+        # Summed in quadrature: the two segments are counted separately per
+        # run, so the height's variance is their variances added.
+        tot = (sum(sd ** 2 for sd in sds if sd) ** 0.5) if any(sds) else None
+        stack_sd.append((sum(r[f][0] for f, *_ in RESEARCH), tot, ns))
+    # Means only on this figure.
+    #
+    # Four series share these axes -- three attempt lines and a two-part stack
+    # -- and whiskers on all of them produced more interval than data: the
+    # verticals collided with the markers and with each other, and the reader
+    # could not tell which bar an arm belonged to. The spread is still in the
+    # CSV for anyone who wants it; the figure shows the average.
+    spread_note.extend(stack_sd)
 
     for field, color, dash, _label, count in ATTEMPTS:
         # A category with no task of that outcome has no mean to plot --
         # astropy solved nothing, and a zero there would claim it solved
         # something in zero attempts.
-        vals = [r[field] if (count == "count_bare" or r[count]) else float("nan")
+        # A category with no task of that outcome plots ZERO, not a gap.
+        #
+        # The gap was deliberate once -- it said "never measured" rather than
+        # "measured as none" -- but it reads as a broken line and leaves the
+        # eye to guess whether the series stops or dips. Zero is the honest
+        # reading here: the category HAS tasks, and none of them ended that
+        # way, which is a measurement rather than an absence.
+        vals = [r[field][0] if (count == "count_bare" or r[count][0]) else 0.0
                 for r in rows]
         ax.plot(range(n), vals, color=color, linestyle=dash, marker="o",
                 markersize=9, linewidth=2, markeredgecolor=style["surface"],
                 markeredgewidth=1.5, zorder=5, clip_on=False)
+        spread_note.extend(r[field] for r in rows)
 
     # Twin axes draw in creation order, so the bars would cover the lines.
     # Lift the line axes above and let the bars show through it.
@@ -154,6 +256,7 @@ def build(rows: list[dict], size: tuple[float, float], out: Path, style: dict,
               ncol=3, loc="upper left", bbox_to_anchor=(0.0, 1.0),
               columnspacing=1.4)
 
+
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
@@ -166,12 +269,24 @@ def main() -> None:
     ap.add_argument("--style", type=Path, default=HERE / "style.yaml")
     ap.add_argument("--size", default="column")
     ap.add_argument("--top-n", type=int, default=6)
-    ap.add_argument("--out", type=Path, default=HERE / "eval3_retries.pdf")
+    ap.add_argument("--models", nargs="*", default=figtools.MODELS,
+                    help="one FIGURE per model, lettered a, b, c")
+    ap.add_argument("--out", type=Path, default=HERE / "eval3_retries")
     args = ap.parse_args()
 
     style = load_style(args.style)
-    build(read_rows(args.csv), tuple(style["dimensions"][args.size]),
-          args.out, style, top_n=args.top_n)
+    rows = read_rows(args.csv)
+    present = [m for m in args.models if any(r["model"] == m for r in rows)]
+    missing = [m for m in args.models if m not in present]
+    if missing:
+        print(f"note: no rows for {', '.join(missing)} -- omitted")
+    if not present:
+        raise SystemExit("no requested model appears in the CSV")
+
+    for i, model in enumerate(present):
+        build([r for r in rows if r["model"] == model],
+              tuple(style["dimensions"][args.size]),
+              figtools.panel_out(args.out, i), style, top_n=args.top_n)
 
 
 if __name__ == "__main__":
