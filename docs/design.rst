@@ -166,6 +166,17 @@ is about, in the same commit and the same review. ``resolve_write_layer`` guards
 against a phronix checkout installed in editable mode capturing another
 project's learning.
 
+The bundled layer lives at ``src/phronix/.phronix`` and is tracked in git, with
+``.phronix`` at the repository root a symlink to it. Keeping it under ``src/``
+is what makes it ship inside the wheel; keeping it in git is what makes the
+shipped knowledge reviewable in the same way as the code. The symlink exists so
+that a tool run from the root finds the store where it expects it.
+
+Carried knowledge — what a previous run promoted — belongs in the carry root
+rather than the packaged layer. A run that wrote its learning into the installed
+package would grow the wheel with every task and leave the working tree dirty
+mid-run.
+
 
 Capabilities: deterministic work becomes code
 =============================================
@@ -178,6 +189,34 @@ The rule is simple: *a deterministic procedure described in prose is a procedure
 that will be performed differently next time.* If a step has one right answer
 for given inputs, it becomes code via ``capability_new``, and prose describes
 only the decisions.
+
+Past a threshold they are dispatched, not registered
+----------------------------------------------------
+
+A capability is an MCP tool, and every registered tool's schema is re-sent on
+every request. A store that has been learning for a while therefore competes
+with the task for the context it is supposed to be helping with: measured at
+1,150 learned tools, the schemas crowded out the work.
+
+So the registration is conditional. Up to ``DISPATCH_THRESHOLD`` (64)
+capabilities are published as ordinary MCP tools, one schema each. Past it they
+are reached through a single ``capability_call(name, arguments)`` and no
+per-capability schema is published at all. The choice is made once, before
+anything is imported, from the number of visible capabilities — a capability
+must be reachable the same way as its siblings, or an agent cannot tell from
+one call how to make the next.
+
+Two consequences worth knowing:
+
+* **The calling convention changes with the size of the store.** Anything that
+  reads a transcript to see which capabilities were used must recognise both
+  shapes. A metric that matched only the direct form silently reported zero
+  reuse for every run after the dispatcher landed, while the traces plainly
+  showed the tools being called.
+* **One broken capability must not take the server down.** A module that fails
+  to import is caught, reported with its traceback, and skipped. A server that
+  refuses to start because of one bad learned tool would make the framework's
+  own learning the thing that bricks it.
 
 
 Verification: the corrector half
@@ -764,6 +803,21 @@ Fixtures that must contain a realistic identifier carry an explicit exemption
 marker, so "this file is allowed to look like a leak" is a recorded decision
 rather than an exception in the scanner.
 
+Redaction is for the boundary, not for the local store
+------------------------------------------------------
+
+``PHRONIX_PRIVACY=off`` records text exactly as it is. The default is on, and
+the upstream gate does not read the flag at all: ``phronix contribute`` scans
+with ``find_identifiers``, which builds its own substitution list, so promotion
+still blocks on an identifier whatever the local setting.
+
+The distinction earns its place because a skill records *operational paths*, not
+only prose. Rewriting ``/p/lustre3/<user>/...`` to ``$SCRATCH_ROOT`` turns "read
+the task history at ``<path>``" into an instruction that cannot resolve — and an
+agent handed one created a directory of that literal name and mirrored an old
+run into it. Sixty carried files held such paths before this was found. Redact
+when knowledge leaves the machine; record it faithfully while it is still here.
+
 
 Profiling
 =========
@@ -776,9 +830,13 @@ did this cost, and where" with measurements rather than impressions.
 The MCP surface
 ===============
 
-51 tools across 12 services. ``context_service`` is registered first
+84 tools across 16 services. ``context_service`` is registered first
 deliberately — tool order influences what a model reaches for, and retrieval
 should be the first thing it sees.
+
+Learned capabilities are not in this table: past ``DISPATCH_THRESHOLD`` they
+are reached through ``capability_call`` rather than registered individually.
+See *Capabilities*.
 
 =====================  ==========================================================
 service                tools
@@ -791,18 +849,34 @@ authoring              ``skill_define`` / ``agent_define`` (declarative, idempot
 memory                 ``memory_list`` / ``memory_recall`` / ``memory_read`` /
                        ``memory_write``
 graph                  ``graph_ensure`` / ``graph_query`` / ``graph_get_node``
-research               ``research_assess`` / ``research_define_fom`` /
-                       ``research_add_approach`` / ``research_refine_approach`` /
-                       ``research_choose`` / ``research_rank`` /
-                       ``research_write_plan`` / ``research_playbook`` /
-                       ``research_add_instances`` / ``research_split`` /
-                       ``research_record_trial`` / ``research_evaluate_approach`` /
-                       ``research_record_achieved`` / ``research_prior`` /
-                       ``research_approach`` / ``research_ruled_out`` /
-                       ``research_verify`` / ``research_status``
+conversation           ``conversation_outline`` / ``conversation_search`` /
+                       ``conversation_turn`` — what THIS session already
+                       established, so a stage does not re-derive it
+research               32 tools. Beyond the gate-and-strategy set
+                       (``research_assess`` / ``research_prior`` /
+                       ``research_define_fom`` / ``research_add_approach`` /
+                       ``research_choose`` / ``research_write_plan``) there are
+                       the corpus tools (``research_declare_corpus`` /
+                       ``research_split`` / ``research_add_instance(s)`` /
+                       ``research_coverage``), the trial record
+                       (``research_record_trial`` / ``research_evaluate_approach``
+                       / ``research_ruled_out`` / ``research_dead_approaches`` /
+                       ``research_mark_working``), the pipeline form
+                       (``research_record_pipeline`` / ``research_adopt_pipeline``
+                       / ``research_record_step_reached``), the aspect set
+                       (``research_set_aspects`` / ``research_add_aspects``), and
+                       the running record (``research_observe`` /
+                       ``research_notice`` / ``research_status``)
+solution               ``solution_check`` / ``solution_repair`` — the filing
+                       checks are RUN rather than requested, and a mechanical
+                       fault is repaired rather than only named
+schema                 ``research_validate`` — the research record's schema,
+                       not just its location
+layout                 ``layout_check`` — where a skill's files belong
 privacy                ``privacy_scan`` / ``privacy_redact`` /
                        ``privacy_suspects`` / ``privacy_add_pattern``
-capability             ``capability_list`` / ``capability_new``
+capability             ``capability_list`` / ``capability_new`` /
+                       ``capability_session``
 verification           ``verify_list`` / ``verify_run`` / ``verify_coverage`` /
                        ``verify_new``
 complexity             ``complexity_assess`` / ``complexity_reassess`` /
@@ -812,7 +886,6 @@ profiling              ``profile_bind`` / ``profile_step_begin`` /
 sync                   ``agents_sync`` / ``permissions_sync`` / ``hooks_sync`` /
                        ``skills_sync`` / ``phronix_status``
 =====================  ==========================================================
-
 
 Deployment
 ==========

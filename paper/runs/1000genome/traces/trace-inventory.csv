@@ -1,0 +1,5 @@
+arm,file,bytes,events,app_event_names,note
+bare,scratch_test/trace/test-246c3a94fe4b0a7e-app.pfw.gz,277,10,end;foo;start;thread_name,
+bare,source/trace/individuals-bc3234d9cb707aab-app.pfw.gz,0,0,,metadata only -- no application events
+phronix,baseline/traces/compact/baseline-673b180b-d106597a4933fe30-app.pfw.gz,880,13,compress;end;main;processing;readfile;start;thread_name,
+phronix,baseline/traces/raw/baseline-673b180b-d106597a4933fe30-app.pfw.gz,880,13,compress;end;main;processing;readfile;start;thread_name,
