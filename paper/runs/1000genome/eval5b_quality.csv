@@ -1,0 +1,23 @@
+arm,stage,check,outcome,evidence
+phronix,setup,DFTracer installed from specified GitLab develop,pass,"venv holds dftracer-2.1.1.post36.dev0.dist-info, built from ssh://git@czgitlab.llnl.gov:7999/dftracer/dftracer.git@develop"
+phronix,setup,installed build is a real versioned release,pass,"2.1.1.post36.dev0. The previous run silently installed 0.0.post1.dev0 from a --depth=1 clone with no tags; the installer now clones --filter=blob:none and fails loudly on a 0.0.x version"
+phronix,setup,isolated per-run environment,pass,"workspaces/1000genome_workflow/20260915_235814 with its own install/ prefix"
+phronix,annotate,VCF read path annotated,pass,"readfile events present in the trace (2 occurrences, one per input file)"
+phronix,annotate,per-individual write path annotated,pass,"write_individual x2504 in the trace -- one event per individual, the 82%-of-wall-time hot path"
+phronix,annotate,annotations linted,pass,python_lint_annotations x4
+phronix,annotate,independent validation performed,pass,validate_annotations x4 plus session_validate_structure x4
+phronix,smoke,smoke test runs to completion,pass,session_run_smoke_test succeeded; the annotated app ran and emitted a trace
+phronix,trace,trace produced with application events,pass,"tmp/run/trace-f051c67f043b7130-app.pfw.gz, 30,193 bytes, 2,520 events"
+phronix,trace,trace covers the I/O hot path,pass,"2504 of 2520 events are per-individual writes; reads named separately"
+bare,setup,DFTracer installed from specified GitLab develop,workaround,"got there, but only after a std::filesystem link failure under the default GCC 8.5. It diagnosed the cause exactly ('a missing -lstdc++fs link issue') and then did NOT apply it -- it swapped toolchain with module load gcc/10.3.1 + CC/CXX. phronix's installer injects LDFLAGS=-ldl -lstdc++fs on every run, so the same install is a no-effort step"
+bare,setup,installed build is a real versioned release,pass,2.1.1.post36.dev0
+bare,setup,isolated per-run environment,workaround,"venv/ exists, but only after numpy 1.19.5 failed to build on Python 3.11 and the run downgraded the interpreter to 3.9.12 to pick up prebuilt wheels -- having already observed that individuals.py has no external dependencies at all"
+bare,annotate,VCF read path annotated,pass,"readfile events present in the trace (2 occurrences)"
+bare,annotate,per-individual write path annotated,pass,"write_individual_file x2504 -- the write loop body was extracted into its own function so it could be decorated"
+bare,annotate,annotations linted,fail,"no lint step of any kind; 39 of 50 calls were Bash, with no annotation tooling"
+bare,annotate,independent validation performed,fail,"no validation step; annotation correctness was inferred from the app running"
+bare,smoke,smoke test runs to completion,pass,the annotated app ran and emitted a trace
+bare,trace,trace produced with application events,pass,"source/trace/*.pfw.gz, 30,886 bytes, 2,512 events"
+bare,trace,trace covers the I/O hot path,pass,"2504 of 2512 events are per-individual writes"
+phronix,trace,every instrumented region has a span,pass,"2510 application events across 6 distinct regions: readfile x2, vcf_read_filter, write_individual x2504, compress, compress_tar, processing. The tar step is wrapped at both levels (outer compress + inner compress_tar)"
+bare,trace,every instrumented region has a span,fail,"2509 application events across 6 regions, but the outer compress() function has NO span -- only the inner compress_tar. A reader of this trace cannot separate time spent entering the tar step from time inside it, which phronix's trace does show"

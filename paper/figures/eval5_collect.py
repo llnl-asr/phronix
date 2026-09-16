@@ -165,6 +165,8 @@ def main() -> None:
     ap.add_argument("--app-url", default="")
     ap.add_argument("--smoke-cmd", default="")
     ap.add_argument("--dataset", default="")
+    ap.add_argument("--single-phase", action="store_true",
+                    help="neither arm emitted phase markers: report totals")
     args = ap.parse_args()
 
     dest = Path(args.out) if args.out else PAPER / "runs" / args.workload
@@ -219,6 +221,7 @@ def main() -> None:
 
     # Per-phase CSV for figure 5a, straight from eval5_steps.py so the folder
     # and the figure cannot disagree.
+    single_phase = args.single_phase
     merged = dest / "eval5_phases.csv"
     parts = []
     for arm in ("phronix", "bare"):
@@ -230,6 +233,8 @@ def main() -> None:
         cmd = [sys.executable, str(HERE / "eval5_steps.py"), str(raw),
                "--arm", arm, "--empty-arm", "", "--out", str(steps),
                "--phases-out", str(out)]
+        if single_phase:
+            cmd.append("--single-phase")
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode == 0 and out.exists():
             parts.append(out)

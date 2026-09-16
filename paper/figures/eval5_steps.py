@@ -51,7 +51,7 @@ FIELDS = ["order", "step", "calls_ok", "calls_failed", "repeats",
 #: annotate takes validation and the init/fini fix with it: both only exist
 #: because annotation happened, and splitting them would credit annotation
 #: with less work than it caused.
-PHASES = ["setup", "annotate", "build", "smoke"]
+PHASES = ["setup", "annotate", "build", "smoke", "trace"]
 PHASE_OF_STEP = {
     "(setup)": "setup",
     "STEP 1: session setup + detect": "setup",
@@ -61,12 +61,27 @@ PHASE_OF_STEP = {
     "STEP: dftracer-validate-c": "annotate",
     "STEP: fix-init-fini-ordering": "annotate",
     "STEP 4-5: build annotated + smoke test": "build",
+    # 1000genome (pure Python: nothing compiles, so "build" is the smoke of
+    # the annotated app and the trace run is its own phase).
+    "STEP 1: session setup": "setup",
+    "STEP 2: prepare run data": "setup",
+    "STEP 3: annotate individuals.py": "annotate",
+    "STEP: dftracer-annotate-python individuals.py": "annotate",
+    "STEP 4: build/smoke-test annotated version": "build",
+    "STEP 5: annotation report": "annotate",
+    "STEP 6: prep trace run": "trace",
+    "STEP 7: trace collection + analysis": "trace",
     # A bare run's steps ARE the phases: they come from its todo list, which
     # names the phase directly (see TODO_PHASE).
     "setup": "setup",
+    "(setup)": "setup",
     "annotate": "annotate",
     "build": "build",
     "smoke": "smoke",
+    # Inferred-phase names (MILESTONE_PHASE) map to themselves too; "trace"
+    # exists only in the inferred set and was missing here, which aborted the
+    # whole rollup rather than losing one row.
+    "trace": "trace",
 }
 
 #: The smoke test lives inside a step that also builds, so it cannot be
@@ -84,6 +99,21 @@ TODO_PHASE = (
     ("build", ("build", "compile", "configure")),
     ("annotate", ("annotat",)),
     ("setup", ("clone", "venv", "install", "environment", "setup")),
+)
+
+
+#: RETIRED, kept as a warning. This inferred a run's phase from patterns in
+#: tool inputs and results. It cannot work: the evidence words appear in the
+#: brief and in loaded skills long before the work happens, so phronix jumped
+#: straight to "trace" on turn one (92 of 101 calls) while bare never left
+#: "setup". Phase attribution needs markers a run EMITS, not words it reads.
+#: When a run emits none, say so -- do not synthesise an axis.
+MILESTONE_PHASE = (
+    ("annotate", r"dft_fn|DFTracerFn|@_dft|python_annotate|dftracer\.python|"
+                 r"log_this|initialize_log"),
+    ("smoke",    r"Chromosome \d+ processed in|chr\d+n-\d+-\d+\.tar\.gz|"
+                 r"individuals\.py .*\d+ \d+ \d+"),
+    ("trace",    r"\.pfw(\.gz)?\b|DFTRACER_LOG_FILE|dftracer_info|event_count"),
 )
 
 
@@ -138,9 +168,28 @@ def scan(path: Path) -> list[dict]:
     seen: Counter = Counter()
 
     current_todo = ["(setup)"]          # bare run's phase, from its todo list
+    import re as _re
+    ms_pats = [(n, _re.compile(p, _re.I)) for n, p in MILESTONE_PHASE]
+    ms_reached = []                     # phases entered, in order, never undone
 
     def current() -> str:
-        return open_stack[-1] if open_stack else current_todo[0]
+        # Markers first, then the run's own todo list. Nothing is inferred from
+        # narrative text -- see MILESTONE_PHASE for why that was removed.
+        if open_stack:
+            return open_stack[-1]
+        return current_todo[0]
+
+    def note_evidence(text: str) -> None:
+        """Advance the inferred phase on the first sighting of its evidence."""
+        for name, pat in ms_pats:
+            if name not in ms_reached and pat.search(text):
+                # Phases are ordered; entering one implies the earlier ones.
+                for earlier, _ in MILESTONE_PHASE:
+                    if earlier not in ms_reached:
+                        ms_reached.append(earlier)
+                    if earlier == name:
+                        break
+                break
 
     def ensure(name: str) -> dict:
         if name not in by_name:
@@ -177,7 +226,12 @@ def scan(path: Path) -> list[dict]:
                 ensure(current())["gen_chars"] += len(
                     block.get("text") or block.get("thinking") or "")
 
+            if block.get("type") == "tool_result":
+                _c = block.get("content")
+                note_evidence(_c if isinstance(_c, str) else json.dumps(_c))
+
             if block.get("type") == "tool_use":
+                note_evidence(json.dumps(block.get("input") or {}))
                 ensure(current())["gen_chars"] += len(
                     json.dumps(block.get("input") or {}))
                 name = str(block.get("name", "?"))
@@ -328,16 +382,39 @@ def rollup(steps: list[dict], smoke_extra: Counter, smoke_work: Counter,
     # The smoke test is charged to smoke, not to the build step that hosts it.
     # Its calls move with it, or smoke shows capabilities but no work and the
     # per-call normalisation divides by zero.
+    # Move only what build actually holds. When a run never opened a build
+    # step -- a pure-Python app, or a run that skipped the step markers
+    # altogether -- the smoke calls were never charged to build, and
+    # subtracting them anyway drove the column negative (-3 calls, which is
+    # not a thing a run can do).
+    # The smoke carve-out only means something when build and smoke are both
+    # phases. Under --single-phase there is one bucket and nothing to move.
+    if not ("build" in phases and "smoke" in phases):
+        rows = [phases[p] for p in PHASES]
+        for field, total, weight in (("tokens_in", totals.get("in", 0), "turns"),
+                                     ("tokens_out", totals.get("out", 0), "gen_chars")):
+            pool = sum(r[weight] for r in rows) or 1
+            for r in rows:
+                r[field] = round(total * r[weight] / pool)
+        for r in rows:
+            calls = r["calls"] or 1
+            r["tokens_in_per_call"] = round(r["tokens_in"] / calls)
+            r["tokens_out_per_call"] = round(r["tokens_out"] / calls)
+            r.pop("turns", None); r.pop("gen_chars", None)
+        return rows
+
     moved = 0
     for field, count in smoke_extra.items():
-        phases["build"][field] -= count
-        phases["smoke"][field] += count
-        moved += count
-    phases["build"]["calls"] -= moved
+        take = min(count, phases["build"].get(field, 0))
+        phases["build"][field] -= take
+        phases["smoke"][field] += take
+        moved += take
+    phases["build"]["calls"] = max(0, phases["build"]["calls"] - moved)
     phases["smoke"]["calls"] += moved
     # ... and the turns that issued them, so the token apportionment below has
     # something to divide into smoke instead of leaving it at zero.
     for field, count in smoke_work.items():
+        count = min(count, max(0, phases["build"].get(field, 0)))
         phases["build"][field] -= count
         phases["smoke"][field] += count
 
@@ -374,6 +451,11 @@ def main() -> None:
                     help="four-phase rollup, the input eval5_plot.py reads")
     ap.add_argument("--arm", default="phronix",
                     help="name this run's arm in the phase rollup")
+    ap.add_argument("--single-phase", action="store_true",
+                    help="roll the whole run into one phase named 'all'. For "
+                         "a pair where neither arm emitted phase markers, this "
+                         "reports the totals honestly instead of inventing an "
+                         "axis from narrative text.")
     ap.add_argument("--empty-arm", default="bare",
                     help="also emit all-zero rows for this arm, as a "
                          "placeholder until it is actually run "
@@ -388,6 +470,13 @@ def main() -> None:
         w.writeheader()
         w.writerows(steps)
 
+    if args.single_phase:
+        # Neither arm emitted phase markers, so there is no honest axis to
+        # split on. Report the run's totals under one phase rather than
+        # inventing a breakdown.
+        for row in steps:
+            PHASE_OF_STEP[row["step"]] = "all"
+        PHASES[:] = ["all"]
     phases = rollup(steps, smoke_extra, smoke_work,
                     run_totals(Path(args.stream)),
                     arm=args.arm)

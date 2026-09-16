@@ -1,6 +1,6 @@
 # eval5 — 1000genome
 
-Collected 2026-09-15 16:36. Everything here was produced by
+Collected 2026-09-15 17:56. Everything here was produced by
 `paper/figures/eval5_collect.py`; nothing is transcribed by hand.
 
 * application: `https://github.com/pegasus-isi/1000genome-workflow @ master`
@@ -11,11 +11,11 @@ Collected 2026-09-15 16:36. Everything here was produced by
 
 | | bare | phronix |
 |---|---|---|
-| finished | False | False |
-| turns | 0 | 0 |
-| cost | $0.00 | $0.00 |
-| tokens out | 0 | 0 |
-| workdir | `/p/lustre3/haridev/1kg-eval/bare/1kg-20260915_161213` | `/usr/WS2/haridev/dftracer-agents/workspaces/1000genome_workflow/20260915_231313` |
+| finished | True | True |
+| turns | 51 | 2 |
+| cost | $1.11 | $4.12 |
+| tokens out | 23,347 | 600 |
+| workdir | `/p/lustre3/haridev/1kg-eval/bare/1kg-20260915_165536` | `/usr/WS2/haridev/dftracer-agents/workspaces/1000genome_workflow/20260915_235814` |
 
 ## Traces produced
 
@@ -26,10 +26,8 @@ it -- recorded here as such rather than counted as a success.
 
 | arm | file | bytes | events | app events |
 |---|---|---|---|---|
-| bare | `scratch_test/trace/test-246c3a94fe4b0a7e-app.pfw.gz` | 277 | 10 | end;foo;start;thread_name |
-| bare | `source/trace/individuals-bc3234d9cb707aab-app.pfw.gz` | 0 | 0 | **none** |
-| phronix | `baseline/traces/compact/baseline-673b180b-d106597a4933fe30-app.pfw.gz` | 880 | 13 | compress;end;main;processing;readfile;start;thread_name |
-| phronix | `baseline/traces/raw/baseline-673b180b-d106597a4933fe30-app.pfw.gz` | 880 | 13 | compress;end;main;processing;readfile;start;thread_name |
+| bare | `run/trace/individuals-2f1e0190c404c096-app.pfw.gz` | 30,886 | 2512 | compress;end;readfile;start;thread_name;write_individual_file |
+| phronix | `tmp/run/trace-f051c67f043b7130-app.pfw.gz` | 30,193 | 2520 | compress;compress_tar;end;processing;readfile;start;thread_name;vcf_read_filter;write_individual |
 
 ## Layout
 

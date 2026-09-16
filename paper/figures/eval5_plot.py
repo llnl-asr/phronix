@@ -74,7 +74,7 @@ KINDS = [
 #: is made.
 ARMS = ["bare", "phronix"]
 
-PHASES = ["setup", "annotate", "build", "smoke"]
+PHASES = ["all"]
 
 
 def load_style(path: Path) -> dict:
@@ -134,12 +134,25 @@ def main() -> None:
     # per action (~1e5) lives in the upper panel, output per action (~1e2-1e3)
     # in the lower one, and each line is drawn on both twins so whichever
     # panel holds it renders it.
-    fig, (ax_hi, ax) = plt.subplots(
-        2, 1, sharex=True, figsize=style["dimensions"][args.size],
-        gridspec_kw={"height_ratios": [1, 1.3], "hspace": 0.06})
-    ax2 = ax.twinx()
-    ax2_hi = ax_hi.twinx()
-    panels = ((ax, ax2), (ax_hi, ax2_hi))
+    # With one phase there are only two bars and nothing to compress, so the
+    # break is pure damage: it clipped the taller bar and left the upper panel
+    # unlabelled. Draw a single panel instead, and show tokens-per-action as
+    # text rather than a line -- a line through one x value is a dot, and a dot
+    # lands inside the bar cluster where the bars (drawn above) hide it.
+    single = n == 1
+    if single:
+        fig, ax = plt.subplots(figsize=style["dimensions"][args.size])
+        ax_hi = ax
+        ax2 = ax.twinx()
+        ax2_hi = ax2
+        panels = ((ax, ax2),)
+    else:
+        fig, (ax_hi, ax) = plt.subplots(
+            2, 1, sharex=True, figsize=style["dimensions"][args.size],
+            gridspec_kw={"height_ratios": [1, 1.3], "hspace": 0.06})
+        ax2 = ax.twinx()
+        ax2_hi = ax_hi.twinx()
+        panels = ((ax, ax2), (ax_hi, ax2_hi))
 
     # Four bars per phase: two arms, each with a success and a failure stack.
     # Four bars a phase in two pairs. The gap between the pairs is wider than
@@ -185,7 +198,7 @@ def main() -> None:
         # a log axis has no way to misread.
         return [table[(arm, p)][field] or float("nan") for p in PHASES]
 
-    for arm, dash, mark in (("phronix", "-", "o"), ("bare", ":", "^")):
+    for arm, dash, mark in (() if single else (("phronix", "-", "o"), ("bare", ":", "^"))):
         for _, tok_ax in panels:
             tok_ax.plot(x, series(arm, "tokens_in_per_call"), color=pal[0],
                         marker=mark, markersize=7, linewidth=2.5,
@@ -213,6 +226,51 @@ def main() -> None:
     # Break at 80: everything except annotate's 239 fits below it, including
     # phronix's 73-call setup and 75-call build, which a lower break would
     # have pushed across the seam and made unreadable in both panels.
+    if single:
+        figtools.set_ticks(ax, tallest, 5, minor=2)
+        ax.set_ylim(0, ax.get_ylim()[1] * 1.28)
+        ax2.set_axis_off()
+        for xpos, total in tops:
+            if total:
+                ax.annotate(f"{total:.0f}", xy=(xpos, total), xytext=(0, 2),
+                            textcoords="offset points", ha="center",
+                            va="bottom", fontsize=small,
+                            color=style["text_secondary"])
+        ax.set_xticks(range(n))
+        ax.set_xticklabels(["" for _ in PHASES])
+        for i in range(n):
+            for ai, arm in enumerate(ARMS):
+                c = i - (span + gap) / 2 + width * (ai * 2 + 1) + gap * ai
+                r = table[(arm, PHASES[i])]
+                # Tokens per action ride under the arm name. Placed over the
+                # bars they were hidden by them: the bars own the higher
+                # z-order so the taller arm's label vanished entirely.
+                ax.annotate(f"{arm}\n{r['tokens_in_per_call']:,} in / "
+                            f"{r['tokens_out_per_call']:,} out\nper action",
+                            xy=(c, 0), xytext=(0, -6),
+                            textcoords="offset points", ha="center", va="top",
+                            fontsize=small, color=style["text_secondary"],
+                            annotation_clip=False)
+        ax.set_ylabel("# Tool calls")
+        ax.set_xlim(-0.5, n - 0.5)
+        ax.grid(axis=style["axes"]["grid_axis"],
+                alpha=style["axes"]["grid_alpha"])
+        ax.set_axisbelow(True)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        keys = [Patch(facecolor=c, label=l) for _f, c, l in OUTCOME]
+        keys += [Patch(facecolor=style["surface"], hatch=h,
+                       edgecolor=style["text_secondary"], label=l)
+                 for _k, h, l in KINDS if h]
+        fig.legend(handles=keys, loc="upper center", bbox_to_anchor=(0.5, 1.0),
+                   ncol=4, frameon=False, handlelength=1.6,
+                   columnspacing=1.1, fontsize=small)
+        fig.subplots_adjust(left=0.13, right=0.97, top=0.84, bottom=0.26)
+        out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out)
+        print(f"wrote {out}")
+        return
+
     BREAK = 80
     # Upper limit from the data, not a constant: adding "other" to the stacks
     # took the tallest bar from 167 to 239, which a hardcoded 240 clipped flat
@@ -257,7 +315,7 @@ def main() -> None:
              fontsize=plt.rcParams["axes.labelsize"])
 
     # The arm names sit under the ticks, so the stage title clears both.
-    ax.set_xlabel("Stage", labelpad=6)
+    ax.set_xlabel("", labelpad=6)
 
     ax.set_xlim(-0.5, n - 0.5)
     for bar_ax in (ax, ax_hi):

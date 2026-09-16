@@ -63,7 +63,7 @@ OUTCOMES = [
 #: Baseline first, then what is being argued for -- the same order as
 #: eval5a, so the two figures can be read side by side.
 ARMS = ["bare", "phronix"]
-STAGES = ["setup", "annotate", "build", "smoke"]
+STAGES = ["setup", "annotate", "smoke", "trace"]
 
 
 def load_style(path: Path) -> dict:

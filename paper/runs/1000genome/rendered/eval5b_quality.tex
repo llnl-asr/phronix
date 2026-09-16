@@ -1,0 +1,29 @@
+% Requires: \usepackage{booktabs}
+% Symbols used below -- define once in your preamble:
+% \newcommand{\cmark}{\ding{51}}              % correct
+% \newcommand{\rmark}{\ding{51}$^{\dagger}$}  % correct after self-repair
+% \newcommand{\wmark}{$\circ$}                % workaround
+% \newcommand{\xmark}{\ding{55}}              % incorrect
+
+\begin{tabular}{llcc}
+\toprule
+Stage & Check & Bare & Phronix \\
+\midrule
+setup & DFTracer installed from specified GitLab develop & \wmark & \cmark \\
+ & installed build is a real versioned release & \cmark & \cmark \\
+ & isolated per-run environment & \wmark & \cmark \\
+\addlinespace
+annotate & VCF read path annotated & \cmark & \cmark \\
+ & per-individual write path annotated & \cmark & \cmark \\
+ & annotations linted & \xmark & \cmark \\
+ & independent validation performed & \xmark & \cmark \\
+\addlinespace
+smoke & smoke test runs to completion & \cmark & \cmark \\
+\addlinespace
+trace & trace produced with application events & \cmark & \cmark \\
+ & trace covers the I/O hot path & \cmark & \cmark \\
+ & every instrumented region has a span & \xmark & \cmark \\
+\midrule
+\multicolumn{2}{l}{\textbf{Checks correct}} & \textbf{6/11} & \textbf{11/11} \\
+\bottomrule
+\end{tabular}

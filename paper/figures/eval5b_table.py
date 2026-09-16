@@ -22,7 +22,7 @@ import csv
 from collections import defaultdict
 from pathlib import Path
 
-STAGES = ["setup", "annotate", "build", "smoke"]
+STAGES = ["setup", "annotate", "smoke", "trace"]
 ARMS = ["bare", "phronix"]
 
 #: How each outcome prints. The symbol carries the verdict so a reader
