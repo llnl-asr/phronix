@@ -1,0 +1,28 @@
+{
+ "name": "phronix_learn_from_attempt",
+ "description": "What to record after a task attempt (from attempt-diff.patch, attempt-notes.md, exchange.md): a solution skill named solution-<topic> when it passed, what worked vs lessons when several candidates ran, both halves of a partial pass (fail_to_pass_passing / fail_to_pass_failing), short directive entries, hypotheses marked, skill vs memory by lifetime. Load after any attempt finishes, when a pass left no skill, when 'no skill covers this task' appears for a solved subject, or when a lesson would rule out a correct idea.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_learn_from_attempt_plan",
+  "phronix_learn_from_attempt_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_learn_from_attempt_plan"
+  ],
+  "validator": [
+   "phronix_learn_from_attempt_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-learn-from-attempt (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

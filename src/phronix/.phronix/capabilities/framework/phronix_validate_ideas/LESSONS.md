@@ -1,0 +1,4 @@
+# Lessons: phronix_validate_ideas
+
+- [L-43e3fe3f] pylint-dev__pylint-7114: four ideas survived (module-name-conflict-resolution, init-file-fallback, module-search-order, expand_modules); every patch changed get_python_path in pylint/lint/expand_modules.py; three tries, five containers each, nothing passed -> each idea was defensible alone but the SET was one idea -> compare each idea's where; same file/function means overlap; send back naming the clash (I2b) (2026-09-15, phronix-validate-ideas I2b)
+- [L-e9ecaa14] a validation pass listed every skill, recalled every memory, loaded three skills and reached for a probe for fifteen minutes, then was killed having judged nothing -> wandering instead of judging from the given ideas and record -> a lookup or two at most; record the opinion and finish (X1) (2026-09-15, phronix-validate-ideas X1)

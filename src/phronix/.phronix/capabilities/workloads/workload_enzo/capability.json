@@ -1,0 +1,33 @@
+{
+ "name": "workload_enzo",
+ "description": "Enzo (enzo-2.6.1 AMR cosmology, C++ .C + Fortran, MPI) on Tuolumne: Make.mach recipe, HDF5 1.10.11, Cray-clang 20 fixes, annotation traps (dftracer.h first include, MAIN_NAME, FINI in my_exit, pre-main ctors -> bind:0), rank limits, event volumes; predictor renders it, validator checks a command list. Load for enzo, enzo.exe, gas_plus_dm_amr_multiphys.enzo, \"redefinition of 'long_int'\", \"Error interpolating field 1\", zero MPI events.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_enzo_recipe",
+  "workload_enzo_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_enzo_recipe"
+  ],
+  "validator": [
+   "workload_enzo_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-enzo"
+  }
+ ]
+}

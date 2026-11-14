@@ -1,0 +1,31 @@
+{
+ "name": "software_pip",
+ "description": "pip / PEP 517-518 builds off a pyproject.toml: build-backend detection (mesonpy -> Meson underneath, setuptools.build_meta, hatchling.build), editable vs non-editable install, --no-build-isolation in HPC venvs, forwarding project meson -D options through --config-settings=setup-args, extras, [project.scripts] CLI names, and CC/CXX/LD_LIBRARY_PATH ordering before pip. Load for any project installed with `pip install` off a pyproject.toml, or when the build step under pip cannot find a system dependency the active shell sees (build isolation), a meson option such as use_system_flux cannot be passed, or a compiled extension picks the wrong compiler.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "install"
+ ],
+ "tools": [
+  "software_pip_recipe",
+  "software_pip_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_pip_recipe"
+  ],
+  "validator": [
+   "software_pip_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607245.4141576,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-pip"
+  }
+ ]
+}

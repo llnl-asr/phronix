@@ -1,0 +1,28 @@
+{
+ "name": "phronix_skill_authoring",
+ "description": "The skill file schema: one subject per skill, labelled blocks (I/R/X) as stable keys, a generated Index, references as foreign keys ([[skill#R2]]), association skills as join tables, lessons in a separate LESSONS.md; a solution skill must carry executable Instructions (file, function, line, exact code) and name every way it can go wrong. Load before creating a skill or restructuring one, or when a skill has an empty '## Instructions', cites a label that does not exist (I1, X15), widened to two subjects, or was misread by a weaker model (assert instead of raise ValueError).",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_skill_authoring_plan",
+  "phronix_skill_authoring_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_skill_authoring_plan"
+  ],
+  "validator": [
+   "phronix_skill_authoring_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-skill-authoring (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

@@ -1,0 +1,41 @@
+[
+ {
+  "tool": "elmerfold_nodes",
+  "args": {
+   "chunks": 2
+  },
+  "expect": {
+   "contains": "3"
+  }
+ },
+ {
+  "tool": "elmerfold_type_cut",
+  "args": {
+   "name": "abcdefghijklmnopqrstuvwxyz0123456789"
+  },
+  "expect": {
+   "contains": "abcdefghijklmnopqrstuvwxyz01234"
+  }
+ },
+ {
+  "tool": "elmerfold_spec_validate",
+  "args": {
+   "spec": "{}"
+  },
+  "expect": {
+   "contains": "stage_area"
+  }
+ },
+ {
+  "tool": "elmerfold_gap_batch",
+  "args": {},
+  "expect": {
+   "contains": "subprocess_finish"
+  }
+ },
+ {"tool": "workload_elmerfold_recipe", "args": {}, "expect": {"contains": "mpifileutils/0.11.1"}},
+ {"tool": "workload_elmerfold_check", "args": {"commands": ["python utils/gen_launch_script.py --config configs/tuolumne_test.yaml -- run.sh", "flux batch -t 1h --queue pdebug run.sh"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_elmerfold_check", "args": {"commands": ["pip install git+ssh://git@example/openfoldcollab/emf_data.git"]}, "expect": {"contains": "no_emf_data"}},
+ {"tool": "workload_elmerfold_check", "args": {"commands": ["./setup-env.sh --use-rocm7 --no-managed-python /lustre/venv", "uv pip install -e ./ems", "module load mpifileutils/0.11.1", "flux batch -t 1h --queue pdebug run.sh"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_elmerfold_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

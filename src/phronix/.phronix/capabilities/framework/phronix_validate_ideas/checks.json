@@ -1,0 +1,137 @@
+[
+ {
+  "tool": "phronix_validate_ideas_plan",
+  "args": {
+   "goal": "four ideas for pylint-dev__pylint-7114"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_validate_ideas_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_validate_ideas_check",
+  "args": {
+   "record": {
+    "ideas": [
+     {
+      "name": "relative-form",
+      "keep": true,
+      "where": "expand_modules.py:get_python_path",
+      "reason": "changes the patch"
+     },
+     {
+      "name": "namespace-pkg",
+      "keep": true,
+      "where": "modutils.py:is_namespace",
+      "reason": "decides package kind"
+     },
+     {
+      "name": "which-file",
+      "keep": false,
+      "reason": "already known"
+     }
+    ],
+    "decomposition": [
+     {
+      "sufficient": "yes",
+      "ordered": "yes",
+      "checkable": "yes",
+      "no_regressions": "step 3"
+     }
+    ],
+    "recorded": "research_set_aspects([relative-form, namespace-pkg])",
+    "count": 2
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_validate_ideas_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_validate_ideas_plan",
+  "args": {
+   "goal": "four ideas for pylint-dev__pylint-7114",
+   "facts": {
+    "fewer_than_three": true
+   }
+  },
+  "expect": {
+   "contains": "name the rejections specifically"
+  }
+ },
+ {
+  "tool": "phronix_validate_ideas_check",
+  "args": {
+   "record": {
+    "ideas": [
+     {
+      "name": "a",
+      "keep": true,
+      "where": "expand_modules.py:get_python_path",
+      "reason": "r"
+     },
+     {
+      "name": "b",
+      "keep": true,
+      "where": "expand_modules.py:get_python_path",
+      "reason": "r"
+     }
+    ],
+    "decomposition": [
+     {
+      "sufficient": "y",
+      "ordered": "y",
+      "checkable": "y",
+      "no_regressions": "y"
+     }
+    ],
+    "recorded": "research_set_aspects",
+    "count": 2
+   }
+  },
+  "expect": {
+   "contains": "they are one idea"
+  }
+ },
+ {
+  "tool": "phronix_validate_ideas_check",
+  "args": {
+   "record": {
+    "ideas": [
+     {
+      "name": "a",
+      "keep": true,
+      "reason": "r"
+     }
+    ],
+    "recorded": "",
+    "count": 5
+   }
+  },
+  "expect": {
+   "contains": "do not pad"
+  }
+ }
+]

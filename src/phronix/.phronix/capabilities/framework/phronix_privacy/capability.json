@@ -1,0 +1,28 @@
+{
+ "name": "phronix_privacy",
+ "description": "Redact usernames, home and user paths, hostnames with node numbers, emails, job ids and session UUIDs from anything written to the shared store, without over-redacting citations or software versions; verify deterministically with privacy_scan, hunt unencoded leak classes with privacy_suspects, and teach the redactor with privacy_add_pattern. Load before any commit, pull request, promotion or 'phronix contribute', after every self-learning write, and when a scan is not 'clean'.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_privacy_plan",
+  "phronix_privacy_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_privacy_plan"
+  ],
+  "validator": [
+   "phronix_privacy_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-privacy (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

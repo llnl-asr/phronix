@@ -1,0 +1,30 @@
+{
+ "name": "system_detect",
+ "description": "Detect the current HPC/container system with mcp__dftracer__system_detect (hostname with trailing digits stripped -> resources/systems.yaml lookup returning module load order, env vars, MPI launcher, notes) and route to its system_<name> capability, or register a new system with mcp__dftracer__system_save. Load at the start of any dftracer session, when the system is unknown, when system_detect returns 'not in systems.yaml', or at session close to persist newly learned system nuances.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "scope"
+ ],
+ "tools": [
+  "system_detect_recipe",
+  "system_detect_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "system_detect_recipe"
+  ],
+  "validator": [
+   "system_detect_check"
+  ]
+ },
+ "topic": "systems",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608065.3622344,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) system-detect"
+  }
+ ]
+}

@@ -1,0 +1,112 @@
+[
+ {
+  "tool": "phronix_stage_finalize_plan",
+  "args": {
+   "goal": "propose stage that named three approaches and timed out"
+  },
+  "expect": {
+   "contains": "\"id\": \"X1\""
+  }
+ },
+ {
+  "tool": "phronix_stage_finalize_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_stage_finalize_check",
+  "args": {
+   "record": {
+    "stage": "propose",
+    "stage_status": "timed_out",
+    "calls": [
+     "research_add_approach(a)",
+     "research_add_approach(b)",
+     "research_add_approach(c)"
+    ],
+    "investigated": false,
+    "fabricated": false,
+    "partial_items": []
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_stage_finalize_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_stage_finalize_plan",
+  "args": {
+   "goal": "propose stage that named three approaches and timed out",
+   "facts": {
+    "stage_failed": true
+   }
+  },
+  "expect": {
+   "contains": "nothing to file"
+  }
+ },
+ {
+  "tool": "phronix_stage_finalize_check",
+  "args": {
+   "record": {
+    "stage": "propose",
+    "stage_status": "timed_out",
+    "calls": [],
+    "investigated": false,
+    "fabricated": false
+   }
+  },
+  "expect": {
+   "contains": "file each finding"
+  }
+ },
+ {
+  "tool": "phronix_stage_finalize_check",
+  "args": {
+   "record": {
+    "stage": "tune",
+    "stage_status": "timed_out",
+    "calls": [
+     "research_add_approach(x)"
+    ],
+    "investigated": true,
+    "fabricated": false
+   }
+  },
+  "expect": {
+   "contains": "research_record_trial"
+  }
+ },
+ {
+  "tool": "phronix_stage_finalize_check",
+  "args": {
+   "record": {
+    "stage": "diagnose",
+    "stage_status": "failed",
+    "calls": [
+     "x"
+    ]
+   }
+  },
+  "expect": {
+   "contains": "files nothing"
+  }
+ }
+]

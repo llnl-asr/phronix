@@ -1,0 +1,55 @@
+[
+ {
+  "tool": "workload_af3_recipe",
+  "args": {},
+  "expect": {
+   "contains": "1088"
+  }
+ },
+ {
+  "tool": "workload_af3_recipe",
+  "args": {
+   "variant": "large_1e66"
+  },
+  "expect": {
+   "contains": "793 s"
+  }
+ },
+ {
+  "tool": "workload_af3_check",
+  "args": {
+   "commands": [
+    "diff a/1e66_model.cif b/1e66_model.cif"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_af3_check",
+  "args": {
+   "commands": [
+    "python run_alphafold.py --json_path=in.json --buckets=256,512,768,1024,1088,1536,2048"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_af3_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

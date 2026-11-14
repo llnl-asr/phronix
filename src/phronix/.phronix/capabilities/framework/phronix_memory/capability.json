@@ -1,0 +1,28 @@
+{
+ "name": "phronix_memory",
+ "description": "Decide whether something belongs in memory or a skill, pick the memory type (project, feedback, reference, lesson), write a description that retrieves, link it with [[wikilinks]], and choose the layer that should inherit it. Load before recording a durable fact, a decision or user guidance, or when wondering why a memory was never surfaced ('memory not injected', 'type: user rejected', a feedback memory without Why).",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_memory_plan",
+  "phronix_memory_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_memory_plan"
+  ],
+  "validator": [
+   "phronix_memory_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-memory (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

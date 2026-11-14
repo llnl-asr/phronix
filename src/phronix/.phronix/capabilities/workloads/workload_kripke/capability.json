@@ -1,0 +1,33 @@
+{
+ "name": "workload_kripke",
+ "description": "Kripke (LLNL Sn transport proxy, C++17 + RAJA/Umpire/CHAI, BLT/CMake superbuild): configure the inner cmake/kripke project, 8 submodules, RAJA extras off, annotation compile flags, functions the cost filter wrongly skips (sweepSubdomain, SweepComm), FINI before Comm::finalize, headers not to annotate, run decomposition and the MPI_Testany polling hot spot. Load for kripke, 'The BLT submodule is not present', 'CAMP submodule not initialized', functions: 0.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_kripke_recipe",
+  "workload_kripke_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_kripke_recipe"
+  ],
+  "validator": [
+   "workload_kripke_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-kripke"
+  }
+ ]
+}

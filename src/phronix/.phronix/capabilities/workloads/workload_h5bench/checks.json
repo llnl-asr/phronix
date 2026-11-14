@@ -1,0 +1,9 @@
+[
+ {"tool": "workload_h5bench_recipe", "args": {}, "expect": {"contains": "-DH5BENCH_ALL=ON"}},
+ {"tool": "workload_h5bench_recipe", "args": {"variant": "write_opt_768"}, "expect": {"contains": "CRAY_CB_NODES_MULTIPLIER"}},
+ {"tool": "workload_h5bench_recipe", "args": {"variant": "nope"}, "expect": {"contains": "unknown variant"}},
+ {"tool": "workload_h5bench_check", "args": {"commands": ["cmake -S source -B build", "DELAYED_CLOSE_TIMESTEPS=2", "cc main.o -ldftracer"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_h5bench_check", "args": {"commands": ["cmake -S source -B build -DH5BENCH_ALL=ON", "DFTRACER_ENABLE=0 ./h5bench_write w.cfg read.h5", "DFTRACER_ENABLE=1 DFTRACER_DATA_DIR=all ./h5bench_read read.cfg read.h5", "export MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable:cb_nodes=16\""]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_h5bench_check", "args": {"commands": "export MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable;cb_buffer_size=67108864\""}, "expect": {"contains": "hints_colon_separated"}},
+ {"tool": "workload_h5bench_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

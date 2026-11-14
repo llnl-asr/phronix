@@ -1,0 +1,17 @@
+# Lessons: software_flux_fiction
+
+- [L-49910cc3] error: call to undeclared function 'strdup' (ISO C99) in src/jobtap/ff_otel.c -> Meson c_std=c99 strict on Cray clang; _POSIX_C_SOURCE ignored -> -D_GNU_SOURCE in the shared_module c_args (undated)
+- [L-d82041b4] every job event attributed to the single emulator host -> all job emulation runs in one Python process; pid/tid fixed at init -> tag start_job/complete_job events with string_args mhost (not hhash) (2026-07-16)
+- [L-b417da13] per-node grouping impossible with mhost='20,21,...,29' -> one event with a comma-joined node list -> one log_event per allocated node, same start_time/duration, only mhost differs (2026-07-17)
+- [L-31917455] log_event(): incompatible function arguments, silently zero job events -> bare values in int_args/string_args; exception swallowed by except Exception -> (0, value) tuples; verify events with reader/event_count (2026-07-17)
+- [L-2c25c724] log_event silently no-ops; trace not flushed -> no initialize_log() at entry point; sys.exit(0) does not flush -> initialize_log(logfile, data_dir) in run_api_experiment.py, finalize() in finally: (2026-07-17)
+- [L-79826e0b] config-relative input file missing -> remap_path() resolves against process CWD -> run src/config.toml from annotated/source/src (2026-07-17)
+- [L-318af413] Unknown service method 'sched.quiescent': Function not implemented; jobs block after alloc -> stock sched-fluxion-qmanager 0.52.0 lacks the RPC -> MockAdapter (backend=mock) for pipeline validation; small CSV + hard timeout for real-backend smoke (2026-07-17)
+- [L-6c6a7329] import flux fails in session venv -> flux bindings need cffi, pyyaml, ply, jsonschema -> pip install them; PYTHONPATH=/usr/lib64/flux/python3.12 (2026-07-17)
+- [L-0e0c0f14] events have name/cat/times but no args (mhost looks broken) -> DFTRACER_INC_METADATA unset -> DFTRACER_INC_METADATA=1 on every run (2026-07-17)
+- [L-ae1aa805] TypeError: Object of type method is not JSON serializable -> @_dft.log on @property Job.jobspec -> never decorate @property methods (undated)
+- [L-6f0de69f] dependency('dftracer') / -DCMAKE_PREFIX_PATH have no effect on the meson build -> no dftracer.pc shipped; meson.build finds flux-core manually; CMAKE_PREFIX_PATH is a cmake convention -> CFLAGS/LDFLAGS at meson setup time (undated)
+- [L-af6e9df4] rebuild keeps linking the old dftracer -> reused meson build dir caches CFLAGS/LDFLAGS; --reconfigure does not refresh them -> fresh build dir (undated)
+- [L-b75c70c1] pip install -e --no-build-isolation fails -> meson/meson-python/ninja not in the session venv -> let build isolation install them; CFLAGS/LDFLAGS are inherited (undated)
+- [L-494897b2] emu-jobtap.so not found by flux-fiction-run -> jobtap_path.py does not search a custom meson-python build-dir -> FLUX_FICTION_JOBTAP_SO=<path> (undated)
+- [L-6b706560] FileExistsError from create_run_root -> --run-dir from a prior attempt exists -> fresh --run-dir/--tag per retry (undated)

@@ -1,0 +1,28 @@
+{
+ "name": "phronix_complexity",
+ "description": "Measure (never guess) the model level an agent or ad-hoc task needs: complexity_assess, its drivers (reasoning_demand, failure_surface, unverified_fraction, integration_breadth, instruction_load, tool_coverage), the intrinsic floor, and reassessment after the store grows. Load when choosing an agent.json level, when an agent's level has drifted up or down, after lessons/rules/capabilities changed a subject, or when tempted to pin a model id to buy a level.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_complexity_plan",
+  "phronix_complexity_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_complexity_plan"
+  ],
+  "validator": [
+   "phronix_complexity_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-complexity (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

@@ -1,0 +1,5 @@
+# Lessons: phronix_capability_authoring
+
+- [L-698f441e] A capability that only works in one repository, written to `bundled` -> Everyone else gets a tool that always fails, and it looks like a framework bug rather than a mis-scoped contribution. -> follow phronix-capability-authoring P1 (Corner cases) (2026-09-15, dftracer-agents phronix-capability-authoring/LESSONS.md P1)
+- [L-94101463] Silent defaults for things that matter -> A tool that quietly picks a version, a path or a mode produces results nobody can reproduce, and the choice is invisible in the output. -> follow phronix-capability-authoring P2 (Corner cases) (2026-09-15, dftracer-agents phronix-capability-authoring/LESSONS.md P2)
+- [L-bfee2ae4] Expecting a new tool to be callable immediately -> A running MCP server holds tool closures captured at registration time. The tool does not exist until the server restarts — say so rather than letting the caller discover it by calling something that is not there. -> follow phronix-capability-authoring P3 (Corner cases) (2026-09-15, dftracer-agents phronix-capability-authoring/LESSONS.md P3)

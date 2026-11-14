@@ -1,0 +1,13 @@
+# Lessons: workload_minife
+
+- [L-6e1400df] miniFE openmp45-opt trace has no GPU events -> session_detect reports hip:false (it greps only the app's own source; offload goes through the OpenMP target runtime) -> pass hip=True to session_install_dftracer (undated, from dftracer-agents workload-minife)
+- [L-40c4df72] miniFE HIP_RUNTIME_API and SCRATCH_MEMORY empty while KERNEL_DISPATCH/MEMORY_COPY/PAGE_MIGRATION populate -> the app makes no HIP runtime calls (OpenMP target runtime) -> expected, not a regression (undated)
+- [L-7e6f80a9] annotation pass fails with "fatal error: 'miniFE_info.hpp' file not found" -> make clean removes the checked-in miniFE_info.hpp in openmp45-opt/src -> git checkout -- openmp45-opt/src/miniFE_info.hpp before annotating (undated)
+- [L-175bdcf8] clang_annotate_file returns status ok but 0 functions on miniFE .hpp files -> templated headers do not parse standalone -> annotate the 24 listed functions with the anchor-driven header annotator / by the table (undated)
+- [L-ecb1a0d2] miniFE prints "max absolute error is 0.20..." and main returns 1 -> verify_solution with max_iters=200 and tolerance 0.06 never converges at benchmark sizes (pristine binary identical) -> omit verify_solution; A/B with the pristine binary before blaming instrumentation (undated)
+- [L-b4d43c4e] 1-3 of 16 miniFE ranks SIGSEGV after science completes, zero-byte *-app trace files -> PAPI-sampler-vs-GOTCHA teardown race (fix not on feature/papi-counter-tracing) -> DFTRACER_ENABLE_PAPI_TRACING=0 for 16/16, or accept losing a few ranks (undated)
+- [L-49d4fc1e] raw vs split event_count differ by 10 events; stats --report summary shows Events Scanned: 0 -> event_count is approximate, stats indexer never scans event content -> compare per-category counts raw vs split (undated)
+- [L-2cb8c546] miniFE cuda: cudaErrorInvalidDevice on rank 1 then rank 0 hangs (--gpus-per-task=1), or two ranks per GPU (--gres=gpu:4) -> num_devices defaults to 2 and cudaGetDeviceCount is never called -> --gres=gpu:4 + num_devices=<gpus/node>, --kill-on-bad-exit=1, outer timeout (undated)
+- [L-831ed662] miniFE cuda on CUDA 12: "NVTX_RESOURCE_TYPE_GENERIC_HANDLE has already been declared" (35 errors in main.cu) -> legacy <nvToolsExt.h> collides with nvtx3 pulled by the runtime headers -> #include <nvtx3/nvToolsExt.h>, keep the NVTX calls (CUDA_MARKER under CUPTI) (undated)
+- [L-d89b6542] nvcc "Unknown option '-Wl,-rpath,...'" / g++ "unrecognized command-line option '-Wl'" -> nvcc rejects -Wl and -Xcompiler splits on commas -> -Xlinker -rpath -Xlinker <dir> (undated)
+- [L-dc0a609d] stock miniFE cuda Makefile fails on CUDA 12 -> hardcoded OpenMPI paths, -lmpi_cxx and sm_35 -> nvcc -ccbin mpicxx and -gencode compute_90/sm_90 (undated)

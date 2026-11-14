@@ -1,0 +1,30 @@
+{
+ "name": "software_meson",
+ "description": "Meson build system: detection (meson.build project(), meson_version, meson.options / meson_options.txt option() names, pyproject.toml build-backend mesonpy -> install through pip), meson setup / compile / install, in-place reconfigure, dependency() resolution (pkg-config -> CMake config -> wrap fallback) and project candidate lists (system pkg-config, _prefix option, sibling checkout, container installs), plus native meson support in session_configure / session_build_install / session_build_annotated. Load for any project whose top level is meson.build / meson.options, or on 'Dependency X found: NO', 'Unsupported build tool: meson', a silently ignored -D option typo, or 'implicit declaration of function strdup' under Cray clang with c_std=c99.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build"
+ ],
+ "tools": [
+  "software_meson_recipe",
+  "software_meson_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_meson_recipe"
+  ],
+  "validator": [
+   "software_meson_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607323.5657942,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-meson"
+  }
+ ]
+}

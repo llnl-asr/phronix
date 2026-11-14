@@ -1,0 +1,28 @@
+{
+ "name": "phronix_solution_candidate",
+ "description": "Write the solution skill for ONE researched approach so rival approaches can be tried against the real tests and compared fairly: ordered steps a stranger can execute, a tool per step where one exists, a check per step, the approach stated at its fairest. Load when a research pass hands you one approach to write up as a candidate, or when a candidate skill reads as a story ('we concluded', 'investigate whether') instead of steps.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_solution_candidate_plan",
+  "phronix_solution_candidate_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_solution_candidate_plan"
+  ],
+  "validator": [
+   "phronix_solution_candidate_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-solution-candidate (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

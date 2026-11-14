@@ -1,0 +1,14 @@
+{
+ "description": "Renders software_rocm's recipe and checks proposed commands against its rules; never builds or runs anything.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep",
+  "Glob"
+ ],
+ "skills": [
+  "software_rocm"
+ ],
+ "permission_mode": "default",
+ "instructions": "Render the facts with software_rocm_recipe, validate every proposed recipe or command list with software_rocm_check, and on a failed check follow the SKILL.md Corrector section, then predict and validate again. Do not run jobs or builds."
+}

@@ -1,0 +1,141 @@
+[
+ {
+  "tool": "phronix_learn_from_attempt_plan",
+  "args": {
+   "goal": "attempt on django__django-13551"
+  },
+  "expect": {
+   "contains": "\"id\": \"I0\""
+  }
+ },
+ {
+  "tool": "phronix_learn_from_attempt_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_learn_from_attempt_check",
+  "args": {
+   "record": {
+    "subject": "django-auth-tokens",
+    "verdict": "passed",
+    "evidence_read": [
+     "attempt-diff.patch",
+     "attempt-notes.md",
+     "exchange.md"
+    ],
+    "solution_skill": "solution-django-auth-tokens",
+    "entries": [
+     {
+      "text": "Use get_email_field_name() rather than user.email in the token hash: a custom user model has no email attribute (TypeError: must be str, not NoneType).",
+      "store": "skill"
+     },
+     {
+      "text": "this attempt tried user.email first; tests printed TypeError",
+      "store": "memory"
+     }
+    ],
+    "calls": [
+     "skill_write solution-django-auth-tokens",
+     "memory_write"
+    ]
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_learn_from_attempt_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_learn_from_attempt_plan",
+  "args": {
+   "goal": "attempt on django__django-13551",
+   "facts": {
+    "passed": true
+   }
+  },
+  "expect": {
+   "contains": "solution-<topic>"
+  }
+ },
+ {
+  "tool": "phronix_learn_from_attempt_plan",
+  "args": {
+   "goal": "attempt on django__django-13551",
+   "facts": {
+    "partial": true
+   }
+  },
+  "expect": {
+   "contains": "fail_to_pass_passing"
+  }
+ },
+ {
+  "tool": "phronix_learn_from_attempt_check",
+  "args": {
+   "record": {
+    "subject": "django-auth-tokens",
+    "verdict": "passed",
+    "evidence_read": [
+     "attempt-notes.md",
+     "attempt-diff.patch"
+    ],
+    "solution_skill": "",
+    "entries": [
+     {
+      "text": "fix is in memory",
+      "store": "memory"
+     }
+    ],
+    "calls": [
+     "memory_write"
+    ]
+   }
+  },
+  "expect": {
+   "contains": "a memory is not a substitute"
+  }
+ },
+ {
+  "tool": "phronix_learn_from_attempt_check",
+  "args": {
+   "record": {
+    "subject": "fix-issue-24066",
+    "verdict": "partial",
+    "evidence_read": [
+     "attempt-notes.md",
+     "attempt-diff.patch"
+    ],
+    "fail_to_pass_failing": "test_token_with_different_secret",
+    "entries": [
+     {
+      "text": "dot validation does not work",
+      "store": "skill"
+     }
+    ],
+    "calls": [
+     "x"
+    ]
+   }
+  },
+  "expect": {
+   "contains": "record the passing half as established"
+  }
+ }
+]

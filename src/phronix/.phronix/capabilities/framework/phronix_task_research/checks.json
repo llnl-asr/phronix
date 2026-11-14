@@ -1,0 +1,133 @@
+[
+ {
+  "tool": "phronix_task_research_plan",
+  "args": {
+   "goal": "django password reset token with custom email field"
+  },
+  "expect": {
+   "contains": "\"id\": \"I7\""
+  }
+ },
+ {
+  "tool": "phronix_task_research_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_task_research_check",
+  "args": {
+   "record": {
+    "problem": "test_custom_email_field fails: TypeError must be str, not NoneType at tokens.py:99",
+    "approaches": [
+     "check whether the custom user model has an email attribute"
+    ],
+    "answer": "use get_email_field_name() rather than user.email",
+    "open_failure": "test_custom_email_field TypeError at tokens.py:99",
+    "fix": [
+     {
+      "file": "django/contrib/auth/tokens.py",
+      "change": "email_field = user.get_email_field_name(); email = getattr(user, email_field, '') or ''"
+     }
+    ],
+    "must_keep_passing": [
+     "test_make_token"
+    ],
+    "lesson": "user.email form raised TypeError for CustomEmailField",
+    "retried_ruled_out": false,
+    "new_skill_created": false,
+    "research_validate_issues": [],
+    "layout_check_issues": [],
+    "solution_check_issues": []
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_task_research_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_task_research_plan",
+  "args": {
+   "goal": "django password reset token with custom email field",
+   "facts": {
+    "budget_exhausted": true
+   }
+  },
+  "expect": {
+   "contains": "narrowest supportable cause"
+  }
+ },
+ {
+  "tool": "phronix_task_research_check",
+  "args": {
+   "record": {
+    "problem": "",
+    "approaches": [],
+    "answer": "fixed",
+    "open_failure": "x",
+    "fix": [
+     {
+      "file": "a.py",
+      "change": "b"
+     }
+    ],
+    "must_keep_passing": [
+     "t"
+    ],
+    "lesson": "l",
+    "retried_ruled_out": false,
+    "new_skill_created": true
+   }
+  },
+  "expect": {
+   "contains": "two skills for one task"
+  }
+ },
+ {
+  "tool": "phronix_task_research_check",
+  "args": {
+   "record": {
+    "problem": "p",
+    "approaches": [
+     "a"
+    ],
+    "answer": "a",
+    "open_failure": "x",
+    "fix": [
+     {
+      "file": "a.py",
+      "change": "b"
+     }
+    ],
+    "must_keep_passing": [
+     "t"
+    ],
+    "lesson": "l",
+    "retried_ruled_out": false,
+    "new_skill_created": false,
+    "solution_check_issues": [
+     "prose only"
+    ]
+   }
+  },
+  "expect": {
+   "contains": "carry the fix as a diff"
+  }
+ }
+]

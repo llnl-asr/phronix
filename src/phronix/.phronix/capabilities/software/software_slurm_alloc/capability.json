@@ -1,0 +1,32 @@
+{
+ "name": "software_slurm_alloc",
+ "description": "Slurm allocation and job-step workflow (counterpart of software_flux's flux-alloc): discover partitions and per-partition MaxNodes, read sbatch --test-only start estimates, allocate with salloc/sbatch, run and co-schedule steps with srun --overlap --nodelist, keep helper daemons alive as long-lived steps, pin GPUs (--gres vs --gpus-per-task), avoid env-propagation traps, cancel only your job, make long sweeps resumable, decode squeue reasons, and verify scale with sacct. Load before any allocation, launch or multi-step run on a Slurm system, or on `Invalid generic resource (gres) specification` / `Requested node configuration is not available` for multi-node jobs, `Nodes_required_for_job_are_DOWN,_DRAINED_or_reserved_for_jobs_in_higher_priority_partitions`, a second srun step that waits forever, a daemon step that exits 0 with empty/0-byte output, or `cudaErrorInvalidDevice` under --gpus-per-task.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "scope",
+  "alloc",
+  "run"
+ ],
+ "tools": [
+  "software_slurm_alloc_recipe",
+  "software_slurm_alloc_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_slurm_alloc_recipe"
+  ],
+  "validator": [
+   "software_slurm_alloc_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608129.8279698,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) slurm-alloc"
+  }
+ ]
+}

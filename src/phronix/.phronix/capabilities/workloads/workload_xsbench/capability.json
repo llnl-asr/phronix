@@ -1,0 +1,11 @@
+{
+ "name": "workload_xsbench",
+ "description": "XSBench (Monte Carlo cross-section lookup proxy app) recipe: openmp-threading make MPI=yes build, annotated-build flags, hot per-lookup kernel exclusion (~20x slowdown otherwise), #ifdef MPI INIT fix, run sizing and memory per rank, checksum rule, cuda variant; predictor renders it, validator checks a command list. Load for XSBench, apparent hang after annotation, 'INVALID CHECKSUM', \"use of undeclared identifier 'data_fn'\", 'You cannot define MPI', gpu power records in a CPU trace.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["explore", "smoke", "instrument", "baseline"],
+ "tools": ["workload_xsbench_recipe", "workload_xsbench_check"],
+ "pvc": {"predictor": ["workload_xsbench_recipe"], "validator": ["workload_xsbench_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill workload-xsbench"}]
+}

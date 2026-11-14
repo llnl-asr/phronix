@@ -1,0 +1,33 @@
+{
+ "name": "system_matrix",
+ "description": "System profile for matrix (LLNL, 4x NVIDIA H100 sm_90 + 2x Xeon 8480+ Sapphire Rapids, TOSS 4, Slurm): the gcc/mvapich2/cuda toolchain that works, pdebug/pci/pbatch limits and backlogs, where CUPTI really lives (not /usr/local/cuda), the 17-preset PAPI ceiling, unreadable CPU power (NVML only), the pip index override, and the Slurm traps (RestrictedCoresPerGPU, DefMemPerCPU, WaitTime=30, MVAPICH MPI interceptors). Load for any dftracer session, build or job launch on matrix, or on 'Invalid generic resource (gres) specification', 'Requested node configuration is not available', 'reserved for jobs in higher priority partitions', a rank OOM-killed ~4 s in, a truncated service_<host>.pfw.gz with step CANCELLED by your own uid, CUDA events with ts == 0, 0 MPIDFTracer::MPI_ symbols, 'Resource deadlock avoided', SIGPIPE rc 141 at the second MPI_Init, pip 'Name or service not known', or dftracer_split 'Device or resource busy' rc 134.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "alloc",
+  "run",
+  "trace"
+ ],
+ "tools": [
+  "system_matrix_recipe",
+  "system_matrix_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "system_matrix_recipe"
+  ],
+  "validator": [
+   "system_matrix_check"
+  ]
+ },
+ "topic": "systems",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608064.95025,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) system-matrix"
+  }
+ ]
+}

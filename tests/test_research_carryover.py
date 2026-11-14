@@ -4351,13 +4351,14 @@ def test_a_task_capability_is_filed_under_its_task(tmp_path, monkeypatch):
     # Uncategorised and unbound: `tools/general/`, which is honest about not
     # knowing and still somewhere the filter and the layout check can see.
     # Never loose at the top of the tree — that is what defeated `--fresh`.
-    assert Path(method["file"]).parent.name == capabilities.DEFAULT_TOOL_CATEGORY
-    assert Path(method["file"]).parent.parent.name == capabilities.TOOL_DIR
+    # A capability is a bundle directory: <home>/<name>/tool.py.
+    assert Path(method["dir"]).parent.name == capabilities.DEFAULT_TOOL_CATEGORY
+    assert Path(method["dir"]).parent.parent.name == capabilities.TOOL_DIR
     # Bound to one task: beside the SOLUTION it implements, where the reader
     # who loaded that skill already is — not shelved with the shared tools
     # under a task-shaped category nothing else will ever look in.
-    assert Path(bound["file"]).parent.name == "pylint-dev-pylint-7080"
-    assert Path(bound["file"]).parent.parent.name == capabilities.SOLUTION_DIR
+    assert Path(bound["dir"]).parent.name == "pylint-dev-pylint-7080"
+    assert Path(bound["dir"]).parent.parent.name == capabilities.SOLUTION_DIR
 
     # An explicit category beats the topic: what the tool is about is a better
     # grouping than who first needed it.
@@ -4366,8 +4367,8 @@ def test_a_task_capability_is_filed_under_its_task(tmp_path, monkeypatch):
         source="def register(mcp):\n    return \"subset\"\n",
         topic="pylint-dev__pylint-7080", category="pytest")
     assert grouped["status"] == "ok"
-    assert Path(grouped["file"]).parent.name == "pytest"
-    assert Path(grouped["file"]).parent.parent.name == capabilities.TOOL_DIR
+    assert Path(grouped["dir"]).parent.name == "pytest"
+    assert Path(grouped["dir"]).parent.parent.name == capabilities.TOOL_DIR
 
 
 def test_the_solution_skill_is_the_way_in_to_the_candidates(tmp_path):
@@ -9037,12 +9038,12 @@ def test_a_capability_is_filed_by_who_it_is_for():
         text = Path(result["file"]).as_posix()
         return text[text.index("capabilities/"):]
 
-    assert where(shared) == "capabilities/tools/tests/probe_run_subset.py"
+    assert where(shared) == "capabilities/tools/tests/probe_run_subset/tool.py"
     # Beside its solution, not shelved under tools/<task>/.
     assert where(bound) == (
-        "capabilities/skills/sympy-sympy-19254/apply_mignotte_fix.py")
+        "capabilities/skills/sympy-sympy-19254/apply_mignotte_fix/tool.py")
     # Honest about not knowing, and still somewhere the filter can see.
-    assert where(neither) == "capabilities/tools/general/probe_read_region.py"
+    assert where(neither) == "capabilities/tools/general/probe_read_region/tool.py"
 
 
 def test_the_learner_writes_to_the_kind_of_work_not_to_itself():
@@ -9461,8 +9462,10 @@ def test_a_duplicate_tool_is_caught_across_categories():
     # The existing name comes back, so the caller can just use it.
     assert second["existing"][0]["name"] == "flask_cli_routes"
 
+    # Every filed directory, recursively, a bundle counted once (its tool.py,
+    # not its versions/).
     source = Path("src/phronix/capabilities.py").read_text(encoding="utf-8")
-    assert 'for path in sorted(directory.rglob("*.py")):' in source
+    assert "_capability_entries(directory)" in source
 
 
 def test_a_skill_that_learned_something_stops_saying_it_has_not():

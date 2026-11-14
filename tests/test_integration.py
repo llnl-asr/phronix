@@ -204,7 +204,9 @@ def test_learning_lands_in_the_committed_project_layer(isolated_layers):
                  # Never loose at the top of the tree: the `--fresh` filter
                  # keys on the directory, so a loose capability is served to
                  # every from-scratch run for good.
-                 ".phronix/capabilities/tools/general/helper.py"):
+                 # A bundle: the module beside its skill, lessons and checks.
+                 ".phronix/capabilities/tools/general/helper/tool.py",
+                 ".phronix/capabilities/tools/general/helper/capability.json"):
         full = project / path
         assert full.is_file(), f"{path} was not written into the project layer"
         assert not full.is_symlink(), f"{path} must be a real file, not a link out of the repo"

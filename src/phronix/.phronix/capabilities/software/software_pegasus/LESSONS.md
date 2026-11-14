@@ -1,0 +1,15 @@
+# Lessons: software_pegasus
+
+- [L-5c70a960] libmpichcxx.so.10 => not found -> prebuilt PMC linked against MPICH ABI v10; Cray MPICH is v12 -> rebuild PMC with make CXX=$(which mpicxx) (undated)
+- [L-7d29a7be] successive lib*.so not found errors one at a time -> flux run/srun do not inherit the interactive LD_LIBRARY_PATH -> forward the full CCE+MPICH+PMI lib block from a wrapper (undated)
+- [L-207355f0] File Server not specified for shared-scratch filesystem for site: condorpool -> no site catalog; Pegasus 5 default site unusable -> explicit sites.yml with a local site (undated)
+- [L-03fb76b5] FileNotFoundException: run0001 (Is a directory) during planning -> --cluster horizontal + PMC code generator bug in 5.0.7 -> drop --cluster horizontal (undated)
+- [L-7f53b1cc] ModuleNotFoundError: No module named 'six.moves' in pegasus-transfer -> bundled old six.py shadows modern six on sys.path -> rename lib64/pegasus/externals/python/six.py (undated)
+- [L-1809b7ae] pegasus-plan import error for git -> GitPython not bundled -> pip install gitpython into the python3 running pegasus-plan (undated)
+- [L-718f725e] jobs silently run un-annotated Montage binaries -> wrong mProject first on PATH at DAX generation -> annotated install_ann/bin first on PATH before montage-workflow.py (undated)
+- [L-0cc82306] pegasus-run suggested after planning fails -> Condor/DAGMan path, no daemons -> ignore; run pegasus-mpi-cluster <dag> manually (undated)
+- [L-2e189c11] ABORT: failure.cpp(22): Invalid DAG record: MAXJOBS registration 1 -> pegasus-plan without --conf falls back silently to DAGMan code generator -> always pass --conf; verify TASK/EDGE count and zero JOB/MAXJOBS (undated)
+- [L-2866d50f] stage_in tasks hang several minutes then exit 256 before any real task -> replica catalog file:// paths from a wrong dataset dir argument -> ls -la every file:// URL in catalogs/replicas.yml before PMC; symlink if needed (undated)
+- [L-0a31c290] PMC silent after 'Running PMC cluster with DAG' -> rank count (-N4 -n380) far above DAG parallelism hangs MPI_Init/registration -> -n ~2-4x widest stage (e.g. -N4 -n32); cancel after 2-3 min of silence (undated)
+- [L-2e89ea7d] libpmi.so.0 not found -> lives in separate cray-pmi dir /opt/cray/pe/pmi/<ver>/lib on most sites -> add it to the LD block (on Tuolumne it is in /opt/cray/pe/lib64) (undated)
+- [L-b432bf3d] --degrees 0.3 gives 1 image, no overlaps -> region too small -> --degrees 1.0 (~4 images / 6 overlaps) (undated)

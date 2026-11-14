@@ -1,0 +1,11 @@
+{
+ "name": "workload_minife",
+ "description": "miniFE (Mantevo FE proxy app) recipe: variant choice (openmp45-opt for GPU on Tuolumne, cuda on NVIDIA), rocmcc offload toolchain and openmp45 symlinks, hip=True override, template-header annotation table, run sizing, verify_solution trap, PAPI teardown segfaults, cuda traps; predictor renders it, validator checks a command list. Load for miniFE, 'max absolute error is 0.20', 'miniFE_info.hpp file not found', cudaErrorInvalidDevice, NVTX_RESOURCE_TYPE_GENERIC_HANDLE, nvcc -Wl,-rpath errors.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["explore", "smoke", "instrument", "baseline"],
+ "tools": ["workload_minife_recipe", "workload_minife_check"],
+ "pvc": {"predictor": ["workload_minife_recipe"], "validator": ["workload_minife_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill workload-minife"}]
+}

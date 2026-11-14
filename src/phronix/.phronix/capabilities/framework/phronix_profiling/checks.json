@@ -1,0 +1,117 @@
+[
+ {
+  "tool": "phronix_profiling_plan",
+  "args": {
+   "goal": "the annotate-and-trace session for app X"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_profiling_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_profiling_check",
+  "args": {
+   "record": {
+    "run_id": "app-run-1",
+    "env_exported_before_launch": true,
+    "steps": [
+     {
+      "step": "STEP 1: retrieve",
+      "agent": "phronix-router",
+      "model_level": "level_2",
+      "status": "ok"
+     },
+     {
+      "step": "STEP 2: build",
+      "agent": "builder",
+      "model_level": "level_1",
+      "status": "failed"
+     }
+    ],
+    "unattributed_fraction": 0.05,
+    "events_dropped": 0,
+    "parallel": false,
+    "collector_restarted": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_profiling_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_profiling_plan",
+  "args": {
+   "goal": "the annotate-and-trace session for app X",
+   "facts": {
+    "parallel_steps": true
+   }
+  },
+  "expect": {
+   "contains": "estimate"
+  }
+ },
+ {
+  "tool": "phronix_profiling_check",
+  "args": {
+   "record": {
+    "run_id": "r",
+    "env_exported_before_launch": false,
+    "steps": [
+     {
+      "step": "build attempt 2",
+      "model_level": "level_1",
+      "status": "ok"
+     }
+    ],
+    "unattributed_fraction": 0.7,
+    "events_dropped": 0
+   }
+  },
+  "expect": {
+   "contains": "BEFORE launching the harness"
+  }
+ },
+ {
+  "tool": "phronix_profiling_check",
+  "args": {
+   "record": {
+    "run_id": "r",
+    "env_exported_before_launch": true,
+    "steps": [
+     {
+      "step": "build",
+      "model_level": "level_1",
+      "status": "ok"
+     }
+    ],
+    "unattributed_fraction": 0.7,
+    "events_dropped": 3
+   }
+  },
+  "expect": {
+   "contains": "fix the brackets"
+  }
+ }
+]

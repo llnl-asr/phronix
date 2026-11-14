@@ -1,0 +1,61 @@
+{
+ "name": "system_tuolumne",
+ "version": 3,
+ "enabled": true,
+ "description": "Tuolumne (and its family, e.g. hetchy): Cray PE runtime library path, Rabbit #DW capacity sizing, and a check of a planned job against the rules learnt there (queue by purpose, chassis, gfs2 sharing, Lustre profile, flux flag pitfalls). Plus, from dftracer-agents: the module load order and versions (CCE 20/21, cray-mpich 9.0.1/9.1.0, ROCm 6.3-7.2, papi/7.2.0.2 not 7.3.0.1, PrgEnv-gnu fallback), LD_LIBRARY_PATH / include-path / PAPI_DIR env rules, flux launch patterns (flux proxy wrapper scripts, existing allocations, 96 cores, dftracer_service core and host pinning), Lustre /p/lustre5 vs NFS workspace vs VAST archive, Cray MPICH MPI-IO hints and striping, the PyTorch/ROCm venv recipe (mpi4py, h5py, patchelf), NCCL_SOCKET_IFNAME=hsi0, and measured optimization levers that are inert on MI300A. Load before building, installing dftracer, running or optimizing anything on Tuolumne, or on 'libmpi_cray.so.12: cannot open shared object file', \"'stdlib.h' file not found\", 'consteval function fmt::basic_format_string', SIGSEGV in PAPI_library_init / 'ABI-incompatible with rocprofiler_agent_v0_t', 'ROCPROFILER_STATUS_ERROR_CONFIGURATION_LOCKED', 'corrupted size vs. prev_size in fastbins', a flux job stuck in S, 'Inactive Modules', undefined ZSTD_* references, 'Not a property list class', or slow multi-node RCCL.",
+ "tools": [
+  "tuolumne_runtime_env",
+  "tuolumne_dw_capacity",
+  "tuolumne_check_job",
+  "system_tuolumne_recipe",
+  "system_tuolumne_check"
+ ],
+ "review": [],
+ "layer": "project",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1793859508.4593241,
+   "by": "haridev",
+   "proposal": "a3ea339a21ff",
+   "why": "Runs on Tuolumne repeatedly failed on the same site rules (missing Cray runtime dirs, -x VAR, gfs2 across chassis, wrong queue, undersized capacity); the prose skill held them as text. They are deterministic, so they are tools now, with the site facts and error history in the skill.",
+   "sha1": "73b6560d84d5"
+  },
+  {
+   "version": 2,
+   "ts": 1793934371.1662428,
+   "by": "instructed in chat: parallelization as a capability for all capabilities",
+   "proposal": "f256785640e8",
+   "why": "parallelization as a capability: independent probes run through rabbit_agent.parallel.run_parallel and the Parallel plan says which calls are independent and which stay sequential",
+   "sha1": "73b6560d84d5"
+  },
+  {
+   "version": 3,
+   "ts": 1794607976.190417,
+   "by": "conversion",
+   "why": "merged dftracer-agents system-tuolumne: Cray PE / ROCm / PAPI module stacks and versions, LD_LIBRARY_PATH and include-path pitfalls, flux launch patterns, Lustre vs NFS vs VAST paths, MPI-IO hints, PyTorch/ROCm venv recipe, dftracer build/run facts (HIP tracing, PAPI, dftracer_service) and ~45 dated lessons, as system_tuolumne_recipe / system_tuolumne_check"
+  }
+ ],
+ "stages": [
+  "scope",
+  "alloc",
+  "run",
+  "build",
+  "install",
+  "smoke",
+  "trace",
+  "optimize"
+ ],
+ "pvc": {
+  "predictor": [
+   "tuolumne_runtime_env",
+   "tuolumne_dw_capacity",
+   "system_tuolumne_recipe"
+  ],
+  "validator": [
+   "tuolumne_check_job",
+   "system_tuolumne_check"
+  ]
+ },
+ "topic": "systems"
+}

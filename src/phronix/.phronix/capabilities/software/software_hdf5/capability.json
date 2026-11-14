@@ -1,0 +1,33 @@
+{
+ "name": "software_hdf5",
+ "description": "HDF5 for dftracer sessions: ALWAYS build HDF5 1.14.5 from source into the session workspace (never the cray-hdf5 / cray-hdf5-parallel or any site HDF5 module), the dftracer-compatible exact series (1.8.23, 1.10.5, 1.12.3, 1.14.5), fetching tarballs from the HDF Group FTP because GitHub releases 404 on Cray PE, the H5Apublic.h `chid_t` typo patch, building dftracer with -DDFTRACER_ENABLE_HDF5=ON, HDF5_DIR / LD_LIBRARY_PATH, and L2 tuning (chunk/cache/metadata/alignment, collective IOR flags, Lustre stripe = collective buffer). Load for any HDF5 or parallel I/O work, or on: a 404 from github.com/HDFGroup/hdf5/releases, `chid_t` compile errors in H5Apublic.h from dftracer/brahma C++, H5Fcreate/H5Dwrite events absent from traces, L2 HDF5 optimizations with zero effect (HDF5 1.10), small aggregated writes (~1 MB) on Lustre, or an app 'collective' flag that leaves one rank writing everything.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "install",
+  "run",
+  "optimize"
+ ],
+ "tools": [
+  "software_hdf5_recipe",
+  "software_hdf5_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_hdf5_recipe"
+  ],
+  "validator": [
+   "software_hdf5_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608129.1674914,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-hdf5"
+  }
+ ]
+}

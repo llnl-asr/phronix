@@ -1,0 +1,55 @@
+[
+ {
+  "tool": "workload_ygm_recipe",
+  "args": {},
+  "expect": {
+   "contains": "workload_ygm_bench"
+  }
+ },
+ {
+  "tool": "workload_ygm_recipe",
+  "args": {
+   "variant": "nope"
+  },
+  "expect": {
+   "contains": "unknown variant"
+  }
+ },
+ {
+  "tool": "workload_ygm_check",
+  "args": {
+   "commands": [
+    "around_the_world_ygm -n 50 -t 2 -p"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_ygm_check",
+  "args": {
+   "commands": [
+    "see software_ygm and workload_ygm_bench"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_ygm_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

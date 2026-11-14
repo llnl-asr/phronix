@@ -1,0 +1,8 @@
+{
+ "description": "Renders and checks the Flash-X Sedov 3D build/annotate/run recipe (setup +parallelIO, GNU MPI wrappers, source HDF5, flux proxy wrapper, Paramesh sizing); never builds or runs.",
+ "level": "level_1",
+ "tools": ["Read", "Grep"],
+ "skills": ["workload_flashx"],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_flashx_recipe, check any proposed command list or flash.par with workload_flashx_check, and follow the Corrector section for each failed check. Ask the user for the allocation before any production run. Do not run builds or jobs."
+}

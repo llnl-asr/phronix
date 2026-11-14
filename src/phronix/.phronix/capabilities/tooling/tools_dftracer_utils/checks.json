@@ -1,0 +1,159 @@
+[
+ {
+  "tool": "tools_dftracer_utils_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "tools_dftracer_utils"
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_recipe",
+  "args": {
+   "section": "category_count_workaround"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "category_count_workaround",
+     "package",
+     "stats",
+     "tools",
+     "trio_check",
+     "venv",
+     "verify"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": "dftracer_stats -d traces/compacted --report categories"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_stats_report_on_compacted": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": "dftracer_stats -d traces/raw --index-dir idx --report categories"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_stats_report_on_compacted": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": "dftracer_index -d traces/compacted --rebuild-summaries"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_rebuild_summaries_reliance": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": "${WORKSPACE}/dftracer-agents/.venv/bin/pip install -U dftracer-utils"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_framework_venv_repair": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": "pip install dftracer-utils"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "verify_import_after_install": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": "pip install dftracer-utils\npython -c \"import dftracer_utils\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "verify_import_after_install": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": "python -c \"import dftracer_utils\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "check_trio_not_one": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_utils_check",
+  "args": {
+   "commands": "pip install dftracer-utils\npython -c \"import dftracer_utils\"\npython -c \"from dftracer.python import dftracer, dft_fn\"\ndftracer_stats -d traces/raw --index-dir idx --report categories\ndftracer_event_count -d traces/compacted"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

@@ -1,0 +1,112 @@
+[
+ {
+  "tool": "phronix_research_as_tools_plan",
+  "args": {
+   "goal": "checking whether pylint applies ignore-paths recursively"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_research_as_tools_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_research_as_tools_check",
+  "args": {
+   "record": {
+    "question": "are ignore-paths applied recursively?",
+    "searched_existing": true,
+    "existing_probe": "",
+    "deterministic": true,
+    "uses_so_far": 2,
+    "asked_again_by": "tune stage",
+    "decides_judgement": false,
+    "tool_name": "probe_ignore_paths_applied_recursively",
+    "built": true
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_research_as_tools_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_research_as_tools_plan",
+  "args": {
+   "goal": "checking whether pylint applies ignore-paths recursively",
+   "facts": {
+    "second_use": true
+   }
+  },
+  "expect": {
+   "contains": "capability_new"
+  }
+ },
+ {
+  "tool": "phronix_research_as_tools_plan",
+  "args": {
+   "goal": "checking whether pylint applies ignore-paths recursively",
+   "facts": {
+    "judgement": true
+   }
+  },
+  "expect": {
+   "contains": "MEASURES"
+  }
+ },
+ {
+  "tool": "phronix_research_as_tools_check",
+  "args": {
+   "record": {
+    "question": "q",
+    "searched_existing": false,
+    "deterministic": true,
+    "uses_so_far": 1,
+    "asked_again_by": "",
+    "decides_judgement": false,
+    "tool_name": "probe_run_pylint",
+    "built": true
+   }
+  },
+  "expect": {
+   "contains": "not the command it runs"
+  }
+ },
+ {
+  "tool": "phronix_research_as_tools_check",
+  "args": {
+   "record": {
+    "question": "is approach A right?",
+    "searched_existing": true,
+    "deterministic": false,
+    "uses_so_far": 3,
+    "asked_again_by": "retry",
+    "decides_judgement": true,
+    "tool_name": "probe_approach_a_is_right",
+    "built": true
+   }
+  },
+  "expect": {
+   "contains": "never decides whether it is right"
+  }
+ }
+]

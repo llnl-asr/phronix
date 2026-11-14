@@ -1,0 +1,32 @@
+{
+ "name": "system_tuolumne_rabbit",
+ "description": "Rabbit near-node-flash (NVMe) storage on Tuolumne as an L3 filesystem optimization: picking SHM vs XFS vs GFS2 vs Lustre-on-Rabbit by data-sharing scope and size, the DataWarp directives passed to `flux alloc -S \"#DW jobdw ...\"` (plus `--coral2-chassis=1` for GFS2), the `$DW_JOB_<name>` mount, staging data in and results out, and the rule that the user (not the agent) creates the allocation. Load when a dftracer trace shows an I/O bottleneck a faster near-node tier would relieve, when `$DW_JOB_*` is empty/unset inside a job (the allocation lacked #DW flags), or when choosing where a job's scratch data should live on Tuolumne.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "alloc",
+  "run",
+  "optimize"
+ ],
+ "tools": [
+  "system_tuolumne_rabbit_recipe",
+  "system_tuolumne_rabbit_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "system_tuolumne_rabbit_recipe"
+  ],
+  "validator": [
+   "system_tuolumne_rabbit_check"
+  ]
+ },
+ "topic": "systems",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607991.837957,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) system-tuolumne-rabbit"
+  }
+ ]
+}

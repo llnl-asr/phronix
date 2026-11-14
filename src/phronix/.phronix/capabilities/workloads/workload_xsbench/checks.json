@@ -1,0 +1,9 @@
+[
+ {"tool": "workload_xsbench_recipe", "args": {}, "expect": {"contains": "calculate_micro_xs"}},
+ {"tool": "workload_xsbench_recipe", "args": {"variant": "cuda"}, "expect": {"contains": "MPICH_SKIP_MPICXX"}},
+ {"tool": "workload_xsbench_recipe", "args": {"variant": "nope"}, "expect": {"contains": "unknown variant"}},
+ {"tool": "workload_xsbench_check", "args": {"commands": ["cd source/openmp-threading", "make -j8"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_xsbench_check", "args": {"commands": ["clang_annotate_project(language=\"c\") then clang_annotate_file(filepath=\"source/openmp-threading/Simulation.c\")"]}, "expect": {"contains": "hot_kernels_excluded"}},
+ {"tool": "workload_xsbench_check", "args": {"commands": ["cd source/openmp-threading", "make MPI=yes -j8", "./XSBench -m event -s large -l 200000000 -t 22 -G unionized"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_xsbench_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

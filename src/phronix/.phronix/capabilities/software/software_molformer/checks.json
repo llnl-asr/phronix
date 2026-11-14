@@ -1,0 +1,328 @@
+[
+ {
+  "tool": "software_molformer_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_molformer"
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_recipe",
+  "args": {
+   "section": "annotation"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "annotation",
+     "apex",
+     "bringup_cost",
+     "dftracer_build",
+     "env",
+     "failure_triage",
+     "launch_multi_node",
+     "launch_single_node",
+     "lightning_patches",
+     "platform",
+     "ray_variant",
+     "recover_fork_bomb",
+     "torch_profiler",
+     "trace_verification",
+     "tuning_measured"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "flux run -N1 -n1 bash wrapper.sh python train_pubchem_light.py --gpus 4"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ddp_flux_exclusive": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "flux run -N 1 -n 1 --exclusive bash wrapper.sh python train_pubchem_light.py --gpus 4"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ddp_flux_exclusive": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "flux run -N 1 -n 1 --exclusive python train_pubchem_light.py --gpus 4"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ddp_unset_pmi": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "unset PMI_RANK PMI_SIZE PMI_FD PALS_APID PALS_APINFO PALS_NODEID PALS_RANKID PALS_SPOOL_DIR LDCS_RANKINFO\nflux run -N 1 -n 1 --exclusive python train_pubchem_light.py --gpus 4"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ddp_unset_pmi": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "flux run -N4 -n16 -g 1 python train_pubchem_light.py --num_nodes 4 --gpus 4"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "multinode_one_task_per_node": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "flux run -N4 -n4 -c 96 -g 4 python train_pubchem_light.py --num_nodes 4 --gpus 4"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "multinode_one_task_per_node": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "git clone https://github.com/NVIDIA/apex"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "apex_rocm_fork": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "git clone https://github.com/ROCm/apex"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "apex_rocm_fork": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_expandable_segments": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "prof = torch.profiler.profile(schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2), on_trace_ready=trace_handler)"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "profiler_no_repeat_ge2": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "prof = torch.profiler.profile(schedule=torch.profiler.schedule(wait=0, warmup=0, active=1000000, repeat=1), on_trace_ready=trace_handler)"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "profiler_no_repeat_ge2": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "hf download ibm/MoLFormer-XL-both-10pct --cache-dir $HF_HOME/hub"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "hf_download_pinned_revision": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "hf download ibm/MoLFormer-XL-both-10pct --revision 7b12d946c181a37f6012b9dc3b002275de070314 --cache-dir $HF_HOME/hub"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "hf_download_pinned_revision": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "python molformer_ray_descriptors.py --nodes 4"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ray_address_exported": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "export RAY_ADDRESS=$HEAD_IP:6379\npython molformer_ray_descriptors.py --nodes 4"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ray_address_exported": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "export RAY_ADDRESS=$HEAD_IP:6379\npython molformer_ray_descriptors.py --nodes 4"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ray_dataset_csv_path": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "export RAY_ADDRESS=$HEAD_IP:6379\nexport DATASET_CSV_PATH=/p/lustre5/$USER/ray_molformer/baseline/pubchem_filtered.csv\npython molformer_ray_descriptors.py --nodes 4"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ray_dataset_csv_path": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "ray start --address=$RAY_ADDRESS | grep -q 'Successfully started Ray runtime'"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ray_join_success_string": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "ray start --address=$RAY_ADDRESS | grep -q 'Ray runtime started.'"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ray_join_success_string": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_molformer_check",
+  "args": {
+   "commands": "module load rocm/6.3.1\ngit clone https://github.com/ROCm/apex\nexport LD_LIBRARY_PATH=$VENV/lib/python3.13/site-packages/torch/lib:$LD_LIBRARY_PATH\nunset PMI_RANK PMI_SIZE PMI_FD PALS_APID PALS_APINFO PALS_NODEID PALS_RANKID PALS_SPOOL_DIR LDCS_RANKINFO\nflux run -N 1 -n 1 --exclusive bash wrapper.sh python train_pubchem_light.py --gpus 4 --batch_size 128\nflux run -N4 -n4 -c 96 -g 4 bash wrapper.sh python train_pubchem_light.py --num_nodes 4 --gpus 4\nhf download ibm/MoLFormer-XL-both-10pct --revision 7b12d946c181a37f6012b9dc3b002275de070314 --cache-dir $HF_HOME/hub\nray start --address=$RAY_ADDRESS --num-gpus=4 | grep -q 'Ray runtime started.'\nexport RAY_ADDRESS=$HEAD_IP:6379\nexport DATASET_CSV_PATH=/p/lustre5/$USER/ray_molformer/baseline/pubchem_filtered.csv\npython molformer_ray_descriptors.py --nodes 4"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

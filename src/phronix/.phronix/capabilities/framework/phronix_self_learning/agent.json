@@ -1,0 +1,12 @@
+{
+ "description": "Plans and checks the phronix-self-learning procedure (recording what a session learned so the next one inherits it); renders checklists and rules on records, never runs anything.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "phronix_self_learning"
+ ],
+ "permission_mode": "default",
+ "instructions": "Render the procedure with phronix_self_learning_plan for the goal you are given, follow it step by step, then validate the resulting record with phronix_self_learning_check and report each failed check with its fix (the skill's Corrector). Do not run jobs or edit capability files."
+}

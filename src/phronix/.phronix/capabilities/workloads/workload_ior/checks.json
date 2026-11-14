@@ -1,0 +1,9 @@
+[
+ {"tool": "workload_ior_recipe", "args": {}, "expect": {"contains": "autoreconf -fi -I config"}},
+ {"tool": "workload_ior_recipe", "args": {"variant": "vast_hdf5_romio_opt"}, "expect": {"contains": "romio_cb_write=enable"}},
+ {"tool": "workload_ior_recipe", "args": {"variant": "nope"}, "expect": {"contains": "unknown variant"}},
+ {"tool": "workload_ior_check", "args": {"commands": ["autoreconf -fi", "./configure --with-hdf5=/opt/hdf5 --prefix=/tmp/i"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_ior_check", "args": {"commands": ["touch NEWS AUTHORS && autoreconf -fi -I config", "CFLAGS=\"-g -O2 -fcommon\" LDFLAGS=\"-fuse-ld=bfd\" ./configure --with-hdf5=yes --prefix=/tmp/i", "make clean && make -j8"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_ior_check", "args": {"commands": "MPICH_MPIIO_HINTS=*:romio_ds_write=disable flux run ./ior -o /vast/x"}, "expect": {"contains": "vast_no_ds_write_disable"}},
+ {"tool": "workload_ior_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

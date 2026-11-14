@@ -1,0 +1,28 @@
+{
+ "name": "phronix_verification",
+ "description": "The predictor/corrector discipline: every learned or healed thing needs a deterministic check; the five-facet verifier spec (assumptions, inputs, constraints, invariants, outputs); what built-in structural correctors cover; how to read a verdict (fail vs error vs inconclusive). Load before writing a corrector (verify_new) or acting on one that failed, when a check is red on every machine missing a dependency, a spec has no constraints, or a corrector passes because it checks nothing.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_verification_plan",
+  "phronix_verification_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_verification_plan"
+  ],
+  "validator": [
+   "phronix_verification_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-verification (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

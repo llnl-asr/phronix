@@ -1,0 +1,28 @@
+{
+ "name": "phronix_capability_authoring",
+ "description": "How to write a capability, a deterministic MCP tool authored at runtime: when something should be code rather than prose, the module contract (register(mcp)), docstrings a model can act on, error design, layer choice, and the restart requirement. Load before calling capability_new, when a tool returns a bare 'failed', hard-codes a path or a judgement, silently picks a default, wraps a single command, or is not callable right after it was created.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_capability_authoring_plan",
+  "phronix_capability_authoring_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_capability_authoring_plan"
+  ],
+  "validator": [
+   "phronix_capability_authoring_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-capability-authoring (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

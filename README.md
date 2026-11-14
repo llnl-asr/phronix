@@ -245,6 +245,51 @@ directory (`~/.claude/projects/<slug>/memory/`) into `.phronix/memory/`. That is
 what makes memory written natively by the harness land in version control instead
 of an untracked directory under your home.
 
+## Capabilities are bundles
+
+A capability is a directory, not a loose module:
+
+```
+<name>/tool.py         the MCP tools: register(mcp)
+<name>/capability.json name, description, version, history, and pvc: which tools predict, which validate
+<name>/SKILL.md        Rules, Constraints, Corner cases, Parallel plan, Corrector, Self-heal, Self-learn, What works
+<name>/LESSONS.md      what use taught it
+<name>/WORKED.md       what finally worked, step by step
+<name>/agent.json      the agent that runs it: its tools, skills and level
+<name>/checks.json     known input -> expected output, run sandboxed on every change
+<name>/versions/vN/    every earlier version
+```
+
+`capability_new` writes one; a module from before bundles still loads. The engine
+behind them (`phronix.engine`: validation, sandboxed checks, approval, versions,
+lessons, the knowledge graph, the verdict and the corrector's budget) is what
+projects built on phronix use for their own capabilities.
+
+phronix's bundled layer carries the capabilities that belong to no single project:
+workloads, software, systems, tooling and process (`.phronix/capabilities/<topic>/`).
+
+### Projects built on phronix
+
+Projects form a chain, each loading its own capabilities over everything upstream:
+phronix <- dftracer-agents (performance engineering) <- moirai-agents (provenance)
+and rabbit-agent (Rabbits). A capability has one home, decided by
+`phronix.engine.scopes.owner`: the project whose package its code imports, else the
+project whose name prefix it carries, else phronix.
+
+A project uses its upstreams from clones in its own `vendor/`. When it learns
+something about a capability another project owns (a lesson, a new version, a new
+capability in that project's scope), the change is written to a worktree of that
+clone, `vendor/contrib/<upstream>`, and committed on the branch
+`contrib/<project>`. The project loads that worktree, so the change is in use at
+once. Nothing is pushed for you:
+
+```bash
+python -m phronix.engine update --bootstrap <the project's configure hook>
+```
+
+fast-forwards the clones, rebases each contribution branch on its upstream, and
+prints the push command and the pull-request link.
+
 ## Four harnesses, one definition
 
 Agents are defined once, as harness-neutral YAML, and rendered into each

@@ -1,0 +1,5 @@
+# Lessons: phronix_self_healing
+
+- [L-4e74018f] Editing a rendered agent file -> The change works until the next `agents_sync`, then silently disappears. The window between those two events produces the most confusing bug reports in the system. Check for the `generated-by: phronix` marker before editing anything. -> follow phronix-self-healing P1 (Corner cases) (2026-09-15, dftracer-agents phronix-self-healing/LESSONS.md P1)
+- [L-0e23f498] Assuming a write failed when it went to another layer -> A lesson written to the `user` layer while the team reads the `project` layer looks exactly like a tool that silently did nothing. `phronix_status()` first. -> follow phronix-self-healing P2 (Corner cases) (2026-09-15, dftracer-agents phronix-self-healing/LESSONS.md P2)
+- [L-57892e41] Working around a broken tool under time pressure -> The workaround always outlives the pressure. It is then load-bearing, undocumented, and subtly different from what the tool would have done — and the tool is still broken for everyone else. -> follow phronix-self-healing P3 (Corner cases) (2026-09-15, dftracer-agents phronix-self-healing/LESSONS.md P3)

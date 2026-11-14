@@ -1,0 +1,142 @@
+[
+ {
+  "tool": "software_pip_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_pip"
+   }
+  }
+ },
+ {
+  "tool": "software_pip_recipe",
+  "args": {
+   "section": "detect"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "detect",
+     "env_order",
+     "install",
+     "lesson_tagging",
+     "why_no_build_isolation"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_pip_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_pip_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_pip_check",
+  "args": {
+   "commands": "pip install -e ."
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_build_isolation": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pip_check",
+  "args": {
+   "commands": "pip install --no-build-isolation -e ."
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_build_isolation": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pip_check",
+  "args": {
+   "commands": "pip install --no-build-isolation . -Duse_system_flux=true"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "meson_opts_via_setup_args": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pip_check",
+  "args": {
+   "commands": "pip install --no-build-isolation --config-settings=setup-args=\"-Duse_system_flux=true\" ."
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "meson_opts_via_setup_args": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pip_check",
+  "args": {
+   "commands": "pip install --no-build-isolation . && export CC=gcc"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "cc_before_pip": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pip_check",
+  "args": {
+   "commands": "export CC=gcc CXX=g++"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "cc_before_pip": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pip_check",
+  "args": {
+   "commands": "module load gcc\nsource $VENV/bin/activate\nexport CC=gcc CXX=g++\npip install meson meson-python ninja\npip install --no-build-isolation --config-settings=setup-args=\"-Duse_system_flux=true\" .\npip install --no-build-isolation -e '.[dev]'"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

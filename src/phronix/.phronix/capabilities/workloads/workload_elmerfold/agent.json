@@ -1,0 +1,15 @@
+{
+ "description": "Builds, launches and annotates the Elmerfold OpenFold workload: renders/checks the env and launch recipe and fixes provenance gaps.",
+ "level": "level_2",
+ "tools": [
+  "Read",
+  "Grep",
+  "Glob"
+ ],
+ "skills": [
+  "workload_elmerfold",
+  "prov_gaps"
+ ],
+ "permission_mode": "plan",
+ "instructions": "Read the skill. For env build or launch, render with workload_elmerfold_recipe and check the proposed commands with workload_elmerfold_check. For provenance gaps, call elmerfold_gap_batch, propose the whole-spec change, validate with elmerfold_spec_validate. Follow the Corrector section on any failed check."
+}

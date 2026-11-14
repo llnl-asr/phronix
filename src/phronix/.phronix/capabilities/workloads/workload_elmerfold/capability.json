@@ -1,0 +1,49 @@
+{
+ "name": "workload_elmerfold",
+ "description": "Elmerfold (LBANN OpenFold monomer structure prediction on Tuolumne): env build (setup-env.sh, uv, ROCm 7.2.1, emf_data fallback), launch (gen_launch_script -> run.sh -> flux batch, mpifileutils/0.11.1 dbcast, Rabbit staging, nodes = chunks + 1), task DAG, process layout, verified provenance recipe, and the provenance annotation 23-gap batch spec and 31-char type cut. Load when building, launching, annotating or fixing gaps of an elmerfold/openfold run, or on 'dbcast not found, load mpifileutils'.",
+ "version": 2,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "annotate",
+  "baseline"
+ ],
+ "tools": [
+  "workload_elmerfold_recipe",
+  "workload_elmerfold_check",
+  "elmerfold_gap_batch",
+  "elmerfold_nodes",
+  "elmerfold_type_cut",
+  "elmerfold_spec_validate"
+ ],
+ "pvc": {
+  "predictor": [
+   "elmerfold_gap_batch",
+   "elmerfold_nodes",
+   "elmerfold_type_cut",
+   "workload_elmerfold_recipe"
+  ],
+  "validator": [
+   "elmerfold_spec_validate",
+   "workload_elmerfold_check"
+  ]
+ },
+ "topic": "workloads",
+ "review": [],
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794438090.4017763,
+   "by": "haridev",
+   "proposal": "093f26bda749",
+   "why": "User asked to record the 23-gap batch spec changes for Elmerfold; no workload_elmerfold capability exists in the store (only dftracer's workload-elmerfold skill, which is reused by reference)."
+  },
+  {
+   "version": 2,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "merged dftracer-agents skill workload-elmerfold: env build, launch, task DAG, process layout and verified provenance recipe copied in (no longer reused by reference); added workload_elmerfold_recipe (predictor) and workload_elmerfold_check (validator), their checks, 4 lessons and WORKED.md."
+  }
+ ]
+}

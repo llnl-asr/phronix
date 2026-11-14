@@ -1,0 +1,299 @@
+[
+ {
+  "tool": "phronix_research_plan_plan",
+  "args": {
+   "goal": "pylint-dev__pylint-7114 retry"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_research_plan_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_research_plan_check",
+  "args": {
+   "record": {
+    "summary": "Attempt changed get_python_path in expand_modules.py; test_lint_namespace still fails: a/a.py with no __init__ is treated as a package.",
+    "fom": {
+     "name": "target tests passing",
+     "measure": "pytest tests/lint -k namespace, count passed"
+    },
+    "axes": [
+     "package kind",
+     "path form"
+    ],
+    "instances": [
+     {
+      "id": 0,
+      "negative": true
+     },
+     {
+      "id": 1,
+      "negative": false
+     },
+     {
+      "id": 2,
+      "negative": false
+     },
+     {
+      "id": 3,
+      "negative": false
+     },
+     {
+      "id": 4,
+      "negative": true
+     },
+     {
+      "id": 5,
+      "negative": false
+     },
+     {
+      "id": 6,
+      "negative": false
+     },
+     {
+      "id": 7,
+      "negative": false
+     },
+     {
+      "id": 8,
+      "negative": true
+     },
+     {
+      "id": 9,
+      "negative": false
+     },
+     {
+      "id": 10,
+      "negative": false
+     },
+     {
+      "id": 11,
+      "negative": false
+     },
+     {
+      "id": 12,
+      "negative": true
+     },
+     {
+      "id": 13,
+      "negative": false
+     },
+     {
+      "id": 14,
+      "negative": false
+     },
+     {
+      "id": 15,
+      "negative": false
+     },
+     {
+      "id": 16,
+      "negative": true
+     },
+     {
+      "id": 17,
+      "negative": false
+     },
+     {
+      "id": 18,
+      "negative": false
+     },
+     {
+      "id": 19,
+      "negative": false
+     }
+    ],
+    "split": true,
+    "prior_consulted": true,
+    "aspects": [
+     {
+      "name": "decide whether a is a package, namespace package or module",
+      "where": "pylint/lint/expand_modules.py:expand_modules"
+     },
+     {
+      "name": "compute the module name for a/a.py",
+      "where": "astroid modutils.modpath_from_file"
+     },
+     {
+      "name": "choose the sys.path root so the name resolves",
+      "where": "pylint/lint/expand_modules.py:get_python_path"
+     },
+     {
+      "name": "keep existing cases passing",
+      "where": "tests/lint/unittest_lint.py"
+     }
+    ],
+    "aspects_mode": "append"
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_research_plan_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_research_plan_plan",
+  "args": {
+   "goal": "pylint-dev__pylint-7114 retry",
+   "facts": {
+    "retry": true,
+    "empty_diff": true
+   }
+  },
+  "expect": {
+   "contains": "could not act"
+  }
+ },
+ {
+  "tool": "phronix_research_plan_plan",
+  "args": {
+   "goal": "pylint-dev__pylint-7114 retry",
+   "facts": {
+    "scouts_active": true
+   }
+  },
+  "expect": {
+   "contains": "research_add_aspects"
+  }
+ },
+ {
+  "tool": "phronix_research_plan_check",
+  "args": {
+   "record": {
+    "summary": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "fom": {
+     "measure": "tests"
+    },
+    "axes": [
+     "a",
+     "b"
+    ],
+    "instances": [
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     },
+     {
+      "negative": true
+     }
+    ],
+    "split": true,
+    "prior_consulted": true,
+    "aspects": [
+     {
+      "name": "A1: direct email with getattr()",
+      "where": "tokens.py"
+     },
+     {
+      "name": "A2: model method factoring",
+      "where": "tokens.py"
+     },
+     {
+      "name": "A3: conditional field introspection",
+      "where": "tokens.py"
+     }
+    ],
+    "aspects_mode": "append"
+   }
+  },
+  "expect": {
+   "contains": "numbered candidates are ways"
+  }
+ },
+ {
+  "tool": "phronix_research_plan_check",
+  "args": {
+   "record": {
+    "summary": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "fom": {
+     "measure": "tests"
+    },
+    "axes": [
+     "a"
+    ],
+    "instances": [],
+    "split": false,
+    "prior_consulted": true,
+    "aspects": [],
+    "aspects_mode": "set"
+   }
+  },
+  "expect": {
+   "contains": "at least 20 instances"
+  }
+ }
+]

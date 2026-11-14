@@ -1,0 +1,303 @@
+[
+ {
+  "tool": "software_pegasus_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_pegasus"
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_recipe",
+  "args": {
+   "section": "architecture"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "architecture",
+     "condor_env",
+     "env_for_planning",
+     "expected_profile",
+     "install_condor",
+     "install_pegasus",
+     "montage",
+     "plan",
+     "pmc_rebuild",
+     "properties",
+     "python",
+     "run_pmc",
+     "runtime_ld_library_path",
+     "sites_yml",
+     "verify_plan",
+     "verify_traces",
+     "versions"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "$PREFIX/condor/sbin/condor_master"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_condor_daemons": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "export CONDOR_CONFIG=$PREFIX/condor/etc/condor_config"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_condor_daemons": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "pegasus-run work/run0001"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_dagman_submit": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "flux run -N1 -n8 bash pmc_wrapper.sh $PREFIX/pegasus/bin/pegasus-mpi-cluster -v $RUN/montage-0.dag"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_dagman_submit": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "pegasus-plan --sites local --dir work --output-site local data/montage-workflow.yml"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "plan_requires_conf": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "pegasus-plan --conf pegasus.properties --sites local --dir work --output-site local data/montage-workflow.yml"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "plan_requires_conf": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "pegasus-plan --conf pegasus.properties --sites local --cluster horizontal --dir work data/montage-workflow.yml"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_cluster_horizontal": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "pegasus-plan --conf pegasus.properties --sites local --dir work data/montage-workflow.yml"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_cluster_horizontal": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "pegasus-plan --conf pegasus.properties --sites local --dir work data/montage-workflow.yml"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "properties_pmc_generator": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "echo 'pegasus.code.generator = PMC' > pegasus.properties\npegasus-plan --conf pegasus.properties --sites local --dir work data/montage-workflow.yml"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "properties_pmc_generator": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "flux run -N1 -n8 bash pmc_wrapper.sh $PREFIX/pegasus/bin/pegasus-mpi-cluster -v $RUN/montage-0.dag"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pmc_rebuilt_with_mpicxx": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "make CXX=$(which mpicxx) prefix=$PREFIX/pegasus\nflux run -N1 -n8 bash pmc_wrapper.sh $PREFIX/pegasus/bin/pegasus-mpi-cluster -v $RUN/montage-0.dag"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pmc_rebuilt_with_mpicxx": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "flux run -N4 -n380 bash pmc_wrapper.sh $PREFIX/pegasus/bin/pegasus-mpi-cluster -v $RUN/montage-0.dag"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pmc_rank_count": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "flux run -N4 -n32 bash pmc_wrapper.sh $PREFIX/pegasus/bin/pegasus-mpi-cluster -v $RUN/montage-0.dag"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pmc_rank_count": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "sed -i '/^MAXJOBS/d' work/run0001/montage-0.dag"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_dag_maxjobs_strip": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "grep -c '^JOB\\|^MAXJOBS' work/run0001/montage-0.dag"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_dag_maxjobs_strip": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "sudo make install"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_sudo": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pegasus_check",
+  "args": {
+   "commands": "cd $PREFIX/condor && ./bin/make-personal-from-tarball\nexport CONDOR_CONFIG=$PREFIX/condor/etc/condor_config\nmake CXX=$(which mpicxx) prefix=$PREFIX/pegasus\ncp pegasus-mpi-cluster $PREFIX/pegasus/bin/pegasus-mpi-cluster\nmv $PREFIX/pegasus/lib64/pegasus/externals/python/six.py $PREFIX/pegasus/lib64/pegasus/externals/python/six.py.bak\nexport PYTHONPATH=$PREFIX/pegasus/lib64/python3.6/site-packages\npython3 ./montage-workflow.py --center \"56.7 24.0\" --degrees 1.0 --band dss:DSS2B:blue\necho 'pegasus.code.generator = PMC' > pegasus.properties\npegasus-plan --conf pegasus.properties --sites local --dir work --output-site local data/montage-workflow.yml\ngrep -c '^JOB\\|^MAXJOBS' work/run0001/montage-0.dag\nflux proxy $ALLOC flux run -N1 -n8 bash pmc_wrapper.sh $PREFIX/pegasus/bin/pegasus-mpi-cluster -v $RUN/montage-0.dag"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

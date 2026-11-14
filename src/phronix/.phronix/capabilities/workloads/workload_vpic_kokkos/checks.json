@@ -1,0 +1,114 @@
+[
+ {
+  "tool": "vpic_cmake_args",
+  "args": {},
+  "expect": {
+   "contains": "-DCMAKE_BUILD_TYPE=Release"
+  }
+ },
+ {
+  "tool": "vpic_cmake_args",
+  "args": {
+   "hdf5_root": "/x/hdf5"
+  },
+  "expect": {
+   "contains": "HDF5_NO_FIND_PACKAGE_CONFIG_FILE=ON"
+  }
+ },
+ {
+  "tool": "vpic_run_command",
+  "args": {
+   "deck_binary": "/x/d.Linux",
+   "ranks": "4",
+   "threads": "24",
+   "hdf5_lib_dir": "/x/hdf5/lib"
+  },
+  "expect": {
+   "contains": "/x/hdf5/lib"
+  }
+ },
+ {
+  "tool": "vpic_run_command",
+  "args": {
+   "deck_binary": "d.Linux"
+  },
+  "expect": {
+   "contains": "absolute"
+  }
+ },
+ {
+  "tool": "vpic_deck_prepare",
+  "args": {
+   "src_deck": "no-such.cxx",
+   "out_deck": "x.cxx"
+  },
+  "expect": {
+   "contains": "no deck"
+  }
+ },
+ {
+  "tool": "vpic_build_check",
+  "args": {
+   "build_dir": "no-such-build"
+  },
+  "expect": {
+   "contains": "no CMakeCache.txt"
+  }
+ },
+ {
+  "tool": "workload_vpic_kokkos_recipe",
+  "args": {},
+  "expect": {
+   "contains": "Weibel"
+  }
+ },
+ {
+  "tool": "workload_vpic_kokkos_check",
+  "args": {
+   "commands": [
+    "cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_KOKKOS_OPENMP=ON"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_vpic_kokkos_check",
+  "args": {
+   "commands": [
+    "flux run -N1 -n4 ./portability_test_x2-y2-z2.Linux --tpp 24 GLIBC_TUNABLES=glibc.rtld.optional_static_tls=1000000"
+   ]
+  },
+  "expect": {
+   "contains": "deck_decomposition"
+  }
+ },
+ {
+  "tool": "workload_vpic_kokkos_check",
+  "args": {
+   "commands": [
+    "cmake -S . -B build -DBUILD_INTERNAL_KOKKOS=ON -DENABLE_KOKKOS_OPENMP=ON -DCMAKE_BUILD_TYPE=Release",
+    "flux run -N1 -n4 -c24 env GLIBC_TUNABLES=glibc.rtld.optional_static_tls=1000000 /x/Weibel.Linux --tpp 24"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_vpic_kokkos_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

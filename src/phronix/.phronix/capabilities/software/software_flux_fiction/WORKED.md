@@ -1,0 +1,4 @@
+# What worked: software_flux_fiction
+
+- [flux_fiction/mock/smoke] (2026-07-17) From annotated/source: `DFTRACER_ENABLE=1 DFTRACER_INC_METADATA=1 DFTRACER_LOG_FILE=<WS>/traces/<run>/trace DFTRACER_DATA_DIR=all LD_LIBRARY_PATH=<CCE lib dirs>:/usr/lib64:<venv>/dftracer/lib64 PYTHONPATH=/usr/lib64/flux/python3.12 FLUX_FICTION_JOBTAP_SO=<build_ann>/src/emu-jobtap.so <venv>/bin/flux-fiction-run mock_config.toml --tag <tag> --no-faketime` -> job_submit/job_start/job_complete events with mhost and job_id.
+- [flux_fiction/build/annotated] `DFT=<venv>/lib/python3.13/site-packages/dftracer; CFLAGS="-I$DFT/include" LDFLAGS="-L$DFT/lib64 -Wl,-rpath,$DFT/lib64 -ldftracer_core" <venv>/bin/pip install -e annotated/source/ --config-settings=build-dir=<fresh_build_dir>`; ldd emu-jobtap.so resolves libdftracer_core under the session venv.

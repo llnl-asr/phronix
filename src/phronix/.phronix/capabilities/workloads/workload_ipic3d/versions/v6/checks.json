@@ -1,0 +1,126 @@
+[
+ {
+  "tool": "ipic3d_topology",
+  "args": {
+   "ranks": 32,
+   "nxc": 32,
+   "nyc": 32,
+   "nzc": 16
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "XLEN": 4,
+    "YLEN": 4,
+    "ZLEN": 2
+   }
+  }
+ },
+ {
+  "tool": "ipic3d_topology",
+  "args": {
+   "ranks": 128,
+   "nxc": 64,
+   "nyc": 64,
+   "nzc": 32
+  },
+  "expect": {
+   "json": {
+    "XLEN": 8,
+    "YLEN": 8,
+    "ZLEN": 2
+   }
+  }
+ },
+ {
+  "tool": "ipic3d_topology",
+  "args": {
+   "ranks": 7,
+   "nxc": 32,
+   "nyc": 32,
+   "nzc": 16
+  },
+  "expect": {
+   "contains": "divides the grid"
+  }
+ },
+ {
+  "tool": "ipic3d_cmake_args",
+  "args": {
+   "hdf5_root": "HDF5"
+  },
+  "expect": {
+   "contains": "-DCMAKE_POLICY_DEFAULT_CMP0074=NEW"
+  }
+ },
+ {
+  "tool": "ipic3d_cmake_args",
+  "args": {
+   "hdf5_root": "HDF5",
+   "dftracer_cmake_dir": "DFT"
+  },
+  "expect": {
+   "contains": "-DCMAKE_PREFIX_PATH=DFT"
+  }
+ },
+ {
+  "tool": "ipic3d_rabbit_mapping",
+  "args": {
+   "nodes": 2,
+   "usable_json": "[\"xfs\", \"gfs2\"]"
+  },
+  "expect": {
+   "contains": "gfs2 profile=shared"
+  }
+ },
+ {
+  "tool": "ipic3d_rabbit_mapping",
+  "args": {
+   "nodes": 32,
+   "usable_json": "[\"xfs\", \"gfs2\"]"
+  },
+  "expect": {
+   "contains": "VTK stays on global Lustre"
+  }
+ },
+ {
+  "tool": "ipic3d_input_check",
+  "args": {
+   "inp": "no-such-deck.inp",
+   "ranks": 32
+  },
+  "expect": {
+   "contains": "no input deck"
+  }
+ },
+ {
+  "tool": "ipic3d_source_check",
+  "args": {
+   "src_dir": "no-such-src"
+  },
+  "expect": {
+   "contains": "no CMakeLists.txt"
+  }
+ },
+ {
+  "tool": "ipic3d_input",
+  "args": {
+   "base_inp": "no-such-deck.inp",
+   "out_inp": "x.inp",
+   "ranks": 2,
+   "save_dir": "out"
+  },
+  "expect": {
+   "contains": "no input deck"
+  }
+ },
+ {
+  "tool": "ipic3d_source_fix",
+  "args": {
+   "src_dir": "no-such-src"
+  },
+  "expect": {
+   "contains": "no inputoutput/ParallelIO.cpp"
+  }
+ }
+]

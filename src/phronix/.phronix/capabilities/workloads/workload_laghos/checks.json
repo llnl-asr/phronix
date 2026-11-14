@@ -1,0 +1,8 @@
+[
+ {"tool": "workload_laghos_recipe", "args": {}, "expect": {"contains": "rocmcc/6.4.2-cce-20.0.0-magic"}},
+ {"tool": "workload_laghos_check", "args": {"commands": ["export DFTRACER_ENABLE_AGGREGATION=1 DFTRACER_AGGREGATION_TYPE=selective", "flux run -N 1 -n 4 -g1 ./laghos -p 1 -dim 3 -rs 2 -tf 0.6 -pa -d hip"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_laghos_check", "args": {"commands": ["export DFTRACER_ENABLE_AGGREGATION=1 DFTRACER_AGGREGATION_TYPE=SELECTIVE", "flux run -N 1 -n 4 -g1 ./laghos -p 1 -dim 3 -rs 2 -tf 0.6 -pa -d hip --no-visualization"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_laghos_check", "args": {"commands": ["DFTRACER_PAPI_EVENTS=PAPI_FP_OPS,PAPI_FP_INS,PAPI_FMA_INS,PAPI_VEC_INS DFTRACER_PAPI_MULTIPLEX=0 ./laghos -p 0 -d hip"]}, "expect": {"contains": "papi_subset_verified"}},
+ {"tool": "workload_laghos_check", "args": {"commands": ["dftracer_split -d traces --output-dir out --chunk-size-mb 100"]}, "expect": {"contains": "split_flags"}},
+ {"tool": "workload_laghos_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

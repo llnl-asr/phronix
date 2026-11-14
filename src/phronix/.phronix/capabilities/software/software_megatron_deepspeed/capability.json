@@ -1,0 +1,33 @@
+{
+ "name": "software_megatron_deepspeed",
+ "description": "Megatron-DeepSpeed (BERT-Base, GPT) under dftracer on Tuolumne MI300A (4 nodes x 4 GPUs = 16 ranks): the RCCL transport fix (put the site aws-ofi-rccl plugin on LD_LIBRARY_PATH, leave NCCL_NET unset - NCCL_NET=libfabric hard-fails because the plugin registers as 'AWS Libfabric'), --num-workers 2 for BERT MLM masking, train_step (not wall time) as the metric, and the confirmed negative/null results (bf16, ZeRO-1, flash-attn flags, hipBLASLt, NUMA, rocm leakfix). Load for any Megatron-DeepSpeed session, or when RCCL silently falls back to TCP sockets, NCCL_NET=libfabric fails with what looks like a plugin ABI error, train_step is CPU-bound at --num-workers 0, or session_final_report drops config.ini entries.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "run",
+  "trace",
+  "analyze",
+  "optimize"
+ ],
+ "tools": [
+  "software_megatron_deepspeed_recipe",
+  "software_megatron_deepspeed_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_megatron_deepspeed_recipe"
+  ],
+  "validator": [
+   "software_megatron_deepspeed_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608129.2675548,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-megatron-deepspeed"
+  }
+ ]
+}

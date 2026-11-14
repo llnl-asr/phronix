@@ -1,0 +1,32 @@
+{
+ "name": "tools_pydftracer",
+ "description": "pydftracer, the Python annotation API package (`dftracer.python`: `dft_fn` / `dftracer.initialize_log` / `finalize`, the `@_dft.log` decorator) that every python_annotate_file / python_annotate_project output imports: install, the import check that must pass before a smoke test, the hidden `typing_extensions` runtime dependency, the stale `dftracer.logger` / `dftracer_fn` API (re-annotate, never shim), and the same-venv rule. Load before any Python annotation build or smoke-test step, or on `ModuleNotFoundError: No module named 'dftracer.python'`, `No module named 'dftracer.logger'`, or `No module named 'typing_extensions'` from an annotated app.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "install",
+  "annotate",
+  "smoke"
+ ],
+ "tools": [
+  "tools_pydftracer_recipe",
+  "tools_pydftracer_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "tools_pydftracer_recipe"
+  ],
+  "validator": [
+   "tools_pydftracer_check"
+  ]
+ },
+ "topic": "tools",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607992.2612538,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) tools-pydftracer"
+  }
+ ]
+}

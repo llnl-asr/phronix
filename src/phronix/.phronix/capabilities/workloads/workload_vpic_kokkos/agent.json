@@ -1,0 +1,14 @@
+{
+ "description": "VPIC-Kokkos (TauferLab/vpic-kokkos devel): CMake args that build a fast Cray/OpenMP build, the traced/untraced flux run command (TLS tunable, --tpp), a sized I/O-enabled short_pulse deck copy, and a build check.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep"
+ ],
+ "skills": [
+  "workload_vpic_kokkos"
+ ],
+ "permission_mode": "default",
+ "background": true,
+ "instructions": "Call workload_vpic_kokkos's own tools (vpic_cmake_args, vpic_run_command, vpic_deck_prepare, workload_vpic_kokkos_recipe to predict; vpic_build_check, workload_vpic_kokkos_check to validate) to do its deterministic work and follow the Corrector section on any failed check; ask the user before any irreversible step (apply/cancel/confirm=true calls)."
+}

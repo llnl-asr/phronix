@@ -1,0 +1,9 @@
+# Lessons: workload_ygm_bench
+
+- [L-3a7d0e64] ygm-bench silently builds against a fresh unannotated ygm -> find_package(ygm CONFIG) fails on the annotated tree (no install/export rules) so FetchContent clones from GitHub -> -DFETCHCONTENT_SOURCE_DIR_YGM=<ws>/annotated/source; confirm with ldd | grep dftracer (2026-08-04)
+- [L-c91b52f3] DFTRACER_CPP_FUNCTION events through YGM are silent no-ops in ygm-bench -> the bench entry points never call DFTRACER_CPP_INIT -> add INIT/FINI to each bench main() (2026-08-04)
+- [L-7e24a8d9] 128-rank traced around_the_world_ygm 5-10x+ slower than untraced, wall time independent of -n, >1GB per rank -> 9 annotated YGM progress-poll functions (local_progress & siblings) on the hot path -> keep them, enable selective aggregation (DFTRACER_ENABLE_AGGREGATION=1, TYPE=SELECTIVE, rules.yaml inclusion "dur < 1000", TRACE_INTERVAL_MS=5000): ~55MB total (2026-08-04)
+- [L-05f6c1ab] around_the_world_ygm collapses from 510K to 1,229 hops/s at 32 ranks/1 node, MAX_WAITSOME_IALLREDUCE ~ all wall time (untraced) -> Cray MPICH MPI_Iallreduce termination protocol collapses at high per-node rank density -> use 32 ranks/node at most, never 96 (2026-08-04)
+- [L-e8b30d57] ygm-bench OOM at 96 ranks/node (memory.peak ~476.87G) -> default YGM_COMM_NUM_IRECVS=8 x 1GB = 8GB/rank -> 32 ranks/node with default buffers; to shrink use YGM_COMM_IRECV_SIZE_KB (singular) (2026-08-04)
+- [L-91d4f72e] Setting YGM_COMM_IRECVS_SIZE_KB has no effect -> the plural name is only the JSON display label (comm_environment.hpp ~169); getenv reads YGM_COMM_IRECV_SIZE_KB (~112) -> use the singular name (2026-08-04)
+- [L-4b6a2d80] 64MB irecv buffers at 96 ranks/node: no OOM but no progress for minutes (looks like a deadlock, ~6GB/501GB used) -> likely the Iallreduce collapse taken further (not confirmed) -> 32 ranks/node with default buffers (2026-08-04)

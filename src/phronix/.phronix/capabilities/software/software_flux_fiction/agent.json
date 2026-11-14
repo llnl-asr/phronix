@@ -1,0 +1,14 @@
+{
+ "description": "Builds, annotates (simulated-clock job events) and smoke-runs Flux-Fiction under dftracer, using software_flux_fiction_recipe and software_flux_fiction_check.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep",
+  "Glob"
+ ],
+ "skills": [
+  "software_flux_fiction"
+ ],
+ "permission_mode": "default",
+ "instructions": "Query software_flux_fiction_recipe (dftracer_link, annotation, runtime_env, run) before acting; run software_flux_fiction_check over planned build/run commands and the manual log_event code. Validate with the mock backend first; on the real backend expect the sched.quiescent blocker on stock Fluxion 0.52.0."
+}

@@ -1,0 +1,7 @@
+# Lessons: software_cupti
+
+- [L-8e5abae2] Build succeeded with CUDA tracing silently off; no `found CUPTI at` line -> Site-default /usr/local/cuda-12.0 has no cupti.h and no extras/ (stripped install); FindCUPTI skipped it -> Pin DFTRACER_CUDA_PATH at a module-managed toolkit (cuda/11.8.0, 12.2.2, 12.6.0, 12.9.1, 13.1.1 all carry CUPTI in the merged layout) (2026-08-26)
+- [L-fbf1a42d] `find <cuda-root>* -name cupti.h` finds nothing, looks like CUPTI absent -> Site CUDA trees are symlinks; find does not follow them -> Use `find -L` or `ls -L <root>/include/cupti.h` (undated)
+- [L-c5b7d70c] CUPTI struct selection broke between CUDA 11.5 and 11.6 -> Both share CUPTI_API_VERSION 16 but ship Kernel6 vs Kernel7 -> Key struct bands on the toolkit version (DFTRACER_CUDA_VERSION), not CUPTI_API_VERSION (undated)
+- [L-4248cb82] A 'capture all 30 PAPI counters' plan failed on the H100 cluster -> PAPI there is 5.6.0.0 with 17 presets across 19 counters; rapl disabled, perf_event_uncore disabled, no CUDA/NVML component -> Re-derive the counter plan per system (software_papi); no CPU/DRAM energy via PAPI there (2026-08-26)
+- [L-dff2d4f6] A run configuration needing both CUPTI and PAPI/variorum could not be built -> CUPTI lived on feature/cupti, PAPI/variorum/service telemetry on develop, unmerged -> grep CMakeLists.txt for both option names before planning; merge or drop one with the user (2026-08-26)

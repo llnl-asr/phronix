@@ -1,0 +1,198 @@
+[
+ {
+  "tool": "system_detect_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "system_detect"
+   }
+  }
+ },
+ {
+  "tool": "system_detect_recipe",
+  "args": {
+   "section": "allowed_bash"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "allowed_bash",
+     "detect",
+     "known_systems",
+     "report",
+     "session_close",
+     "tools",
+     "unknown_flow"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "system_detect_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "mcp__dftracer__system_save(name=\"tuolumne1001\", notes=\"x\")"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "save_name_no_digits": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "mcp__dftracer__system_save(name=\"tuolumne\", notes=\"x\")"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "save_name_no_digits": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "mcp__dftracer__system_save(name=\"newsys\", notes=\"x\")"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "detect_before_save": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "mcp__dftracer__system_detect()\nmcp__dftracer__system_save(name=\"newsys\", notes=\"x\")"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "detect_before_save": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "module load gcc"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "module_read_only": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "module avail gcc"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "module_read_only": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "cmake -S . -B build"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_build_or_run": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "module list"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_build_or_run": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "sudo dmidecode"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_sudo": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "hostname"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_sudo": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_detect_check",
+  "args": {
+   "commands": "mcp__dftracer__system_detect()\nhostname\nmodule list\nmodule avail papi\nmcp__dftracer__system_save(name=\"newsys\", notes=\"gcc/12 + openmpi; mpirun launcher\")"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

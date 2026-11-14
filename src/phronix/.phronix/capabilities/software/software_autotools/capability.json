@@ -1,0 +1,30 @@
+{
+ "name": "software_autotools",
+ "description": "Autotools (autoconf/automake/libtool) build system: detection (configure.ac + Makefile.am needing autoreconf -fi vs a checked-in configure script from a release tarball), the session_configure / session_build_install / session_build_annotated flow, dftracer injection through PKG_CONFIG_PATH / CPPFLAGS / LDFLAGS (there is no generic --with-dftracer flag), and stale .deps/ cleanup. Load for any project with configure.ac / Makefile.am or a checked-in configure script, or on 'configure: error: unrecognized option --with-...', a config.status failure from stale .deps/ directories, or dftracer headers/libs not found by the annotated configure.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build"
+ ],
+ "tools": [
+  "software_autotools_recipe",
+  "software_autotools_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_autotools_recipe"
+  ],
+  "validator": [
+   "software_autotools_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607205.7322898,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-autotools"
+  }
+ ]
+}

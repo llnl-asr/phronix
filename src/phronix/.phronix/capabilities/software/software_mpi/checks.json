@@ -1,0 +1,314 @@
+[
+ {
+  "tool": "software_mpi_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_mpi"
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_recipe",
+  "args": {
+   "section": "barrier_analysis"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "barrier_analysis",
+     "cb_nodes_tuolumne_lustre5",
+     "citations",
+     "clang_syntax_check_cray",
+     "cray_aggregators",
+     "cray_mpich_9_0_1_hints",
+     "cray_mpich_hints",
+     "dftracer_mpi",
+     "env_propagation",
+     "generic_romio",
+     "mpi4py_cray",
+     "numa",
+     "romio_hints_file",
+     "storage_guidance"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "flux proxy $JOB flux run -N 2 -n 192 --env MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable:cb_buffer_size=67108864\" ./ior"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_mpiio_hints_via_flux_env": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "flux proxy $JOB flux run -N 2 -n 192 --env LD_LIBRARY_PATH=<libs> bash wrapper.sh ./ior"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_mpiio_hints_via_flux_env": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export MPICH_MPIIO_HINTS=\"romio_cb_write=enable\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "mpiio_hints_have_pattern": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "mpiio_hints_have_pattern": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable;cb_buffer_size=67108864\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "mpiio_hints_colon_separated": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable:cb_buffer_size=67108864\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "mpiio_hints_colon_separated": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export MPICH_MPIIO_HINTS=\"*:romio_no_indep_rw=true\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_romio_no_indep_rw": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "FS_TYPE=vast\nexport MPICH_MPIIO_HINTS=\"*:romio_ds_write=disable\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_ds_write_disable_on_vast": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "FS_TYPE=vast\nexport MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_ds_write_disable_on_vast": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "FS_TYPE=vast\nexport MPICH_MPIIO_HINTS=\"*:romio_cb_read=enable\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_cb_read_on_vast": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "FS_TYPE=vast\nexport MPICH_MPIIO_HINTS=\"*:romio_cb_read=disable\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_cb_read_on_vast": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export MPICH_MPIIO_HINTS=\"*:cb_nodes=16\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "cray_cb_nodes_needs_multiplier": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export MPICH_MPIIO_HINTS=\"*:cb_nodes=16\"\nexport CRAY_CB_NODES_MULTIPLIER=2"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "cray_cb_nodes_needs_multiplier": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1\nmpirun -np 4 ./my_app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "mpirun_forwards_dftracer_env": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1\nmpirun -np 4 -x DFTRACER_ENABLE -x DFTRACER_INIT -x LD_PRELOAD ./my_app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "mpirun_forwards_dftracer_env": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "module load cray-mpich/9.1.0\npip install mpi4py"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "mpi4py_cray_abi": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "module load cray-mpich/9.1.0\nexport MPI4PY_MPIABI=mpich\npip install --force-reinstall --no-deps mpi4py-patched.whl"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "mpi4py_cray_abi": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "pip install --no-binary=mpi4py mpi4py"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_mpi4py_no_binary": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpi_check",
+  "args": {
+   "commands": "module load cray-mpich/9.0.1\ncat > wrapper.sh << 'EOF'\n#!/bin/bash\nexport MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable:cb_buffer_size=67108864:cb_nodes=16\"\nexport CRAY_CB_NODES_MULTIPLIER=2\nexport MPICH_MPIIO_HINTS_DISPLAY=1\nexec \"$@\"\nEOF\nchmod +x wrapper.sh\nflux proxy $JOB flux run -N 2 -n 192 --env DFTRACER_ENABLE=1 --env DFTRACER_INIT=FUNCTION --env LD_LIBRARY_PATH=<libs> bash wrapper.sh ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

@@ -1,0 +1,9 @@
+[
+ {"tool": "workload_minife_recipe", "args": {}, "expect": {"contains": "rocmcc/6.4.2-cce-20.0.0-magic"}},
+ {"tool": "workload_minife_recipe", "args": {"variant": "cuda"}, "expect": {"contains": "nvtx3"}},
+ {"tool": "workload_minife_recipe", "args": {"variant": "nope"}, "expect": {"contains": "unknown variant"}},
+ {"tool": "workload_minife_check", "args": {"commands": ["srun -n 16 ./miniFE.x nx=256 ny=256 nz=256 verify_solution=1"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_minife_check", "args": {"commands": ["nvcc -ccbin mpicxx -Wl,-rpath,/x/lib64 main.cu"]}, "expect": {"contains": "Xlinker"}},
+ {"tool": "workload_minife_check", "args": {"commands": ["cd openmp45-opt && ln -sfn ../openmp45/basic basic && ln -sfn ../openmp45/fem fem && ln -sfn ../openmp45/utils utils", "module load papi/7.2.0.2", "flux run -N4 -n16 ./miniFE.x nx=768 ny=768 nz=768"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_minife_check", "args": {"commands": ""}, "expect": {"json": {"status": "inconclusive"}}}
+]

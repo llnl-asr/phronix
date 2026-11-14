@@ -1,0 +1,34 @@
+{
+ "name": "software_flux_fiction",
+ "description": "Flux-Fiction (Flux scheduling emulator: Meson-built C jobtap plugin emu-jobtap.so + Python package) build, dftracer linking, annotation and run facts: annotate the EMULATED job timeline with manual log_event (simulated time from FakeTimeController, one event per allocated node tagged mhost), DFTRACER_INC_METADATA=1, explicit initialize_log/finalize, CFLAGS/LDFLAGS dftracer link for Meson, session-venv editable install, Flux Python bindings deps, MockAdapter diagnostic. Load when building or annotating flux-fiction, or on: \"call to undeclared function 'strdup'; ISO C99 and later do not support implicit function declarations\"; 'log_event(): incompatible function arguments'; trace with no job_submit/job_start/job_complete or no args; dependency('dftracer') not found; emu-jobtap.so not found; FileExistsError from create_run_root; missing ../test-inputs file; \"Unknown service method 'sched.quiescent': Function not implemented\"; 'TypeError: Object of type method is not JSON serializable'.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "annotate",
+  "smoke",
+  "run",
+  "trace"
+ ],
+ "tools": [
+  "software_flux_fiction_recipe",
+  "software_flux_fiction_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_flux_fiction_recipe"
+  ],
+  "validator": [
+   "software_flux_fiction_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607451.3043518,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-flux-fiction"
+  }
+ ]
+}

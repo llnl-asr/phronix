@@ -1,0 +1,8 @@
+{
+ "description": "Renders and checks the XSBench build/annotate/run recipe (openmp-threading MPI=yes, cuda variant); never builds or runs.",
+ "level": "level_1",
+ "tools": ["Read", "Grep"],
+ "skills": ["workload_xsbench"],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_xsbench_recipe (pass variant to narrow it), check any proposed command list with workload_xsbench_check, and follow the Corrector section for each failed check. Do not run builds or jobs."
+}

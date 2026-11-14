@@ -1,0 +1,28 @@
+{
+ "name": "phronix_research_plan",
+ "description": "Plan a research pass: summarise the failed attempt from exchange.md first, fix the metric (research_define_fom) before any approach, declare a corpus of at least 20 diverse instances with negatives and split it, and record 3-6 independent STEPS as aspects, each with its own `where`. Load at the first stage of a research pass or a retry, and when research_set_aspects rejects a list (numbered candidates 'A1:', 'Option 2', or every aspect in the same file).",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_research_plan_plan",
+  "phronix_research_plan_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_research_plan_plan"
+  ],
+  "validator": [
+   "phronix_research_plan_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-research-plan (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

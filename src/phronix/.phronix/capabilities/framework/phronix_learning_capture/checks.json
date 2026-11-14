@@ -1,0 +1,123 @@
+[
+ {
+  "tool": "phronix_learning_capture_plan",
+  "args": {
+   "goal": "bash observations of the last ten seconds"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_learning_capture_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_learning_capture_check",
+  "args": {
+   "record": {
+    "kind": "bash",
+    "graph_lookup_found": true,
+    "observed": true,
+    "findings": [
+     {
+      "target": "bash",
+      "text": "Merge stderr into a subprocess whose output you parse, or the parse loses the error.",
+      "tool_verdict": "NO-TOOL: it is a fact, not a procedure"
+     },
+     {
+      "target": "tests",
+      "text": "Probe a function's raw output before asserting on it.",
+      "tool_verdict": "TOOL: probe_raw_output",
+      "category": "tests"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_learning_capture_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_learning_capture_plan",
+  "args": {
+   "goal": "bash observations of the last ten seconds",
+   "facts": {
+    "procedure": true
+   }
+  },
+  "expect": {
+   "contains": "category=<kind of work>"
+  }
+ },
+ {
+  "tool": "phronix_learning_capture_plan",
+  "args": {
+   "goal": "bash observations of the last ten seconds",
+   "facts": {
+    "skill_missing": true
+   }
+  },
+  "expect": {
+   "contains": "skill_write"
+  }
+ },
+ {
+  "tool": "phronix_learning_capture_check",
+  "args": {
+   "record": {
+    "kind": "bash",
+    "graph_lookup_found": false,
+    "observed": true,
+    "findings": [
+     {
+      "target": "phronix-learning-capture",
+      "text": "wrote three blocks",
+      "tool_verdict": "NO-TOOL: fact"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "contains": "never into phronix-learning-capture/reconcile"
+  }
+ },
+ {
+  "tool": "phronix_learning_capture_check",
+  "args": {
+   "record": {
+    "kind": "tests",
+    "graph_lookup_found": true,
+    "observed": false,
+    "findings": [
+     {
+      "target": "tests",
+      "text": "dot validation is falsified; no longer a valid approach",
+      "tool_verdict": "none"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "contains": "TOOL: <name> or NO-TOOL"
+  }
+ }
+]

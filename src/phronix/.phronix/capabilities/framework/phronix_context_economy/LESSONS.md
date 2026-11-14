@@ -1,0 +1,5 @@
+# Lessons: phronix_context_economy
+
+- [L-cd5618f7] Searching skills and memory with one query and stopping there -> You get whichever store happened to match more strongly and never learn that the other had the answer. Always call both. -> follow phronix-context-economy P1 (Corner cases) (2026-09-15, dftracer-agents phronix-context-economy/LESSONS.md P1)
+- [L-7dd7c757] Loading a whole skill because the pointer looked inconvenient -> This is the failure the tools are designed around: handed a `file:line`, an agent often loads the file anyway. The retrieval tools return the section text directly so there is no reason to. -> follow phronix-context-economy P2 (Corner cases) (2026-09-15, dftracer-agents phronix-context-economy/LESSONS.md P2)
+- [L-360437cc] Treating a stale graph as a missing answer -> A line number that does not match the file means the graph is behind, not that the symbol moved. Force a rebuild before concluding anything. -> follow phronix-context-economy P3 (Corner cases) (2026-09-15, dftracer-agents phronix-context-economy/LESSONS.md P3)

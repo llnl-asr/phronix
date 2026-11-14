@@ -1,0 +1,34 @@
+{
+ "name": "system_tioga",
+ "description": "System profile for tioga (LLNL Cray EX, AMD MI250X gfx90a, 8 GCDs/node, EPYC 7A53 Trento 64 cores, Flux): same software stack as Tuolumne (rocm/6.4.2, rocmcc/6.4.2-cce-20.0.0-magic, cray-mpich/9.0.1, papi/7.2.0.2; binaries portable) but different hardware, queues, PAPI presets and Lustre. Load for any dftracer session, build or job launch on tioga, or when a job sits in S forever (pall scheduling stopped, drained nodes, cores exhausted by dftracer_service), on 'flux-alloc: ERROR: queue \"pllm\" not valid for user', a gfx942 binary whose kernels do not run, missing PAPI_L2_TCM / PAPI_L2_TCH / PAPI_FMA_INS, a multi-rank traced GPU run SIGSEGV at >= 3 ranks, zero variorum power events, 'corrupted size vs. prev_size in fastbins' at service teardown, or a dangling /p/lustre5 dataset symlink.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "alloc",
+  "run",
+  "trace",
+  "analyze"
+ ],
+ "tools": [
+  "system_tioga_recipe",
+  "system_tioga_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "system_tioga_recipe"
+  ],
+  "validator": [
+   "system_tioga_check"
+  ]
+ },
+ "topic": "systems",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608065.1642985,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) system-tioga"
+  }
+ ]
+}

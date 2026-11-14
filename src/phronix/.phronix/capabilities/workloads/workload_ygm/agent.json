@@ -1,0 +1,13 @@
+{
+ "description": "Deprecated YGM stub: points to software_ygm / workload_ygm_bench and rejects new content here.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep"
+ ],
+ "skills": [
+  "workload_ygm"
+ ],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_ygm_recipe, check any proposed command list with workload_ygm_check, and follow the Corrector section for each failed check. Do not run builds or jobs."
+}

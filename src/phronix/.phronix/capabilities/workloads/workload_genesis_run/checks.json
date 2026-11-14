@@ -1,0 +1,8 @@
+[
+ {"tool": "workload_genesis_run_recipe", "args": {}, "expect": {"contains": "DFTRACER_AGGREGATION_TYPE"}},
+ {"tool": "workload_genesis_run_matrix", "args": {"n_inputs": 186, "node_scales": "1,2,4", "ppns": "1,2,4", "papi_sets": "a,b", "cores_per_node": 64}, "expect": {"json": {"status": "ok", "total_runs": 3348, "cores_per_rank": 15}}},
+ {"tool": "workload_genesis_run_matrix", "args": {"n_inputs": 0, "node_scales": "", "ppns": "1", "papi_sets": "a"}, "expect": {"json": {"status": "error"}}},
+ {"tool": "workload_genesis_run_check", "args": {"commands": ["export DFTRACER_AGGREGATION_TYPE=selective", "flux batch -q pbatch -N2 -t 2h --output=a_%j.log w.sh", "pkill -f genesis_driver.sh"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_genesis_run_check", "args": {"commands": ["export DFTRACER_ENABLE_AGGREGATION=1", "export DFTRACER_AGGREGATION_TYPE=SELECTIVE", "flux batch -q pbatch -N2 -t 2h --bank=gwisdom --output=a/batch_g_{{id}}.log --dependency=afterany:f1 w.sh", "grep -a 'Verification: PASSED' split.log", "flux run -N2 -n16 -o exit-timeout=none genesis_compact.sh"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_genesis_run_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

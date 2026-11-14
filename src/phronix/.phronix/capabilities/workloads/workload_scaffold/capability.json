@@ -1,0 +1,33 @@
+{
+ "name": "workload_scaffold",
+ "description": "ScaFFold (LBANN PyTorch DDP 3D U-Net on fractals) on Tuolumne MI300A: shared venv, python/3.11.5, GNU MPICH for dftracer, torch/lib on LD_LIBRARY_PATH, exit-134 policy, config sizing, two-phase generate_fractals + torchrun-hpc, measured dataloader/checkpoint fixes; predictor renders the recipe, validator checks a command/config list. Load for scaffold, torchrun-hpc, \"Error in dlopen: libcaffe2_nvrtc.so\", \"double free or corruption (!prev)\".",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_scaffold_recipe",
+  "workload_scaffold_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_scaffold_recipe"
+  ],
+  "validator": [
+   "workload_scaffold_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-scaffold"
+  }
+ ]
+}

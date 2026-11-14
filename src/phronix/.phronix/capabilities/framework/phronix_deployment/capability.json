@@ -1,0 +1,28 @@
+{
+ "name": "phronix_deployment",
+ "description": "Materialise phronix into a project root and keep it there: the idempotent `phronix deploy` (and --check as a CI gate), what lands where (.phronix/ committed, rendered agents/skills/settings/hooks/MCP registration gitignored), `phronix_stack start|restart|status|env` and the three daemons (mlflow, collector, MCP server) with their restart semantics. Load when setting up a project, wiring CI, diagnosing a stale workspace ('deploy --check' non-zero, a file reported as a conflict), or when a daemon or port is not what the configuration says.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_deployment_plan",
+  "phronix_deployment_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_deployment_plan"
+  ],
+  "validator": [
+   "phronix_deployment_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-deployment (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

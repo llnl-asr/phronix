@@ -1,0 +1,12 @@
+{
+ "description": "Plans and checks the phronix-learning-reconcile procedure (reconciling learned skills into one true copy, and improving the learner); renders checklists and rules on records, never runs anything.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "phronix_learning_reconcile"
+ ],
+ "permission_mode": "default",
+ "instructions": "Render the procedure with phronix_learning_reconcile_plan for the goal you are given, follow it step by step, then validate the resulting record with phronix_learning_reconcile_check and report each failed check with its fix (the skill's Corrector). Do not run jobs or edit capability files."
+}

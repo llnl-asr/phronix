@@ -1,0 +1,47 @@
+[
+ {
+  "tool": "workload_lammps_kokkos_recipe",
+  "args": {},
+  "expect": {
+   "contains": "elcapitan_kokkos.cmake"
+  }
+ },
+ {
+  "tool": "workload_lammps_kokkos_check",
+  "args": {
+   "commands": [
+    "flux run -N2 -n8 -g1 -c22 ./lmp -k on g 4 -sf kk -in in.lj"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_lammps_kokkos_check",
+  "args": {
+   "commands": [
+    "cmake -C src/cmake/presets/elcapitan_kokkos.cmake -DPKG_KOKKOS=ON -DBUILD_MPI=ON src/cmake",
+    "flux run -N2 -n8 -g1 -c22 env HSA_XNACK=1 MPICH_GPU_SUPPORT_ENABLED=1 ./lmp -k on g 1 -sf kk -in in.lj"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_lammps_kokkos_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

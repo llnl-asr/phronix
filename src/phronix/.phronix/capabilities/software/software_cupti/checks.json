@@ -1,0 +1,231 @@
+[
+ {
+  "tool": "software_cupti_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_cupti"
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_recipe",
+  "args": {
+   "section": "activity_contract"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "activity_contract",
+     "apis",
+     "branch_matrix_2026_08_26",
+     "buffers",
+     "build",
+     "clock_rebase",
+     "events",
+     "findcupti_search_order",
+     "layout",
+     "preflight_probe",
+     "runtime_gates",
+     "site_h100_spr",
+     "struct_bands"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "CMAKE_ARGS=\"-DDFTRACER_ENABLE_CUDA_TRACING=ON\" pip install --no-binary dftracer dftracer"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "cuda_tracing_as_env_not_cmake_args": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "DFTRACER_ENABLE_CUDA_TRACING=ON DFTRACER_CUDA_PATH=<cuda-root> pip install --no-binary dftracer dftracer"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "cuda_tracing_as_env_not_cmake_args": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "DFTRACER_ENABLE_CUDA_TRACING=ON pip install --no-binary dftracer dftracer"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pin_cuda_path": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "ls -L <cuda-root>/include/cupti.h\nDFTRACER_ENABLE_CUDA_TRACING=ON DFTRACER_CUDA_PATH=<cuda-root> pip install --no-binary dftracer dftracer"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pin_cuda_path": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "./autobuild.sh --with-cuda <cuda-root>"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "verify_cupti_header": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "ls -L <cuda-root>/include/cupti.h\n./autobuild.sh --with-cuda <cuda-root>"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "verify_cupti_header": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "find /usr/local/cuda* -name cupti.h"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "find_follows_symlinks": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "find -L /usr/local/cuda* -name cupti.h"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "find_follows_symlinks": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "DFTRACER_ENABLE_CUDA_TRACING=ON DFTRACER_CUDA_PATH=/opt/nvidia/nsight-systems/2024.1/target-linux-x64 pip install --no-binary dftracer dftracer"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_nsight_bundled_cupti": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "DFTRACER_CUDA_PATH=<cuda-root>"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_nsight_bundled_cupti": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1\nnsys profile ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "one_cupti_client": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1\n./app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "one_cupti_client": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cupti_check",
+  "args": {
+   "commands": "module load cuda/12.6.0\nls -L <cuda-root>/include/cupti.h\ngrep -i RestrictProfiling /proc/driver/nvidia/params\nDFTRACER_ENABLE_CUDA_TRACING=ON DFTRACER_CUDA_PATH=<cuda-root> pip install --no-binary dftracer dftracer\nexport DFTRACER_ENABLE=1\nexport DFTRACER_INIT=PRELOAD\n./app"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

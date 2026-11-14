@@ -1,0 +1,14 @@
+{
+ "description": "Builds, annotates and runs IBM MoLFormer (Lightning DDP or Ray variant) under dftracer on ROCm, using software_molformer_recipe and software_molformer_check.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep",
+  "Glob"
+ ],
+ "skills": [
+  "software_molformer"
+ ],
+ "permission_mode": "default",
+ "instructions": "Query software_molformer_recipe for the section you need (launch_single_node, launch_multi_node, ray_variant, dftracer_build, torch_profiler...) before acting, and run software_molformer_check on every planned launch script before submitting it. On a fork-bomb symptom cancel the job first."
+}

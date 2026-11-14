@@ -1,0 +1,33 @@
+{
+ "name": "workload_rajaperf",
+ "description": "RAJAPerf (LLNL/RAJAPerf, CMake+BLT kernel suite, HIP/MPI/OpenMP) recipe: ENABLE_MPI + RAJA_PERFSUITE_ENABLE_MPI, dftracer link via rocprofiler-sdk + plain dftracer target, annotation scope and main() macro layout, valid --kernels/--variants names (unmatched names run zero kernels), --exclusive multi-node verification, measured no-op/regression levers; predictor renders it, validator checks a command list. Load for rajaperf, raja-perf.exe, RAJA_PERFSUITE_NUM_MPI_TASKS: 0, \"pasting formed 'profiler_\\\"main\\\"'\".",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_rajaperf_recipe",
+  "workload_rajaperf_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_rajaperf_recipe"
+  ],
+  "validator": [
+   "workload_rajaperf_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-rajaperf"
+  }
+ ]
+}

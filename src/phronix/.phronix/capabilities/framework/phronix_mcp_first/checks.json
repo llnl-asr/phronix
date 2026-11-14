@@ -1,0 +1,104 @@
+[
+ {
+  "tool": "phronix_mcp_first_plan",
+  "args": {
+   "goal": "session_configure failed with 'Unsupported build tool: unknown'"
+  },
+  "expect": {
+   "contains": "\"id\": \"I2.1\""
+  }
+ },
+ {
+  "tool": "phronix_mcp_first_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_mcp_first_check",
+  "args": {
+   "record": {
+    "tool": "session_configure",
+    "error": "Unsupported build tool: unknown",
+    "outcome": "repaired",
+    "fix": "detector recognises a bare-Python tree (no setup.py/pyproject) as build_tool=python",
+    "recalled": true,
+    "lesson": "L-xxxx bare-Python workloads",
+    "workaround_used": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_mcp_first_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_mcp_first_plan",
+  "args": {
+   "goal": "session_configure failed with 'Unsupported build tool: unknown'",
+   "facts": {
+    "cannot_repair_in_budget": true
+   }
+  },
+  "expect": {
+   "contains": "Stop and report the tool defect"
+  }
+ },
+ {
+  "tool": "phronix_mcp_first_plan",
+  "args": {
+   "goal": "session_configure failed with 'Unsupported build tool: unknown'",
+   "facts": {
+    "new_or_renamed_tool": true
+   }
+  },
+  "expect": {
+   "contains": "reconnect"
+  }
+ },
+ {
+  "tool": "phronix_mcp_first_check",
+  "args": {
+   "record": {
+    "tool": "session_install_dftracer",
+    "error": "dftracer pip install failed",
+    "outcome": "repaired",
+    "fix": "ran pip by hand",
+    "recalled": false,
+    "lesson": "",
+    "workaround_used": true
+   }
+  },
+  "expect": {
+   "contains": "undo the Bash workaround"
+  }
+ },
+ {
+  "tool": "phronix_mcp_first_check",
+  "args": {
+   "record": {
+    "tool": "session_configure",
+    "error": "Unsupported build tool: unknown",
+    "outcome": "stopped"
+   }
+  },
+  "expect": {
+   "contains": "report the tool defect"
+  }
+ }
+]

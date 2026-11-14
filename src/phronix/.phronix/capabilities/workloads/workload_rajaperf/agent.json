@@ -1,0 +1,13 @@
+{
+ "description": "Renders and checks the RAJAPerf build/link/annotation/run recipe and kernel/variant names; never builds or runs.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep"
+ ],
+ "skills": [
+  "workload_rajaperf"
+ ],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_rajaperf_recipe, check any proposed command list with workload_rajaperf_check, and follow the Corrector section for each failed check. Do not run builds or jobs."
+}

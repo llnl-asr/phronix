@@ -1,0 +1,11 @@
+{
+ "name": "workload_genesis_leaf_contract",
+ "description": "Genesis trace-corpus published-leaf contract (DATA, NOTE, SUMMARY, RUN JSON, VALIDATION, EXACTNESS, COMPLETE): predictor renders the contract and checker usage, validators check a publish command list and the leaves on disk (port of genesis_validate_leaf.py). Load before publishing a genesis leaf, before declaring a corpus complete, or on 'FAIL <leaf>', 'stale COMPACTION_NOT_RUN.md', 'PAPI multiplexed (estimates)', 'app_files != ranks', 'missing summary.json'.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["package", "baseline"],
+ "tools": ["workload_genesis_leaf_contract_recipe", "workload_genesis_leaf_contract_check", "workload_genesis_leaf_contract_leaf_check"],
+ "pvc": {"predictor": ["workload_genesis_leaf_contract_recipe"], "validator": ["workload_genesis_leaf_contract_check", "workload_genesis_leaf_contract_leaf_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill genesis_leaf_contract (SKILL.md + scripts/genesis_validate_leaf.py, kept in docs/scripts)"}]
+}

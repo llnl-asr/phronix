@@ -1,0 +1,217 @@
+[
+ {
+  "tool": "system_tuolumne_rabbit_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "system_tuolumne_rabbit"
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_recipe",
+  "args": {
+   "section": "launch"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "launch",
+     "optimization_level",
+     "permissions",
+     "reference",
+     "thresholds",
+     "tiers",
+     "verify",
+     "when_not",
+     "workflow",
+     "wrapper_example"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "flux run -N 1 -n 4 -S \"#DW jobdw type=xfs capacity=1TiB name=scratch\" ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "dw_on_alloc_not_run": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "flux alloc -N 1 -q pbatch -t 60 -S \"#DW jobdw type=xfs capacity=1TiB name=scratch\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "dw_on_alloc_not_run": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "flux alloc -N 16 -q pbatch -t 60 -S \"#DW jobdw type=gfs2 capacity=4TiB name=shared access_mode=striped\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "gfs2_needs_chassis": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "flux alloc -N 16 --coral2-chassis=1 -q pbatch -t 60 -S \"#DW jobdw type=gfs2 capacity=4TiB name=shared access_mode=striped\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "gfs2_needs_chassis": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "flux alloc -N 16 --coral2-chassis=1 -q pbatch -t 60 -S \"#DW jobdw type=gfs2 capacity=4TiB name=shared\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "gfs2_striped_access": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "flux alloc -N 32 --coral2-chassis=1 -q pbatch -t 60 -S \"#DW jobdw type=gfs2 capacity=4TiB name=shared access_mode=striped\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "gfs2_max_16_nodes": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "flux alloc -N 1 -q pbatch -t 60 -S \"#DW jobdw type=xfs\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "dw_needs_capacity_and_name": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "export DFTRACER_LOG_FILE=$DW_JOB_scratch/trace"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "traces_not_on_rabbit": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "export DFTRACER_LOG_FILE=${WORKSPACE}/workspaces/${SESSION}/traces/run1/trace"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "traces_not_on_rabbit": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "sudo mount /dev/nvme0n1 /mnt/rabbit"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_sudo": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "export DATA_DIR=$DW_JOB_scratch\nflux run -N 1 -n 4 ./app --data $DATA_DIR"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "agent_runs_via_proxy_wrapper": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_rabbit_check",
+  "args": {
+   "commands": "flux alloc -N 16 --coral2-chassis=1 -q pbatch -t 60 -S \"#DW jobdw type=gfs2 capacity=4TiB name=shared access_mode=striped\"\nflux proxy <JOBID> bash ${WORKSPACE}/workspaces/${SESSION}/tmp/run_rabbit.sh\nexport DATA_DIR=\"$DW_JOB_shared\"\nrsync -a /p/lustre5/$USER/dataset/ \"$DATA_DIR\"/\nexport DFTRACER_LOG_FILE=${WORKSPACE}/workspaces/${SESSION}/traces/run1/trace\nflux run -N 16 -n 64 ./app --data \"$DATA_DIR\"\nrsync -a \"$DATA_DIR\"/out/ /p/lustre5/$USER/out/"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

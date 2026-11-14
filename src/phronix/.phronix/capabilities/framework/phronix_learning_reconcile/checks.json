@@ -1,0 +1,134 @@
+[
+ {
+  "tool": "phronix_learning_reconcile_plan",
+  "args": {
+   "goal": "subject flask-cli-routes-domain"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_learning_reconcile_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_learning_reconcile_check",
+  "args": {
+   "record": {
+    "subject": "flask-cli-routes-domain",
+    "merged_subjects": [
+     "column-domain",
+     "column-domain-rule"
+    ],
+    "pointers": [
+     "column-domain",
+     "column-domain-rule"
+    ],
+    "merges": [
+     {
+      "kept_label": "L3",
+      "folded_label": "L7",
+      "result": "raise ValueError in Blueprint.__init__ before self.name = name, and in add_url_rule for endpoint"
+     }
+    ],
+    "references": [
+     "I2 -> [[phronix-skill-authoring#R0c]]"
+    ],
+    "retirements": [
+     {
+      "label": "L9",
+      "falsified_by": "obs 412, 418",
+      "scope": "implementation",
+      "action": "rewrite: validation in Blueprint.__init__ did not fire for the test's path"
+     }
+    ],
+    "reorganised_only": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_learning_reconcile_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_learning_reconcile_plan",
+  "args": {
+   "goal": "subject flask-cli-routes-domain",
+   "facts": {
+    "siblings": true
+   }
+  },
+  "expect": {
+   "contains": "pointer skill"
+  }
+ },
+ {
+  "tool": "phronix_learning_reconcile_plan",
+  "args": {
+   "goal": "subject flask-cli-routes-domain",
+   "facts": {
+    "falsified": true
+   }
+  },
+  "expect": {
+   "contains": "record the doubt"
+  }
+ },
+ {
+  "tool": "phronix_learning_reconcile_check",
+  "args": {
+   "record": {
+    "subject": "flask",
+    "retirements": [
+     {
+      "label": "L2",
+      "falsified_by": "one failed attempt",
+      "scope": "attempt",
+      "action": "retire"
+     }
+    ],
+    "reorganised_only": false
+   }
+  },
+  "expect": {
+   "contains": "a failed attempt does not falsify the approach"
+  }
+ },
+ {
+  "tool": "phronix_learning_reconcile_check",
+  "args": {
+   "record": {
+    "subject": "flask",
+    "merges": [
+     {
+      "kept_label": "L1",
+      "folded_label": "L2",
+      "result": "validate names"
+     }
+    ],
+    "reorganised_only": true
+   }
+  },
+  "expect": {
+   "contains": "summarising them destroys the skill"
+  }
+ }
+]

@@ -1,0 +1,139 @@
+[
+ {
+  "tool": "phronix_build_solution_plan",
+  "args": {
+   "goal": "the flask blueprint-name task after three explored ideas"
+  },
+  "expect": {
+   "contains": "\"id\": \"I5\""
+  }
+ },
+ {
+  "tool": "phronix_build_solution_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_build_solution_check",
+  "args": {
+   "record": {
+    "problem": {
+     "symptom": "blueprint with a dot in its name is accepted",
+     "case": "test_dotted_name_not_allowed",
+     "cause": "Blueprint.__init__ never validates name"
+    },
+    "steps": [
+     {
+      "action": "reproduce with the failing test",
+      "check": "test fails",
+      "deterministic": true,
+      "tool": "reproduce_failure"
+     },
+     {
+      "action": "in flask/blueprints.py Blueprint.__init__ raise ValueError if '.' in name",
+      "check": "test passes"
+     }
+    ],
+    "tools_built": [
+     "reproduce_failure"
+    ],
+    "failed_directions": [
+     "the check was added to register() and did not fire for the path the test uses"
+    ],
+    "corner_cases": [
+     "assert instead of raise ValueError scores 0/2"
+    ],
+    "unresolved_labels": [],
+    "attached_subject": "flask-blueprint-validation",
+    "graph_ensured": true,
+    "pipeline_recorded": true
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_build_solution_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_build_solution_plan",
+  "args": {
+   "goal": "the flask blueprint-name task after three explored ideas",
+   "facts": {
+    "thin_findings": true
+   }
+  },
+  "expect": {
+   "contains": "say plainly what is unverified"
+  }
+ },
+ {
+  "tool": "phronix_build_solution_check",
+  "args": {
+   "record": {
+    "problem": {
+     "symptom": "research on flask"
+    },
+    "steps": [],
+    "failed_directions": [
+     "dot validation does not work"
+    ],
+    "corner_cases": [],
+    "unresolved_labels": [
+     "I1"
+    ],
+    "attached_subject": "pallets__flask-4045",
+    "graph_ensured": false,
+    "pipeline_recorded": false
+   }
+  },
+  "expect": {
+   "contains": "not what to abandon"
+  }
+ },
+ {
+  "tool": "phronix_build_solution_check",
+  "args": {
+   "record": {
+    "problem": {
+     "symptom": "s",
+     "case": "c",
+     "cause": "c"
+    },
+    "steps": [
+     {
+      "action": "reproduce",
+      "check": "fails",
+      "deterministic": true
+     }
+    ],
+    "failed_directions": [],
+    "corner_cases": [
+     "x"
+    ],
+    "unresolved_labels": [],
+    "attached_subject": "flask-x",
+    "graph_ensured": true,
+    "pipeline_recorded": true
+   }
+  },
+  "expect": {
+   "contains": "build the deterministic step as an MCP tool"
+  }
+ }
+]

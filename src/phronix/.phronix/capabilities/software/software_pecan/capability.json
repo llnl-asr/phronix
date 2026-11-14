@@ -1,0 +1,36 @@
+{
+ "name": "software_pecan",
+ "description": "PECAN (pose classification, PECAN/MILAN pose-classification / binding-affinity repo): PyTorch + PyTorch-Geometric EGNN DDP training on PDBspheres/PDBBind HDF5 shards, traced and optimized with dftracer on Tuolumne (MI300A, ROCm 6.3.1, Flux). Holds the venv/build recipe (python/3.11.5 for ROCm torch wheels, torch_scatter/torch_sparse with PYTORCH_ROCM_ARCH=gfx942 and plain GCC for torch_sparse), dataset permission workarounds, app bug fixes, the flux DDP launch and dftracer_service recipe, DataLoader worker tracing (spawn, worker_init_fn finalize), and every measured optimization result. Load for any PECAN / PDBspheres / PDBBind session, or on 'undefined symbol: _cray$mt_kmpc_fork_call_with_flags', 'Per-resource options can't be used with per-task options', a silent hung NCCL/RCCL rendezvous, 'flux run dftracer_service start' never returning, 'GLIBCXX_3.4.32 not found' with LD_PRELOAD, 0-byte DataLoader worker .pfw.gz files, 'Can't pickle local object ... _worker_init', a num_workers>2 deadlock, or 'ValueError: not enough values to unpack (expected 7, got 6)'.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "scope",
+  "run",
+  "annotate",
+  "trace",
+  "analyze",
+  "optimize"
+ ],
+ "tools": [
+  "software_pecan_recipe",
+  "software_pecan_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_pecan_recipe"
+  ],
+  "validator": [
+   "software_pecan_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607504.7006423,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-pecan"
+  }
+ ]
+}

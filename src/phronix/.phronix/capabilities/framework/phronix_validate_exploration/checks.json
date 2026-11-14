@@ -1,0 +1,126 @@
+[
+ {
+  "tool": "phronix_validate_exploration_plan",
+  "args": {
+   "goal": "three explored ideas for the ignore-paths bug"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_validate_exploration_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_validate_exploration_check",
+  "args": {
+   "record": {
+    "findings": [
+     {
+      "idea": "relative path form",
+      "verdict": "again",
+      "missing": "tried",
+      "reason": "tried the absolute form only, never the relative one the issue reports"
+     },
+     {
+      "idea": "cache invalidation",
+      "verdict": "complete",
+      "negative": true
+     }
+    ],
+    "patches": [],
+    "measurements_taken": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_validate_exploration_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_validate_exploration_plan",
+  "args": {
+   "goal": "three explored ideas for the ignore-paths bug",
+   "facts": {
+    "findings_sufficient": true
+   }
+  },
+  "expect": {
+   "contains": "say so and stop"
+  }
+ },
+ {
+  "tool": "phronix_validate_exploration_check",
+  "args": {
+   "record": {
+    "findings": [
+     {
+      "idea": "a",
+      "verdict": "again",
+      "missing": "tried",
+      "reason": "thin"
+     }
+    ],
+    "patches": []
+   }
+  },
+  "expect": {
+   "contains": "specific enough for the next pass"
+  }
+ },
+ {
+  "tool": "phronix_validate_exploration_check",
+  "args": {
+   "record": {
+    "findings": [
+     {
+      "idea": "a",
+      "verdict": "complete"
+     }
+    ],
+    "patches": [
+     "*** Begin Patch"
+    ]
+   }
+  },
+  "expect": {
+   "contains": "no patches, diffs or code"
+  }
+ },
+ {
+  "tool": "phronix_validate_exploration_check",
+  "args": {
+   "record": {
+    "findings": [
+     {
+      "idea": "a",
+      "verdict": "again",
+      "negative": true
+     }
+    ],
+    "patches": []
+   }
+  },
+  "expect": {
+   "contains": "disappointing"
+  }
+ }
+]

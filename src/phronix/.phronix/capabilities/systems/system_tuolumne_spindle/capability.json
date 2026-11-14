@@ -1,0 +1,31 @@
+{
+ "name": "system_tuolumne_spindle",
+ "description": "Spindle scalable library / Python-module loader on Tuolumne (TOSS 4 / Cray): on by default at level `medium` for every flux job via the flux shell plugin (`/etc/flux/shell/lua.d/spindle.lua`), its levels (off/low/medium/high), how to set them (`SPINDLE_FLUXOPT` exported BEFORE `flux run`/`flux proxy`, `FLUX_SPINDLE`, `-o spindle.level=`), how to verify it ran (`FLUX_SPINDLE_REALPATH`), its exclusivity with `-o fastload=on`, and the measured 2026-07-22 A/B where `SPINDLE_FLUXOPT=disable` was 3-4x faster to first training step than either Spindle level for a 4-node PyTorch job. Load for any job startup-latency / import-storm investigation (Python/PyTorch/PyG/h5py jobs with long time-to-first-step), when a `SPINDLE_FLUXOPT` setting seems to have no effect, or before crediting a startup delta to Spindle. For Spindle assertion hangs use software_spindle_probe.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "run",
+  "optimize"
+ ],
+ "tools": [
+  "system_tuolumne_spindle_recipe",
+  "system_tuolumne_spindle_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "system_tuolumne_spindle_recipe"
+  ],
+  "validator": [
+   "system_tuolumne_spindle_check"
+  ]
+ },
+ "topic": "systems",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607991.942683,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) system-tuolumne-spindle"
+  }
+ ]
+}

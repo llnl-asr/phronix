@@ -1,0 +1,11 @@
+# What worked: system_tuolumne
+
+- [dftracer/install/compose] (2026-11-13) source the session env.sh; pip install --pre "dftracer[modules]" dftracer-modules; dftracer-compose --enable mpi,hdf5,hip --disable papi,hwloc,cuda; dftracer_install_info --composition. 16 s install, 14 s compose (Cray MPICH 9.0, parallel HDF5 1.14, PAPI); no compile.
+- [laghos/trace/hip] (2026-08-13) dftracer with the exported rocprofiler_configure: all five HIP kinds at 4 nodes x 16 GPUs (KERNEL_DISPATCH 133,733, HIP_RUNTIME_API 46,150, MEMORY_COPY 32, PAGE_MIGRATION 16, SCRATCH_MEMORY 16).
+- [minife/trace/service] (2026-08-13) HOSTS=<h1>,<h2>,<h3>,<h4>; flux submit -N4 -n4 -c1 --requires=host:$HOSTS --setattr=exclusive=false dftracer_service start <dir>; flux run -N4 -n16 -g1 -c23 (same requires) ./app_launch.sh; flux submit ... stop <dir>; one non-empty service_<host>.pfw.gz per node.
+- [tool:papi_probe] (2026-08-12) module load papi/7.2.0.2 on its own line + export PAPI_DIR=${CRAY_PAPI_PREFIX}: 30 presets, 5 hw slots / 7 fitting on an MI300A node.
+- [ygm/build/compiler] (2026-08-04) module swap PrgEnv-cray PrgEnv-gnu; module load gcc-native/11.2; CC/CXX = /opt/cray/pe/mpich/9.0.1/ofi/gnu/11.2/bin/mpicc, mpicxx; rm -rf build dir; spdlog/fmt compiles with GCC 11.2.1.
+- [h5bench/optimize/lustre-striping] (2026-07-08) lfs setstripe -c 16 -S 4M on a fresh output dir + MPICH_MPIIO_HINTS cb_nodes with CRAY_CB_NODES_MULTIPLIER and striping_unit=4194304: aggregators 2 -> 16, critical-path write 5.53 s -> 1.45 s.
+- [pecan/trace/torch-profiler] (2026-07-20) torch.profiler.profile(..., on_trace_ready=dftracer.python.torch.trace_handler) around the training step under DDP: 131,767 cat=PP events.
+- [python/install/mpi4py] (undated) pip download 'mpi4py==4.1.1' --no-deps; extract the wheel into site-packages with zipfile; patchelf --replace-needed libmpi.so.12 libmpi_cray.so MPI.mpich.cpython-313-x86_64-linux-gnu.so; export MPI4PY_MPIABI=mpich.
+- [scaffold/run/torchrun] (undated) wrapper <ws>/tmp/run_benchmark.sh: source lmod init; module load cce/21.0.0 cray-mpich/9.1.0 rocm/7.1.1 rccl/fast-env-slows-mpi; ROCM_PATH=/opt/rocm-7.1.1; activate venv; torchrun-hpc -N 1 -n 4 --gpus-per-proc 1 ...; run with flux proxy <JOBID> bash <wrapper>.

@@ -1,0 +1,8 @@
+{
+ "description": "Renders and checks the GROMACS build/run recipe (CMake 3.28+, manual off, HDF5 1.14 from source); never builds or runs.",
+ "level": "level_1",
+ "tools": ["Read", "Grep"],
+ "skills": ["workload_gromacs"],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_gromacs_recipe, check any proposed command list with workload_gromacs_check, and follow the Corrector section for each failed check. Do not run builds or jobs."
+}

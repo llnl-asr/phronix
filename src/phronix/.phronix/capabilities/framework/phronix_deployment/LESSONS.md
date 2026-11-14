@@ -1,0 +1,5 @@
+# Lessons: phronix_deployment
+
+- [L-e1619cff] Editing a rendered agent or permission file -> Both are regenerated. The change survives until the next deploy or sync, which is long enough to look like it worked and short enough to be baffling when it stops. -> follow phronix-deployment P1 (Corner cases) (2026-09-15, dftracer-agents phronix-deployment/LESSONS.md P1)
+- [L-2292c428] Expecting `--check` to cover the harness memory symlink -> It deliberately does not. That link points into `~/.claude/projects/<slug>/`, keyed on the project's absolute path, so a scratch comparison can never reproduce it — including it would report drift forever on an up-to-date tree. -> follow phronix-deployment P2 (Corner cases) (2026-09-15, dftracer-agents phronix-deployment/LESSONS.md P2)
+- [L-438df2c3] Assuming a port is the configured one -> When the configured port is held by another process the stack takes a free one and persists it. Read the port from `phronix_stack status` or `env`, not from the configuration. -> follow phronix-deployment P3 (Corner cases) (2026-09-15, dftracer-agents phronix-deployment/LESSONS.md P3)

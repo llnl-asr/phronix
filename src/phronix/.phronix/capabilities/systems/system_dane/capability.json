@@ -1,0 +1,33 @@
+{
+ "name": "system_dane",
+ "description": "System profile for dane (LLNL CTS-2, 2x Xeon 8480+ Sapphire Rapids, 112 cores, NO GPU, TOSS 4, Slurm): the bank check that gates every job, the 1440-node pbatch/pci pool, multi-node pdebug (MaxNodes=20), 7-day single-node pserial, the gcc/mvapich2 toolchain, the 17-preset system PAPI (papi/6.0.0.1 useless), zero readable power, no /p/lustre5, and the two false-positive GPU signals (nvidia-smi present, full /opt/rocm-6.4.3 and 7.2.0 trees). Load for any dftracer session, build or job launch on dane, or on 'allocation failure: Invalid account or account/partition combination specified', nvidia-smi 'couldn't communicate with the NVIDIA driver', a probe reporting an AMD/NVIDIA GPU or rocm_smi power on dane, a dangling dataset symlink / 'no result file' audit, or a ppn ladder sized off lscpu's 224 CPUs.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "alloc",
+  "run",
+  "trace"
+ ],
+ "tools": [
+  "system_dane_recipe",
+  "system_dane_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "system_dane_recipe"
+  ],
+  "validator": [
+   "system_dane_check"
+  ]
+ },
+ "topic": "systems",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608065.0568812,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) system-dane"
+  }
+ ]
+}

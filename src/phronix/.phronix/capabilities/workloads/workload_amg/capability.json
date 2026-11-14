@@ -1,0 +1,33 @@
+{
+ "name": "workload_amg",
+ "description": "AMG (LLNL/AMG, hypre proxy, ISO-C MPI+OpenMP, Makefile) build/annotate/run recipe: HYPRE_BoomerAMGGetCumNnzAP header fix, make exiting 0 on failures, Makefile.include dftracer link, hypre_MPI_Init/Finalize INIT/FINI placement, brace-free and include-path annotation traps, hypre_qsort2abs exclusion, -P derived from ranks, p2p-sparing aggregation; predictor renders it, validator checks a command list. Load for AMG, hypre proxy, \"call to undeclared function 'HYPRE_BoomerAMGGetCumNnzAP'\", \"Invalid number of processors\".",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_amg_recipe",
+  "workload_amg_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_amg_recipe"
+  ],
+  "validator": [
+   "workload_amg_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-amg"
+  }
+ ]
+}

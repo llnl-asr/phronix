@@ -1,0 +1,33 @@
+{
+ "name": "software_cupti",
+ "description": "CUPTI (CUDA Profiling Tools Interface) as dftracer's NVIDIA GPU tracing backend: which CUPTI API dftracer uses (Activity API only: a timeline, not hardware counters), where cupti.h/libcupti.so live in the two CUDA toolkit layouts, building with DFTRACER_ENABLE_CUDA_TRACING (an env var for setup.py, not CMAKE_ARGS) and DFTRACER_CUDA_PATH, the versioned activity-record struct bands per toolkit, clock rebasing onto the dftracer timeline, the CUDA event taxonomy, dropped-record warnings, and the run-time gates (one CUPTI client per process, NVreg_RestrictProfilingToAdminUsers). Load for any DFTRACER_ENABLE_CUDA_TRACING build, any NVIDIA-GPU dftracer session, or on: no CUDA events in the trace / no 'found CUPTI at' configure line, 'CUPTI_ERROR_INSUFFICIENT_PRIVILEGES', 'CUPTI dropped N activity records', 'unknown type CUpti_ActivityKernelN', GPU events at absurd timestamps, nsys/ncu/torch.profiler failing to attach, find reporting no cupti.h.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "run",
+  "smoke",
+  "trace"
+ ],
+ "tools": [
+  "software_cupti_recipe",
+  "software_cupti_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_cupti_recipe"
+  ],
+  "validator": [
+   "software_cupti_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608403.0161135,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-cupti"
+  }
+ ]
+}

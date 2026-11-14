@@ -1,0 +1,365 @@
+[
+ {
+  "tool": "system_matrix_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "system_matrix"
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_recipe",
+  "args": {
+   "section": "cuda_cupti"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "cuda_cupti",
+     "dftracer_source",
+     "filesystems",
+     "hardware",
+     "modules",
+     "papi",
+     "partitions",
+     "permissions",
+     "pip",
+     "power",
+     "slurm",
+     "throughput"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "srun -p pdebug -N2 hostname"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_multinode_pdebug": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "salloc -p pdebug -N1 -t 55 --gres=gpu:4 --no-shell"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_multinode_pdebug": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "module load papi/6.0.0.1"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_papi_600_module": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "papi_avail"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_papi_600_module": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "export DFTRACER_CUDA_PATH=/usr/local/cuda-12.0"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_usr_local_cuda": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "export DFTRACER_CUDA_PATH=/usr/tce/packages/cuda/cuda-12.6.0"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_usr_local_cuda": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE_CUDA_TRACING=1"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "cuda_path_pinned": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE_CUDA_TRACING=1\nexport DFTRACER_CUDA_PATH=/usr/tce/packages/cuda/cuda-12.6.0"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "cuda_path_pinned": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "cmake -S . -B build -DDFTRACER_BUILD_VARIORUM=ALWAYS"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_variorum": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "cmake -S . -B build -DDFTRACER_BUILD_VARIORUM=OFF"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_variorum": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "bash -lc 'module purge && module load gcc/12.1.1-magic && make'"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_bash_lc_modules": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "source ${WORKSPACE}/env/matrix_modules.sh && which mpicc"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_bash_lc_modules": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "sbatch -p pci -N4 -t 60 --wrap hostname"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "multinode_exclusive_gres": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "sbatch -p pci -N4 -t 60 --exclusive --gres=gpu:4 --wrap hostname"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "multinode_exclusive_gres": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "srun --jobid=$J --overlap -N2 -n2 -c1 dftracer_service start"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "daemon_step_wait0": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "srun --jobid=$J --overlap --wait=0 -N2 -n2 -c1 dftracer_service start"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "daemon_step_wait0": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "pip install pydftracer"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pip_site_mirror": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "export PIP_INDEX_URL=https://wci-repo.llnl.gov/repository/pypi-group/simple\npip install pydftracer"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pip_site_mirror": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "srun -N1 -n4 bash -c 'for m in a b; do ./app $m; done'"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "one_mpi_per_srun": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "srun -N1 -n4 ./app a"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "one_mpi_per_srun": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "pkill -f driver.sh"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_pkill_f": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "kill $DRIVER_PID"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_pkill_f": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_matrix_check",
+  "args": {
+   "commands": "source ${WORKSPACE}/env/matrix_modules.sh\nwhich mpicc nvcc\nexport CUDA_HOME=/usr/tce/packages/cuda/cuda-12.6.0\nexport DFTRACER_CUDA_PATH=/usr/tce/packages/cuda/cuda-12.6.0\nexport DFTRACER_ENABLE_CUDA_TRACING=1\nexport PIP_INDEX_URL=https://wci-repo.llnl.gov/repository/pypi-group/simple\nexport PIP_TRUSTED_HOST=wci-repo.llnl.gov\nexport PIP_EXTRA_INDEX_URL=\npip install pydftracer\ncmake -S . -B build -DDFTRACER_BUILD_VARIORUM=OFF\nsbatch --parsable -p pci -N4 -t 120 --exclusive --gres=gpu:4 --job-name=sweep -o logs/%x_%j.log --wrap \"bash run.sh\"\nsrun --jobid=$J --overlap --wait=0 --nodelist=$NODES -N4 -n4 -c1 dftracer_service start\nsrun --jobid=$J --overlap --nodelist=$NODES --mem=0 --kill-on-bad-exit=1 -N4 -n16 --gres=gpu:4 ./app\nTMPDIR=/p/lustre5/$USER/tmp dftracer_split -d traces -o compact"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

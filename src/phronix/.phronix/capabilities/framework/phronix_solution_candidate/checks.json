@@ -1,0 +1,101 @@
+[
+ {
+  "tool": "phronix_solution_candidate_plan",
+  "args": {
+   "goal": "normalise relative paths before ignore matching"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_solution_candidate_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_solution_candidate_check",
+  "args": {
+   "record": {
+    "approach": "normalise relative paths before matching ignore patterns",
+    "steps": [
+     {
+      "do": "probe_ignore_paths_matrix(path='src/')",
+      "check": "relative and absolute rows differ"
+     },
+     {
+      "do": "in expand_modules.py, normalise path with os.path.normpath before matching",
+      "check": "target test passes"
+     }
+    ],
+    "wrong_if": "step 1 shows no difference between relative and absolute forms"
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_solution_candidate_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_solution_candidate_plan",
+  "args": {
+   "goal": "normalise relative paths before ignore matching",
+   "facts": {
+    "approach_proved_wrong": true
+   }
+  },
+  "expect": {
+   "contains": "Say plainly the approach is wrong"
+  }
+ },
+ {
+  "tool": "phronix_solution_candidate_check",
+  "args": {
+   "record": {
+    "approach": "x",
+    "steps": [
+     {
+      "do": "investigate whether the path is normalised"
+     }
+    ],
+    "wrong_if": ""
+   }
+  },
+  "expect": {
+   "contains": "research leaking"
+  }
+ },
+ {
+  "tool": "phronix_solution_candidate_check",
+  "args": {
+   "record": {
+    "approach": "x",
+    "steps": [
+     {
+      "do": "edit f.py"
+     }
+    ],
+    "wrong_if": "never"
+   }
+  },
+  "expect": {
+   "contains": "every step carries its own check"
+  }
+ }
+]

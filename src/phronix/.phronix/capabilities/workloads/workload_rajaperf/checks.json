@@ -1,0 +1,7 @@
+[
+ {"tool": "workload_rajaperf_recipe", "args": {}, "expect": {"contains": "-DENABLE_MPI=ON"}},
+ {"tool": "workload_rajaperf_check", "args": {"commands": ["flux run -N 4 -n 16 --exclusive bin/raja-perf.exe --kernels DAXPY DOT AXPY MULADDSUB --outdir o"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_rajaperf_check", "args": {"commands": ["cmake -S s -B b -DENABLE_HIP=ON -DENABLE_MPI=ON -DRAJA_PERFSUITE_ENABLE_MPI=ON -DENABLE_OPENMP=ON", "flux run -N 4 -n 16 --exclusive bin/raja-perf.exe --kernels Basic_DAXPY Stream_DOT --variants Base_Seq Base_HIP --outdir o"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_rajaperf_check", "args": {"commands": ["cmake -S s -B b -DRAJA_PERFSUITE_ENABLE_MPI=ON", "raja-perf.exe --hip-data-space HipManaged"]}, "expect": {"contains": "enable_mpi_both"}},
+ {"tool": "workload_rajaperf_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

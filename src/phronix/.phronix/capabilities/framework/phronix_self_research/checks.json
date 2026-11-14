@@ -1,0 +1,193 @@
+[
+ {
+  "tool": "phronix_self_research_plan",
+  "args": {
+   "goal": "fix a path normalisation bug in an unfamiliar library"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_self_research_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_self_research_check",
+  "args": {
+   "record": {
+    "coverage": "gap",
+    "fom": {
+     "name": "target tests passing",
+     "direction": "max",
+     "measure": "pytest -k target, count passed"
+    },
+    "kind": "library_bug",
+    "approaches": [
+     {
+      "name": "apply upstream fix",
+      "source": "https://example.org/issue/123",
+      "status": "confirmed",
+      "measured": 2
+     },
+     {
+      "name": "normalise in caller",
+      "source": "local: src/mod.py",
+      "status": "rejected",
+      "measured": 0
+     }
+    ],
+    "instances": [
+     {
+      "phase": "train"
+     },
+     {
+      "phase": "validate"
+     },
+     {
+      "phase": "test"
+     }
+    ],
+    "chosen": {
+     "name": "apply upstream fix",
+     "status": "confirmed",
+     "measured": true
+    },
+    "plan_steps": [
+     {
+      "step": "run the failing test",
+      "type": "deterministic"
+     },
+     {
+      "step": "decide which layer normalises the path",
+      "type": "judgement"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_self_research_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_self_research_plan",
+  "args": {
+   "goal": "fix a path normalisation bug in an unfamiliar library",
+   "facts": {
+    "covered": true
+   }
+  },
+  "expect": {
+   "contains": "do not write a second parallel account"
+  }
+ },
+ {
+  "tool": "phronix_self_research_plan",
+  "args": {
+   "goal": "fix a path normalisation bug in an unfamiliar library",
+   "facts": {
+    "tool_subject": true
+   }
+  },
+  "expect": {
+   "contains": "--help"
+  }
+ },
+ {
+  "tool": "phronix_self_research_plan",
+  "args": {
+   "goal": "fix a path normalisation bug in an unfamiliar library",
+   "facts": {
+    "same_file_failures": true
+   }
+  },
+  "expect": {
+   "contains": "exclusion"
+  }
+ },
+ {
+  "tool": "phronix_self_research_check",
+  "args": {
+   "record": {
+    "coverage": "gap",
+    "fom": {
+     "name": "quality"
+    },
+    "kind": "library_bug",
+    "approaches": [
+     {
+      "name": "a",
+      "source": "local"
+     }
+    ],
+    "instances": [],
+    "plan_steps": []
+   }
+  },
+  "expect": {
+   "contains": "before comparing"
+  }
+ },
+ {
+  "tool": "phronix_self_research_check",
+  "args": {
+   "record": {
+    "coverage": "gap",
+    "fom": {
+     "measure": "tests"
+    },
+    "kind": "tool_usage",
+    "approaches": [
+     {
+      "name": "a",
+      "source": "local file"
+     },
+     {
+      "name": "b",
+      "source": "local file",
+      "status": "rejected"
+     }
+    ],
+    "instances": [
+     {
+      "phase": "train"
+     },
+     {
+      "phase": "test"
+     }
+    ],
+    "chosen": {
+     "status": "validated",
+     "measured": false
+    },
+    "plan_steps": [
+     {
+      "step": "x",
+      "type": "deterministic"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "contains": "a predicted value cannot decide"
+  }
+ }
+]

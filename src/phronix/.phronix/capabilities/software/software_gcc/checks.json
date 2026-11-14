@@ -1,0 +1,143 @@
+[
+ {
+  "tool": "software_gcc_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_gcc"
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_recipe",
+  "args": {
+   "section": "clang_libstdcxx"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "clang_libstdcxx",
+     "expect",
+     "mpi_pairing",
+     "probes",
+     "sites",
+     "switch_compiler"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_gcc_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_check",
+  "args": {
+   "commands": "module load cray-mpich gcc-native/11.2"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "mpi_after_compiler": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_check",
+  "args": {
+   "commands": "module load gcc-native/11.2 cray-mpich"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "mpi_after_compiler": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_check",
+  "args": {
+   "commands": "module load gcc/12.1.1 mvapich2\nexport CC=gcc"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "cc_from_mpi_wrapper": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_check",
+  "args": {
+   "commands": "module load gcc/12.1.1 mvapich2\nexport CC=$(which mpicc) CXX=$(which mpicxx)"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "cc_from_mpi_wrapper": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_check",
+  "args": {
+   "commands": "module load gcc-native/13.2 cray-mpich"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "tuolumne_gnu_mpich_11_2": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_check",
+  "args": {
+   "commands": "module load PrgEnv-gnu gcc-native/11.2 cray-mpich"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "tuolumne_gnu_mpich_11_2": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_gcc_check",
+  "args": {
+   "commands": "module -t avail gcc\nmodule load PrgEnv-gnu gcc-native/11.2 cray-mpich\nexport CC=$(which mpicc) CXX=$(which mpicxx)\nmpicxx -v\nrm -rf build\ncmake -S source -B build -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

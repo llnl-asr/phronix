@@ -1,0 +1,32 @@
+{
+ "name": "tools_dftracer",
+ "description": "The dftracer PyPI package (C core + CMake build): package trio (dftracer-utils, pydftracer, pybind11), install sources (default: the PyPI prerelease composed for the run with `dftracer[modules]` + `dftracer-compose`; source builds only on request), source-build env (CC/CXX/LD_LIBRARY_PATH and DFTRACER_ENABLE_* before pip), session-local vs shared venv, runtime env (DFTRACER_INC_METADATA), the broken packaged CMake config for C++ consumers, dftracer_service 0-byte traces, and dftracer_merge sharp edges. Load before any session_install_dftracer call, or on: `ModuleNotFoundError: No module named 'dftracer.python'`, `only virtual member functions can be marked 'override'` in brahma/posix.h, `The imported target dftracer_core references the file /project/build/...`, `brahma_DIR` not found, `CXXABI_1.3.13`/`GLIBCXX_3.4.29` not found, `hwloc reports the number of cores (1) mod the number of sockets (2) is not zero`, a 0-byte `service_<host>.pfw.gz`, `No .pfw or .pfw.gz files found in directory`, `Output file should have .pfw extension`, empty event args, or 'dftracer works but X sub-feature (MPI/HDF5/PAPI) is missing'.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "install",
+  "build",
+  "trace"
+ ],
+ "tools": [
+  "tools_dftracer_recipe",
+  "tools_dftracer_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "tools_dftracer_recipe"
+  ],
+  "validator": [
+   "tools_dftracer_check"
+  ]
+ },
+ "topic": "tools",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607992.0515888,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) tools-dftracer"
+  }
+ ]
+}

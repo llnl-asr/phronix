@@ -1,0 +1,28 @@
+{
+ "name": "phronix_trial_reconcile",
+ "description": "After several approaches were tried against the real tests: read the table as evidence about the research ranking, write the subject's solution skill from what the passing ones agree on (or the winner's spine plus what losers did better), carry every failure forward as a named corner case, record which step failed (research_record_step_reached), and when none worked find the assumption all of them shared. Load after parallel trials finish, when tempted to refine the least-bad candidate, or when every candidate scored 0.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_trial_reconcile_plan",
+  "phronix_trial_reconcile_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_trial_reconcile_plan"
+  ],
+  "validator": [
+   "phronix_trial_reconcile_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-trial-reconcile (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

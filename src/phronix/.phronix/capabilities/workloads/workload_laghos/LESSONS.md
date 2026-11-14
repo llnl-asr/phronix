@@ -1,0 +1,14 @@
+# Lessons: workload_laghos
+
+- [L-df62df7d] Laghos link fails 'laghos.o:1:108: error: source file is not valid UTF-8' -> MFEM config.mk carries sticky -x hip so clang reads laghos.o as HIP source -> let make fail (set +e), check the .o files, link with the ice4hpc README's explicit command (2026-08)
+- [L-dc181805] Laghos link ABI mismatches -> site default PrgEnv-cray/cce instead of the prebuilt deps' cray-mpich-9.0.1-rocmcc-6.4.2-cce-20.0.0-magic -> module load rocm/6.4.2 rocmcc/6.4.2-cce-20.0.0-magic cray-mpich/9.0.1 cmake/3.29.2 (2026-08)
+- [L-177d641a] clang_annotate_project reported ok with functions: 0 on laghos_solver.cpp -> without include paths general/forall.hpp is fatal and the out-of-line methods vanish -> pass MFEM_INCFLAGS (minus -x hip/--offload-arch) + include/mfem + ROCm/MPI/dftracer includes (15/22 solver, 5/11 assembly) (2026-08)
+- [L-5a1b8d8c] Laghos trace had zero CPP_APP events but plausible POSIX/STDIO/PAPI -> annotator put REGION_END+FINI only on the first early-error exit of main's five -> FINI on every exit before MPI_Finalize; 1-rank smoke went 0 -> 24,123 CPP_APP events (2026-08)
+- [L-7cbf6482] session_detect reported hip: false for Laghos -> GPU reached only via MFEM_FORALL -> pass hip=True and rocm_path=/opt/rocm-6.4.2 (detection picks the newest ROCm); also hdf5=False (2026-08)
+- [L-798034d6] Laghos aggregation threw away all per-event detail -> DFTRACER_AGGREGATION_TYPE compared case-sensitively; lowercase 'selective' falls back to FULL -> export SELECTIVE uppercase with inclusion dur < 100 (2026-08-13)
+- [L-7aee246d] dftracer_split printed usage and exited 0 (looked like a no-op success) -> --output-dir / --chunk-size-mb do not exist -> use --output and --chunk-size (MB) (2026-08-13)
+- [L-8b28fb50] Combined multi-run trace lost node counters and power -> every run writes service_<hostname>.pfw.gz on shared hosts, so a flat copy overwrites -> prefix service traces with the group name when staging (2026-08-13)
+- [L-2cd8cf0f] PAPI subset plan from counting names was wrong -> presets share native events (7 BRANCH fit 5 registers, FLOP 3 of 8, CACHE 7 of 11) -> probe add/PAPI_start/PAPI_stop and pack greedily: 9 family-coherent exact runs (2026-08-13)
+- [L-fcd1628d] Variorum gave no power on MI300A -> distribution variorum reports _ERROR_VARIORUM_UNSUPPORTED_PLATFORM -> build with DFTRACER_ENABLE_VARIORUM=ON and DFTRACER_BUILD_VARIORUM=ALWAYS (AMD_GPU domain only) (2026-08-13)
+- [L-f570913c] Analysis reported zero PAPI events on a good grouped-layout trace -> grouped layout uses a single lowercase 'papi' category, not uppercase family cats -> look for cat=papi, name=<FAMILY> (2026-08-13)
+- [L-ec47337b] Service trace size suggested a 98% 'improvement' -> a stale duplicate dftracer_service kept appending to the per-host path for ~14 days -> compare only runs with a clean single daemon lifecycle (2026-08-13)

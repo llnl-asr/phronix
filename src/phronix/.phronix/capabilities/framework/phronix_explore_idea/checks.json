@@ -1,0 +1,113 @@
+[
+ {
+  "tool": "phronix_explore_idea_plan",
+  "args": {
+   "goal": "choose the sys.path root for pylint module expansion"
+  },
+  "expect": {
+   "contains": "\"id\": \"I0\""
+  }
+ },
+ {
+  "tool": "phronix_explore_idea_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_explore_idea_check",
+  "args": {
+   "record": {
+    "step": "choose the sys.path root",
+    "ways": [
+     {
+      "where": "expand_modules.py",
+      "hypothesis": "fails if namespace packages lack __init__.py"
+     },
+     {
+      "where": "pylinter.py (caller passes root)",
+      "hypothesis": "fails if the caller does not know the root"
+     }
+    ],
+    "tried": "expand_modules.get_python_path walks the package chain",
+    "result": "target test passes; 2 of 40 neighbours fail (assert relative form)",
+    "rules_in": "root from package chain",
+    "rules_out": "using cwd as root",
+    "worked": true,
+    "partial": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_explore_idea_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_explore_idea_plan",
+  "args": {
+   "goal": "choose the sys.path root for pylint module expansion",
+   "facts": {
+    "step_needs_nothing": true
+   }
+  },
+  "expect": {
+   "contains": "needs NOTHING"
+  }
+ },
+ {
+  "tool": "phronix_explore_idea_check",
+  "args": {
+   "record": {
+    "step": "s",
+    "ways": [
+     {
+      "where": "a.py"
+     }
+    ],
+    "tried": "changed it",
+    "result": "",
+    "worked": false
+   }
+  },
+  "expect": {
+   "contains": "in numbers where there are numbers"
+  }
+ },
+ {
+  "tool": "phronix_explore_idea_check",
+  "args": {
+   "record": {
+    "step": "s",
+    "ways": [
+     {
+      "where": "a.py",
+      "hypothesis": "h"
+     }
+    ],
+    "tried": "the loop in a.py",
+    "result": "1/2 tests",
+    "worked": "partial",
+    "rules_out": "x",
+    "partial": true
+   }
+  },
+  "expect": {
+   "contains": "what is still unknown"
+  }
+ }
+]

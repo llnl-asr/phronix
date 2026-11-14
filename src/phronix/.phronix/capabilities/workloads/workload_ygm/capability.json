@@ -1,0 +1,30 @@
+{
+ "name": "workload_ygm",
+ "description": "DEPRECATED redirect stub for YGM: the YGM library is software_ygm, the traced ygm-bench benchmark is workload_ygm_bench (split 2026-08-04). Predictor returns the redirect and history; validator flags proposals that put library or bench facts here. Load only when something still references workload-ygm.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore"
+ ],
+ "tools": [
+  "workload_ygm_recipe",
+  "workload_ygm_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_ygm_recipe"
+  ],
+  "validator": [
+   "workload_ygm_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-ygm"
+  }
+ ]
+}

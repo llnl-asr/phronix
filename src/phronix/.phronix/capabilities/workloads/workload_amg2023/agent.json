@@ -1,0 +1,13 @@
+{
+ "description": "Renders and checks the AMG2023 hypre/CMake/annotation/run recipe; never builds or runs.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep"
+ ],
+ "skills": [
+  "workload_amg2023"
+ ],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_amg2023_recipe, check any proposed command list with workload_amg2023_check, and follow the Corrector section for each failed check. Do not run builds or jobs."
+}

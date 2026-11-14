@@ -1,0 +1,444 @@
+[
+ {
+  "tool": "tuolumne_dw_capacity",
+  "args": {
+   "fs_type": "xfs",
+   "nodes": 1,
+   "ppn": 32,
+   "bytes_per_rank": 402653184
+  },
+  "expect": {
+   "json": {
+    "capacity": "15GiB",
+    "scope": "per compute node"
+   }
+  }
+ },
+ {
+  "tool": "tuolumne_dw_capacity",
+  "args": {
+   "fs_type": "lustre",
+   "nodes": 4,
+   "ppn": 32,
+   "bytes_per_rank": 2147483648,
+   "copies": 3
+  },
+  "expect": {
+   "json": {
+    "capacity": "960GiB",
+    "scope": "total for the job"
+   }
+  }
+ },
+ {
+  "tool": "tuolumne_dw_capacity",
+  "args": {
+   "fs_type": "nfs",
+   "nodes": 1,
+   "ppn": 1,
+   "bytes_per_rank": 1
+  },
+  "expect": {
+   "contains": "fs_type must be"
+  }
+ },
+ {
+  "tool": "tuolumne_check_job",
+  "args": {
+   "nodes": 32,
+   "queue": "pbatch",
+   "purpose": "evidence",
+   "filesystems_json": "[{\"type\": \"gfs2\", \"profile\": \"shared\"}]",
+   "flags_json": "[\"--exclusive\", \"--coral2-chassis=2\"]"
+  },
+  "expect": {
+   "contains": "only within one chassis"
+  }
+ },
+ {
+  "tool": "tuolumne_check_job",
+  "args": {
+   "nodes": 8,
+   "queue": "pbatch",
+   "purpose": "run",
+   "filesystems_json": "[]",
+   "flags_json": "[\"-x\", \"DFTRACER_ENABLE\"]"
+  },
+  "expect": {
+   "contains": "--env=DFTRACER_ENABLE"
+  }
+ },
+ {
+  "tool": "tuolumne_check_job",
+  "args": {
+   "nodes": 16,
+   "queue": "pbatch",
+   "purpose": "evidence",
+   "filesystems_json": "[{\"type\": \"gfs2\", \"profile\": \"shared\", \"name\": \"g\"}]",
+   "flags_json": "[\"--exclusive\", \"--coral2-chassis=1\"]"
+  },
+  "expect": {
+   "json": {
+    "status": "pass",
+    "chassis": 1
+   }
+  }
+ },
+ {
+  "tool": "tuolumne_check_job",
+  "args": {
+   "nodes": 2,
+   "queue": "pdebug",
+   "purpose": "evidence"
+  },
+  "expect": {
+   "contains": "go on pbatch"
+  }
+ },
+ {
+  "tool": "tuolumne_runtime_env",
+  "args": {
+   "extra_dirs_json": "[\"HDF5/lib\"]"
+  },
+  "expect": {
+   "contains": "HDF5/lib"
+  }
+ },
+ {
+  "tool": "system_tuolumne_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "system_tuolumne"
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_recipe",
+  "args": {
+   "section": "compilers"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "compilers",
+     "dftracer",
+     "env_vars",
+     "filesystems",
+     "hardware",
+     "known_bad_versions",
+     "launcher",
+     "ld_library_path",
+     "modules",
+     "mpi",
+     "optimization",
+     "python_dl",
+     "rocm"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "mpirun -np 96 ./ior -o /p/lustre5/$USER/workspaces/ior/f"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "flux_not_srun_mpirun": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "flux run -N 1 -n 96 ./ior -o /p/lustre5/$USER/workspaces/ior/f"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "flux_not_srun_mpirun": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "module load papi/7.3.0.1"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_papi_7_3": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "module load papi/7.2.0.2"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_papi_7_3": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "module load cce/20.0.0 cray-mpich/9.0.1 papi/7.2.0.2"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "papi_own_module_line": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "module load papi/7.2.0.2"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "papi_own_module_line": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "module load papi/7.2.0.2\ncmake -S src -B build"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "papi_dir_from_cray_prefix": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "module load papi/7.2.0.2\nexport PAPI_DIR=\"${CRAY_PAPI_PREFIX}\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "papi_dir_from_cray_prefix": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "export CPLUS_INCLUDE_PATH=${SESSION}/install/hdf5/include"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_c_include_path_env": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "export CXXFLAGS=\"-I${SESSION}/install/hdf5/include $CXXFLAGS\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_c_include_path_env": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "export LD_LIBRARY_PATH=/opt/cray/pe/cce/20.0.0/cce/x86_64/lib:/usr/lib64"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ld_library_path_append": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "export LD_LIBRARY_PATH=\"${SESSION}/install/hdf5/lib:${LD_LIBRARY_PATH}\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ld_library_path_append": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "torchrun-hpc -N 4 -n 16 --gpus-per-proc 1 train.py"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "nccl_socket_ifname_hsi0": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "export NCCL_SOCKET_IFNAME=hsi0\ntorchrun-hpc -N 4 -n 16 --gpus-per-proc 1 train.py"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "nccl_socket_ifname_hsi0": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "flux run -N 4 -n 384 --env MPICH_MPIIO_HINTS=*:cb_nodes=16 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_mpiio_hints_via_env_flag": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "export MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable:cb_nodes=16\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_mpiio_hints_via_env_flag": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "find /opt/cray -name libhdf5.so"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_recursive_find_system_trees": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "module show cray-hdf5/1.14.3.3"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_recursive_find_system_trees": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "pip install --no-binary=mpi4py mpi4py"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_mpi4py_no_binary": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "pip download 'mpi4py==4.1.1' --no-deps -d ${SESSION}/tmp"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_mpi4py_no_binary": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_check",
+  "args": {
+   "commands": "source /usr/share/lmod/lmod/init/bash\nmodule load craype-x86-trento libfabric/match_SHS craype-network-ofi PrgEnv-cray/8.7.0 flux_wrappers/0.1 cce/20.0.0 cray-mpich/9.0.1 python/3.13.2\nmodule load papi/7.2.0.2\nexport PAPI_DIR=\"${CRAY_PAPI_PREFIX}\"\nexport CC=$(which mpicc)\nexport CXX=$(which mpic++)\nexport CXXFLAGS=\"-I${SESSION}/install/hdf5/include $CXXFLAGS\"\nexport LD_LIBRARY_PATH=\"${SESSION}/install/hdf5/lib:${SESSION}/install/lib64:${LD_LIBRARY_PATH}\"\nexport MPICH_MPIIO_HINTS=\"*:romio_cb_write=enable:cb_nodes=16:striping_factor=16:striping_unit=4194304\"\nexport NCCL_SOCKET_IFNAME=hsi0\nmkdir -p /p/lustre5/$USER/workspaces/ior\nlfs setstripe -c 16 -S 4M /p/lustre5/$USER/workspaces/ior\nflux proxy <JOBID> flux run -N 4 -n 384 ./ior -o /p/lustre5/$USER/workspaces/ior/f\nflux proxy <JOBID> bash ${SESSION}/tmp/run_torchrun.sh"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

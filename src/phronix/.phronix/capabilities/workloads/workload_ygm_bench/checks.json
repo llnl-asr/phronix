@@ -1,0 +1,58 @@
+[
+ {
+  "tool": "workload_ygm_bench_recipe",
+  "args": {},
+  "expect": {
+   "contains": "FETCHCONTENT_SOURCE_DIR_YGM"
+  }
+ },
+ {
+  "tool": "workload_ygm_bench_recipe",
+  "args": {
+   "variant": "nope"
+  },
+  "expect": {
+   "contains": "unknown variant"
+  }
+ },
+ {
+  "tool": "workload_ygm_bench_check",
+  "args": {
+   "commands": [
+    "export YGM_COMM_IRECVS_SIZE_KB=65536",
+    "flux run -N 4 --tasks-per-node=96 around_the_world_ygm -n 5600 -t 1 -p"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_ygm_bench_check",
+  "args": {
+   "commands": [
+    "cmake -S ygm-bench -B build -DFETCHCONTENT_SOURCE_DIR_YGM=<ws>/annotated/source",
+    "export DFTRACER_ENABLE=1 DFTRACER_ENABLE_AGGREGATION=1 DFTRACER_AGGREGATION_TYPE=SELECTIVE DFTRACER_AGGREGATION_FILE=<rules.yaml> DFTRACER_TRACE_INTERVAL_MS=5000",
+    "flux run -N 4 --tasks-per-node=32 around_the_world_ygm -n 5600 -t 1 -p"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_ygm_bench_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

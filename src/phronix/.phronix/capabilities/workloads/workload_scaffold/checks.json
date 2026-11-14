@@ -1,0 +1,7 @@
+[
+ {"tool": "workload_scaffold_recipe", "args": {}, "expect": {"contains": "python/3.11.5"}},
+ {"tool": "workload_scaffold_check", "args": {"commands": ["ml load python/3.13.2", "torchrun-hpc -N 8 -n 4 --gpus-per-proc 1 venv/bin/scaffold benchmark -c cfg.yml"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_scaffold_check", "args": {"commands": ["ml load python/3.11.5", "export LD_LIBRARY_PATH=venv/lib/python3.11/site-packages/torch/lib:$LD_LIBRARY_PATH", "flux run -N 8 -n 32 venv/bin/scaffold generate_fractals -c cfg.yml", "torchrun-hpc -N 8 -n 4 --gpus-per-proc 1 venv/bin/scaffold benchmark -c cfg.yml"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_scaffold_check", "args": {"commands": ["flux submit dftracer_service start", "torchrun-hpc -N 1 -n 4 x"]}, "expect": {"contains": "no_service_with_torchrun_hpc"}},
+ {"tool": "workload_scaffold_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

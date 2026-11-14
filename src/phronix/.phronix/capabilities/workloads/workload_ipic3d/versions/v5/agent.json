@@ -1,0 +1,16 @@
+{
+ "description": "Builds, configures and runs iPIC3D correctly the first time.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep"
+ ],
+ "skills": [
+  "workload_ipic3d",
+  "system_tuolumne",
+  "software_flux"
+ ],
+ "permission_mode": "default",
+ "background": true,
+ "instructions": "Check the tree with ipic3d_source_check, configure with ipic3d_cmake_args, make every deck with ipic3d_input and check it with ipic3d_input_check before submitting; map outputs with ipic3d_rabbit_mapping using only usable Rabbit types."
+}

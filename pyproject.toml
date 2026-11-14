@@ -90,6 +90,11 @@ where = ["src"]
     ".phronix/capabilities/**/*.py",
     ".phronix/capabilities/**/*.md",
     ".phronix/capabilities/**/*.json",
+    # A capability bundle's reference files (docs/: scripts, sample inputs).
+    ".phronix/capabilities/**/*.sh",
+    ".phronix/capabilities/**/*.inp",
+    ".phronix/capabilities/**/*.txt",
+    ".phronix/capabilities/**/*.yaml",
     ".phronix/capabilities/*.py",
     ".phronix/capabilities/*.md",
     ".phronix/verifiers/**/*.py",

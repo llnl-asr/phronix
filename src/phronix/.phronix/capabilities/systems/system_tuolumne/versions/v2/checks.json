@@ -1,0 +1,107 @@
+[
+ {
+  "tool": "tuolumne_dw_capacity",
+  "args": {
+   "fs_type": "xfs",
+   "nodes": 1,
+   "ppn": 32,
+   "bytes_per_rank": 402653184
+  },
+  "expect": {
+   "json": {
+    "capacity": "15GiB",
+    "scope": "per compute node"
+   }
+  }
+ },
+ {
+  "tool": "tuolumne_dw_capacity",
+  "args": {
+   "fs_type": "lustre",
+   "nodes": 4,
+   "ppn": 32,
+   "bytes_per_rank": 2147483648,
+   "copies": 3
+  },
+  "expect": {
+   "json": {
+    "capacity": "960GiB",
+    "scope": "total for the job"
+   }
+  }
+ },
+ {
+  "tool": "tuolumne_dw_capacity",
+  "args": {
+   "fs_type": "nfs",
+   "nodes": 1,
+   "ppn": 1,
+   "bytes_per_rank": 1
+  },
+  "expect": {
+   "contains": "fs_type must be"
+  }
+ },
+ {
+  "tool": "tuolumne_check_job",
+  "args": {
+   "nodes": 32,
+   "queue": "pbatch",
+   "purpose": "evidence",
+   "filesystems_json": "[{\"type\": \"gfs2\", \"profile\": \"shared\"}]",
+   "flags_json": "[\"--exclusive\", \"--coral2-chassis=2\"]"
+  },
+  "expect": {
+   "contains": "only within one chassis"
+  }
+ },
+ {
+  "tool": "tuolumne_check_job",
+  "args": {
+   "nodes": 8,
+   "queue": "pbatch",
+   "purpose": "run",
+   "filesystems_json": "[]",
+   "flags_json": "[\"-x\", \"DFTRACER_ENABLE\"]"
+  },
+  "expect": {
+   "contains": "--env=DFTRACER_ENABLE"
+  }
+ },
+ {
+  "tool": "tuolumne_check_job",
+  "args": {
+   "nodes": 16,
+   "queue": "pbatch",
+   "purpose": "evidence",
+   "filesystems_json": "[{\"type\": \"gfs2\", \"profile\": \"shared\", \"name\": \"g\"}]",
+   "flags_json": "[\"--exclusive\", \"--coral2-chassis=1\"]"
+  },
+  "expect": {
+   "json": {
+    "status": "pass",
+    "chassis": 1
+   }
+  }
+ },
+ {
+  "tool": "tuolumne_check_job",
+  "args": {
+   "nodes": 2,
+   "queue": "pdebug",
+   "purpose": "evidence"
+  },
+  "expect": {
+   "contains": "go on pbatch"
+  }
+ },
+ {
+  "tool": "tuolumne_runtime_env",
+  "args": {
+   "extra_dirs_json": "[\"HDF5/lib\"]"
+  },
+  "expect": {
+   "contains": "HDF5/lib"
+  }
+ }
+]

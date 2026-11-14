@@ -1,0 +1,47 @@
+[
+ {
+  "tool": "workload_minivite_recipe",
+  "args": {},
+  "expect": {
+   "contains": "distBuildLocalMapCounter"
+  }
+ },
+ {
+  "tool": "workload_minivite_check",
+  "args": {
+   "commands": [
+    "make CXX=CC CXXFLAGS=-O3 LDFLAGS=\"-ldftracer\""
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_minivite_check",
+  "args": {
+   "commands": [
+    "make -j 8 CXX=CC CXXFLAGS=\"-std=c++11 -O3\" OPTFLAGS=\"-O3 -ldftracer_core\"",
+    "flux run -N2 -n16 -c11 env MPICH_MAX_THREAD_SAFETY=multiple ./miniVite -n 2097152"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_minivite_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

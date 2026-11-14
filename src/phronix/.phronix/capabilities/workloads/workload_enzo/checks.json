@@ -1,0 +1,57 @@
+[
+ {
+  "tool": "workload_enzo_recipe",
+  "args": {},
+  "expect": {
+   "contains": "grackle-no"
+  }
+ },
+ {
+  "tool": "workload_enzo_recipe",
+  "args": {
+   "variant": "nope"
+  },
+  "expect": {
+   "contains": "unknown variant"
+  }
+ },
+ {
+  "tool": "workload_enzo_check",
+  "args": {
+   "commands": [
+    "cd src/enzo && gmake machine-tuolumne opt-aggressive use-mpi-yes"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_enzo_check",
+  "args": {
+   "commands": [
+    "./configure",
+    "cd src/enzo && gmake machine-tuolumne opt-aggressive use-mpi-yes grackle-no",
+    "gmake -j32"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_enzo_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

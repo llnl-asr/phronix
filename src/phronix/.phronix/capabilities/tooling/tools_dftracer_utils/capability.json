@@ -1,0 +1,32 @@
+{
+ "name": "tools_dftracer_utils",
+ "description": "dftracer-utils, the Python binding package for the trace-utils CLI (split, merge, reader, event_count, comparator, aggregator, stats, reconstruct, replay, organize, pgzip, tar on .pfw/.pfw.gz traces): install verification (`import dftracer_utils`), its place in the dftracer / pydftracer / dftracer-utils trio, the session-venv rule, and the known `dftracer_stats --report categories|summary` failure on compacted traces (`No chunk statistics in index for <file>`, `Events processed: 0` from `dftracer_index --rebuild-summaries`) with its workaround. Load before any trace post-processing step (session_split_traces, reader, event_count, comparator, stats) or on a 'dftracer partially works' report.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "trace",
+  "analyze",
+  "install"
+ ],
+ "tools": [
+  "tools_dftracer_utils_recipe",
+  "tools_dftracer_utils_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "tools_dftracer_utils_recipe"
+  ],
+  "validator": [
+   "tools_dftracer_utils_check"
+  ]
+ },
+ "topic": "tools",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607992.153977,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) tools-dftracer-utils"
+  }
+ ]
+}

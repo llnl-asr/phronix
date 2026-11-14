@@ -1,0 +1,32 @@
+{
+ "name": "software_posix",
+ "description": "POSIX I/O optimization by layer - L1 application (buffering/coalescing, access ordering, fd reuse, async I/O, stat caching), L2 software hints (posix_fadvise, MALLOC_ARENA_MAX, OMP/MKL threads), L3 OS/filesystem (Lustre lfs setstripe ONLY on Lustre, near-node flash / Rabbit, block-device readahead, vm dirty/page cache sysctls, I/O scheduler) - plus dftracer DFTRACER_DATA_DIR for capturing POSIX events and manual proposals for posix_*_ops_slope metrics. Load for any POSIX I/O bottleneck (small_io_pct, rand_pct, read/write_time_pct, metadata_time_pct, posix_*_ops_slope), on dftracer `Code 2001` with DFTRACER_DATA_DIR=all, `lfs` errors on non-Lustre mounts, or a 4x write regression from romio_ds_write=disable on VAST.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "trace",
+  "analyze",
+  "optimize"
+ ],
+ "tools": [
+  "software_posix_recipe",
+  "software_posix_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_posix_recipe"
+  ],
+  "validator": [
+   "software_posix_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608171.231172,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-posix"
+  }
+ ]
+}

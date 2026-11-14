@@ -1,0 +1,5 @@
+# Lessons: phronix_profiling
+
+- [L-a678c65b] Launching the harness without the env exported -> The single most common cause of an empty profile. The collector is up, the tools answer, and nothing is ever recorded — because the harness was started before `eval "$(phronix_stack env)"` and exports no telemetry. -> follow phronix-profiling P1 (Corner cases) (2026-09-15, dftracer-agents phronix-profiling/LESSONS.md P1)
+- [L-2cdaf16f] A step id that varies between attempts -> Appending a timestamp or an attempt number to the step id defeats retry folding: each attempt becomes its own cheap-looking step and the real cost of the work disappears into the noise. -> follow phronix-profiling P2 (Corner cases) (2026-09-15, dftracer-agents phronix-profiling/LESSONS.md P2)
+- [L-165a68b2] Reading a total that has a large unattributed share -> If most of the cost is unattributed, the per-step table is describing a minority of the session. Fix the brackets before drawing conclusions from it. -> follow phronix-profiling P3 (Corner cases) (2026-09-15, dftracer-agents phronix-profiling/LESSONS.md P3)

@@ -1,0 +1,32 @@
+{
+ "name": "software_ray",
+ "description": "Ray (Ray Core / Train / Tune / Data) cluster bring-up on Cray PE + ROCm systems: the jemalloc LD_PRELOAD / static-TLS crash that makes `ray start --head` fail (export LD_PRELOAD=\"\" before every ray start), multi-node manual bootstrap pitfalls (RAY_ADDRESS for ray.init, head --num-gpus, worker lifetime), and trace-reading caveats (ray.data materializes once; plasma_store paths in default_worker.py cmdlines). Load for any Ray workload, or on `Failed to connect to GCS at address ... within 5 seconds`, `Failed to get cluster ID from GCS server: TimedOut`, `FileNotFoundError: ... logs/gcs_server.err`, `cannot allocate memory in static TLS block`, a Ray Train job hanging at ~0% CPU waiting for resources, or epoch-boundary POSIX metadata bursts in a ray.data pipeline.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "run",
+  "trace",
+  "analyze"
+ ],
+ "tools": [
+  "software_ray_recipe",
+  "software_ray_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_ray_recipe"
+  ],
+  "validator": [
+   "software_ray_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608171.2485707,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-ray"
+  }
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "name": "workload_minibude",
+ "description": "miniBUDE (UoB-HPC docking mini-app, C++/CMake) HIP backend on MI300A: Release-only build type, --offload-arch=gfx942, single-token dftracer link flags, the two annotation traps (main returns the work after FINI; work in header fasten.hpp), run sizing, expected trace (no MPI by design); predictor renders it, validator checks a command list. Load for minibude, bude, fasten_main, \"Only Release or Debug is supported\", \"Unknown argument -I\".",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_minibude_recipe",
+  "workload_minibude_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_minibude_recipe"
+  ],
+  "validator": [
+   "workload_minibude_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-minibude"
+  }
+ ]
+}

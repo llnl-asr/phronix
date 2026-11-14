@@ -1,0 +1,28 @@
+{
+ "name": "phronix_validate_ideas",
+ "description": "Judge a research plan's ideas: keep those that could change the outcome, are answerable in two minutes by trying something, are independent and not already settled; judge the SET for overlap (same file/function = one idea), judge the decomposition (sufficient, ordered, checkable, includes not-breaking-things), record survivors with research_set_aspects and state the count (target three). Load after a plan stage, when ideas cluster on one function (pylint-7114), or when a validation pass wanders.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_validate_ideas_plan",
+  "phronix_validate_ideas_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_validate_ideas_plan"
+  ],
+  "validator": [
+   "phronix_validate_ideas_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-validate-ideas (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

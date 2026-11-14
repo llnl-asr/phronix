@@ -1,0 +1,28 @@
+{
+ "name": "phronix_validate_exploration",
+ "description": "Judge whether each explored idea actually answered its question (tried, what happened in numbers, what it rules in/out, not cut off); name the ones that came back thin or unattempted, with the specific missing piece, so they are explored again; let the rest through. Load after the explore stage files its findings, or when a validation pass starts narrating patches ('*** Begin Patch') or taking measurements itself.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_validate_exploration_plan",
+  "phronix_validate_exploration_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_validate_exploration_plan"
+  ],
+  "validator": [
+   "phronix_validate_exploration_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-validate-exploration (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

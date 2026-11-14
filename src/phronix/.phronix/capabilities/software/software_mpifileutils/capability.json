@@ -1,0 +1,31 @@
+{
+ "name": "software_mpifileutils",
+ "description": "mpifileutils (dcp, dsync, drm, dwalk, dcmp, dtar, dchmod, dstripe, ddup, dfind, dreln, dbcast, dbz2): MPI-parallel replacements for cp/rsync/rm/find/diff/tar/chmod on Lustre/GPFS/VAST. Load whenever a copy, sync, delete, compare, archive, permission change, restripe or inventory touches more than a few GB or ~10k files on a shared parallel filesystem; on `ml mpifileutils` failing (ambiguous default), a verified move whose `du` byte totals mismatch although file counts match (FAIL verify ... bytes:X/Y), or a drm aimed at a session workspace (blocked by the guard_rm_drm hook).",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "run",
+  "trace"
+ ],
+ "tools": [
+  "software_mpifileutils_recipe",
+  "software_mpifileutils_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_mpifileutils_recipe"
+  ],
+  "validator": [
+   "software_mpifileutils_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608129.3872125,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-mpifileutils"
+  }
+ ]
+}
