@@ -362,3 +362,13 @@ def test_this_projects_own_checkout_pulls_pushes_and_switches_like_an_upstream(t
         assert git(me, "rev-parse", "HEAD") == git(me, "rev-parse", "origin/develop")
     finally:
         config.S.upstream, config.S.scope = [], None
+
+
+def test_a_gitlab_merge_request_link_is_taken_from_the_push_output():
+    from phronix.engine import upstream
+    out = ("remote: To create a merge request for contrib/me-1, visit:\n"
+           "remote:   https://lc.example.org/gitlab/g/me/-/merge_requests/new?merge_request%5Bsource_branch%5D=contrib%2Fme-1  \n")
+    u = upstream._printed_pr_url(out, "main")
+    assert u == ("https://lc.example.org/gitlab/g/me/-/merge_requests/new?merge_request%5Bsource_branch%5D=contrib%2Fme-1"
+                 "&merge_request%5Btarget_branch%5D=main")
+    assert upstream._printed_pr_url("remote: nothing here\n", "main") == ""
