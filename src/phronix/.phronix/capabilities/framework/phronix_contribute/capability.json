@@ -1,21 +1,27 @@
 {
  "name": "phronix_contribute",
- "version": 1,
+ "version": 2,
  "enabled": true,
  "topic": "framework",
  "stages": [],
- "description": "Contribute what this project learned about another project's capabilities back to it: show the contribution branches, rebase them on the upstream's newer version (merging conflicts, the agent for anything that is not a lesson, worked entry or capability.json) and push them for a pull request. Load when the user asks to push, rebase, update or contribute back, or a rebase reports a conflict.",
+ "description": "Contribute what this project learned about another project's capabilities back to it. The upstream clones stay on their integration branch (develop); these tools pull latest (replaying local contribution commits, conflicts merged, the agent for anything that is not a lesson, worked entry or capability.json), push the commits on a new contrib/<project>-<date-time> branch with its pull-request link, and switch the clone back to develop. Load when the user asks to pull, push, rebase, switch or contribute back.",
  "tools": [
+  "contrib_repos",
   "contrib_status",
+  "contrib_refresh",
   "contrib_rebase",
   "contrib_push",
+  "contrib_switch",
   "contrib_check"
  ],
  "pvc": {
   "predictor": [
+   "contrib_repos",
    "contrib_status",
+   "contrib_refresh",
    "contrib_rebase",
-   "contrib_push"
+   "contrib_push",
+   "contrib_switch"
   ],
   "validator": [
    "contrib_check"
@@ -27,6 +33,10 @@
    "ts": 1794630369,
    "by": "phronix",
    "why": "rebase with merging, and push, for contributions up the chain"
+  },
+  {
+   "version": 2,
+   "note": "clones stay on develop; push makes a new branch; contrib_switch"
   }
  ]
 }
