@@ -103,18 +103,16 @@ def test_upstream_capabilities_load_below_the_projects_own(chain):
     assert caps["workload_x"][0] == "up" and caps["proj_thing"][1] == chain["own"] / "proj_thing"
 
 
-def test_a_lesson_on_an_upstream_capability_is_committed_on_the_contribution_branch(chain):
+def test_a_lesson_on_an_upstream_capability_is_committed_in_the_clone_on_its_branch(chain):
     from phronix.engine import capstore, learning
     r = learning.add("workload_x", "use the big input", source="user")
-    assert r["status"] == "applied" and r["contributed"][0]["branch"] == "contrib/proj", r
-    wt = chain["proj"] / "vendor" / "contrib" / "up"
-    assert git(wt, "branch", "--show-current") == "contrib/proj"
-    lessons = wt / "src" / "uppkg" / ".agents" / "capabilities" / "workload_x" / "LESSONS.md"
+    assert r["status"] == "applied" and r["contributed"][0]["branch"] == "main", r
+    clone = chain["clone"]
+    assert git(clone, "branch", "--show-current") == "main"                    # never leaves its branch
+    lessons = clone / "src" / "uppkg" / ".agents" / "capabilities" / "workload_x" / "LESSONS.md"
     assert "use the big input" in lessons.read_text()
-    assert "proj: lesson for workload_x" in git(wt, "log", "-1", "--format=%s")
-    # The clone the project runs is untouched; the project now loads the worktree's copy.
-    assert "big input" not in (chain["clone"] / "src/uppkg/.agents/capabilities/workload_x/LESSONS.md").read_text()
-    assert git(chain["clone"], "status", "--porcelain") == ""
+    assert "proj: lesson for workload_x" in git(clone, "log", "-1", "--format=%s")
+    assert git(clone, "status", "--porcelain") == "" and not (chain["proj"] / "vendor" / "contrib").exists()
     capstore._State.fingerprint = ""
     assert capstore.all_caps()["workload_x"][1] == lessons.parent
     # The project's own capability is written where it is, and nothing is committed for it.
@@ -122,20 +120,16 @@ def test_a_lesson_on_an_upstream_capability_is_committed_on_the_contribution_bra
     assert "contributed" not in r and "own lesson" in (chain["own"] / "proj_thing" / "LESSONS.md").read_text()
 
 
-def test_update_rebases_the_contribution_and_says_how_to_open_the_pr(chain):
+def test_pull_latest_replays_the_local_commits_on_origin(chain):
     from phronix.engine import learning, upstream
     learning.add("workload_x", "lesson one", source="user")
-    # Someone else lands a change upstream.
     (chain["seed"] / "README.md").write_text("upstream moved\n")
     git(chain["seed"], "add", "-A"); git(chain["seed"], "commit", "-q", "-m", "other"); git(chain["seed"], "push", "-q", "origin", "HEAD:main")
-    r = upstream.update()
-    item = r["upstream"][0]
-    assert item["rebase"] == "ok" and item["clone_updated"], item
-    assert item["contribution"]["ahead"] == 1
-    assert "push --force-with-lease -u origin contrib/proj" in item["to_do"]["push"]
-    wt = Path(item["contribution"]["worktree"])
-    assert (wt / "README.md").read_text() == "upstream moved\n"          # rebased on top of it
-    assert (chain["clone"] / "README.md").exists()                         # the clone fast-forwarded
+    item = upstream.update()["upstream"][0]
+    assert item["rebase"] == "ok" and item["pulled"] == 1, item
+    assert item["contribution"]["ahead"] == 1 and item["contribution"]["push_state"] == "not_pushed"
+    assert (chain["clone"] / "README.md").read_text() == "upstream moved\n"
+    assert git(chain["clone"], "branch", "--show-current") == "main"
     assert upstream.status()["upstream"][0]["contribution"]["ahead"] == 1
 
 
@@ -196,52 +190,137 @@ def test_lessons_from_both_sides_merge_by_themselves(chain):
     _upstream_commit(chain, "workload_x/LESSONS.md", "# Lessons: workload_x\n\n- [L-up] theirs: pin the compiler\n")
     r = upstream.update()["upstream"][0]
     assert r["rebase"] == "ok" and r["rebase_resolved"] == ["src/uppkg/.agents/capabilities/workload_x/LESSONS.md"], r
-    text = (chain["proj"] / "vendor/contrib/up/src/uppkg/.agents/capabilities/workload_x/LESSONS.md").read_text()
+    text = (chain["clone"] / "src/uppkg/.agents/capabilities/workload_x/LESSONS.md").read_text()
     assert "theirs: pin the compiler" in text and "ours: use the big input" in text and "<<<<<<<" not in text
 
 
-def test_only_the_contributions_are_replayed_when_the_base_was_rewritten(chain):
+def test_only_the_local_commits_are_replayed_when_upstream_rewrote_history(chain):
     from phronix.engine import learning, upstream
     learning.add("workload_x", "ours: a lesson", source="user")
-    # upstream rewrites history: the commit the contribution was made on is replaced by an amended one
     git(chain["seed"], "commit", "-q", "--amend", "-m", "init, amended")
     git(chain["seed"], "push", "-q", "-f", "origin", "HEAD:main")
-    git(chain["clone"], "fetch", "-q", "origin"); git(chain["clone"], "reset", "-q", "--hard", "origin/main")
-    r = upstream.update(pull=False)["upstream"][0]
-    wt = chain["proj"] / "vendor/contrib/up"
+    r = upstream.update()["upstream"][0]
     assert r["rebase"] == "ok" and r["contribution"]["ahead"] == 1, r
-    assert git(wt, "log", "--format=%s", "-2").splitlines() == ["proj: lesson for workload_x", "init, amended"]
+    assert git(chain["clone"], "log", "--format=%s", "-2").splitlines() == ["proj: lesson for workload_x", "init, amended"]
 
 
 def _code_conflict(chain):
-    from phronix.engine import capstore, upstream
+    from phronix.engine import upstream
     d = upstream.target_dir(next(iter(__import__("phronix.engine.config", fromlist=["S"]).S.upstream)), "workload_x")
     (d / "tool.py").write_text("def register(mcp):\n    pass  # ours\n")
     upstream.commit_pending("proj: change workload_x code")
     _upstream_commit(chain, "workload_x/tool.py", "def register(mcp):\n    pass  # theirs\n")
 
 
-def test_a_code_conflict_without_the_agent_leaves_the_branch_as_it_was(chain):
+def test_a_code_conflict_without_the_agent_leaves_the_clone_as_it_was(chain):
     from phronix.engine import upstream
     _code_conflict(chain)
-    wt = chain["proj"] / "vendor/contrib/up"
-    before = git(wt, "rev-parse", "HEAD")
+    before = git(chain["clone"], "rev-parse", "HEAD")
     r = upstream.update(resolve=False)["upstream"][0]
     assert r["rebase"] == "conflict" and r["conflicts"] == ["src/uppkg/.agents/capabilities/workload_x/tool.py"]
-    assert git(wt, "rev-parse", "HEAD") == before and "rebase" not in git(wt, "status")
+    assert git(chain["clone"], "rev-parse", "HEAD") == before and "rebase" not in git(chain["clone"], "status")
+    assert git(chain["clone"], "branch", "--show-current") == "main"
 
 
-def test_the_agent_merges_a_code_conflict_and_push_publishes_the_branch(chain, tmp_path):
+def test_the_agent_merges_a_code_conflict_and_push_makes_a_new_branch(chain, tmp_path):
     from phronix.engine import config, upstream
     agent = tmp_path / "fake-claude"            # stands in for Claude Code: keeps both sides, no markers
     agent.write_text("#!/bin/bash\nfor f in $(git diff --name-only --diff-filter=U); do\n"
                      "  { git show :2:$f; echo '    # and ours'; } > $f; git add $f; done\necho merged\n")
     agent.chmod(0o755)
     config.S.agent = lambda: str(agent)
-    _code_conflict(chain)
-    r = upstream.push()["upstream"][0]
+    try:
+        _code_conflict(chain)
+        r = upstream.push()["upstream"][0]
+    finally:
+        config.S.agent = None
     assert r["rebase"] == "ok" and r["rebase_merged_by_agent"] == ["src/uppkg/.agents/capabilities/workload_x/tool.py"], r
-    assert r["pushed"] is True and "compare/main...contrib/proj" in r["pull_request"] or r["pushed"] is True
-    remote = git(chain["origin"], "rev-parse", "contrib/proj")
-    assert remote == git(chain["proj"] / "vendor/contrib/up", "rev-parse", "HEAD")
-    config.S.agent = None
+    assert r["pushed"] is True and r["pushed_branch"].startswith("contrib/proj-") and r["switch_to"] == "main", r
+    assert git(chain["origin"], "rev-parse", r["pushed_branch"]) == git(chain["clone"], "rev-parse", "HEAD")
+    assert git(chain["clone"], "branch", "--show-current") == "main"            # the clone stays on its branch
+    assert git(chain["origin"], "rev-parse", "main") != git(chain["clone"], "rev-parse", "HEAD")
+
+
+def test_push_then_switch_returns_the_clone_to_origin(chain):
+    from phronix.engine import learning, upstream
+    learning.add("workload_x", "first lesson", source="user")
+    r = upstream.refresh()["upstream"][0]
+    assert r["push_state"] == "not_pushed" and r["next"] == "push", r
+    # switching before pushing would lose the commit: refused
+    assert "Push first" in upstream.switch_to_branch("up")["error"]
+    p = upstream.push(resolve=False)["upstream"][0]
+    assert p["pushed"] and p["pull_request"] == "" or "compare/main..." in p["pull_request"]
+    r = upstream.refresh()["upstream"][0]
+    assert r["push_state"] == "pushed" and r["next"].startswith("open the pull request"), r
+    assert upstream.push(resolve=False)["upstream"][0]["pushed"] is False          # nothing new to push
+    learning.add("workload_x", "second lesson", source="user")
+    assert upstream.refresh()["upstream"][0]["push_state"] == "needs_push"
+    p2 = upstream.push(resolve=False)["upstream"][0]
+    assert p2["pushed"] and p2["pushed_branch"] != p["pushed_branch"] or p2["pushed"]
+    s = upstream.switch_to_branch("up")
+    assert s["status"] == "ok" and s["branch"] == "main", s
+    assert git(chain["clone"], "rev-parse", "HEAD") == git(chain["clone"], "rev-parse", "origin/main")
+    assert upstream.refresh()["upstream"][0]["next"] == "nothing"
+
+
+def test_a_merged_pull_request_comes_back_with_the_next_pull(chain):
+    from phronix.engine import learning, upstream
+    learning.add("workload_x", "a lesson to merge", source="user")
+    b = upstream.push(resolve=False)["upstream"][0]["pushed_branch"]
+    git(chain["seed"], "fetch", "-q", "origin", b)
+    git(chain["seed"], "merge", "-q", "--no-ff", "-m", "Merge pull request", "FETCH_HEAD")
+    git(chain["seed"], "push", "-q", "origin", "HEAD:main")
+    upstream.switch_to_branch("up")
+    r = upstream.update()["upstream"][0]
+    assert r["rebase"] in ("ok", "up_to_date") and r["contribution"]["ahead"] == 0, r
+    assert "a lesson to merge" in (chain["clone"] / "src/uppkg/.agents/capabilities/workload_x/LESSONS.md").read_text()
+
+
+def test_a_scope_with_an_integration_branch_stays_on_it_and_prs_go_there(chain):
+    from phronix.engine import config, configure, learning, upstream
+    from phronix.engine.scopes import Scope
+    git(chain["seed"], "checkout", "-q", "-b", "develop")
+    _upstream_commit(chain, "workload_x/WORKED.md", "# What worked: workload_x\n- on develop\n", "develop change")
+    git(chain["seed"], "push", "-q", "origin", "develop")
+    git(chain["clone"], "fetch", "-q", "origin")
+    git(chain["clone"], "checkout", "-q", "-b", "feature", "origin/main")
+    up = Scope("up", "uppkg", chain["clone"] / "src/uppkg/.agents/capabilities", root=True, branch="develop")
+    configure(project="proj", env_prefix="TPROJ", package_dir=chain["proj"] / "src/projpkg", scope=config.S.scope,
+              upstream=[up], project_root=chain["proj"])
+    # on another branch: not pulled, Switch offered
+    assert upstream.update()["upstream"][0]["rebase"] == "not_on_branch"
+    row = {r["project"]: r for r in upstream.repos()["repos"]}["up"]
+    assert "switch" in row["actions"] and row["on_integration_branch"] is False
+    assert upstream.switch_to_branch("up")["branch"] == "develop"
+    learning.add("workload_x", "a lesson for develop", source="user")
+    st = upstream.status()["upstream"][0]["contribution"]
+    assert st["branch"] == "develop" and st["ahead"] == 1
+    p = upstream.push(resolve=False)["upstream"][0]
+    assert p["pushed"] and p["switch_to"] == "develop"
+
+
+def test_pull_all_fast_forwards_clean_checkouts_and_leaves_the_rest(chain):
+    from phronix.engine import upstream
+    _upstream_commit(chain, "workload_x/WORKED.md", "# What worked: workload_x\n- new upstream\n")
+    rep = upstream.pull_all(include_self=False)
+    clone = next(r for r in rep["repos"] if r["repo"] == str(chain["clone"]))
+    assert clone["pulled"] == 1 and rep["pulled"] == 1
+    _upstream_commit(chain, "workload_x/WORKED.md", "# What worked: workload_x\n- newer\n")
+    (chain["clone"] / "src/uppkg/.agents/capabilities/workload_x/tool.py").write_text("# local edit\n")
+    clone = next(r for r in upstream.pull_all(include_self=False)["repos"] if r["repo"] == str(chain["clone"]))
+    assert not clone.get("pulled") and "uncommitted" in clone["note"]
+
+
+def test_the_repositories_overview_and_per_repo_actions(chain):
+    from phronix.engine import learning, upstream
+    learning.add("workload_x", "a lesson", source="user")
+    rows = {r["project"]: r for r in upstream.repos()["repos"]}
+    assert rows["up"]["actions"] == ["pull", "push"] and rows["up"]["contribution"]["ahead"] == 1
+    assert rows["up"]["contribution"]["push_state"] == "not_pushed"
+    _upstream_commit(chain, "workload_x/WORKED.md", "# What worked: workload_x\n- newer\n")
+    r = upstream.pull("up")
+    assert r["rebase"] == "ok" and r["pulled"] == 1, r
+    assert upstream.push(only="up")["upstream"][0]["pushed"] is True
+    row = {r["project"]: r for r in upstream.repos(fetch=True)["repos"]}["up"]
+    assert row["contribution"]["push_state"] == "pushed" and row["actions"] == ["pull", "push", "switch"]
+    assert upstream.push(only="nope")["upstream"] == []

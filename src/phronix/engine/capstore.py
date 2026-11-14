@@ -102,16 +102,23 @@ class _State:
 
 
 def _upstream_layers() -> List[Tuple[str, Path]]:
-    """One layer per upstream scope, phronix first: its contribution worktree when this project has one, else its clone."""
+    """One layer per upstream scope, phronix first: its clone (what this project runs)."""
+    return [(sc.project, sc.cap_dir) for sc in _cfg.S.upstream]
+
+
+def upstream_overlays() -> List[Tuple[str, Path]]:
+    """(project, bundle dir) of every capability this project changed in a contribution worktree: served over the
+    clone's copy, so what was contributed is in use at once."""
     out = []
+    try:
+        from .upstream import contributed_bundles
+    except Exception:
+        return out
     for sc in _cfg.S.upstream:
-        d = None
         try:
-            from .upstream import contrib_cap_dir
-            d = contrib_cap_dir(sc)
+            out += [(sc.project, b) for b in contributed_bundles(sc)]
         except Exception:
-            d = None
-        out.append((sc.project, d if d is not None and d.is_dir() else sc.cap_dir))
+            continue
     return out
 
 
@@ -189,6 +196,12 @@ def all_caps() -> Dict[str, Tuple[str, Path, dict]]:
             except (ValueError, OSError):
                 continue
             out[b.name] = (layer, b, meta)
+        if layer == (_cfg.S.upstream[-1].project if _cfg.S.upstream else None):
+            for proj, b in upstream_overlays():           # contributions over the clones, below this project
+                try:
+                    out[b.name] = (proj, b, json.loads((b / "capability.json").read_text()))
+                except (ValueError, OSError):
+                    continue
     return out
 
 

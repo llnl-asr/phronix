@@ -38,5 +38,19 @@
   "expect": {
    "contains": "upstream"
   }
+ },
+ {
+  "tool": "contrib_refresh",
+  "args": {},
+  "expect": {
+   "contains": "upstream"
+  }
+ },
+ {
+  "tool": "contrib_repos",
+  "args": {},
+  "expect": {
+   "contains": "repos"
+  }
  }
 ]

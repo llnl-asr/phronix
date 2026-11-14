@@ -30,13 +30,16 @@ class Scope:
     names: Tuple[str, ...] = ()           # and by name
     root: bool = False                    # owns whatever no other scope claims (phronix)
     nested: bool = False                  # files capabilities under <topic>/<name> (phronix) rather than <name>
+    branch: str = ""                      # the branch contributions are rebased on and pull requests go to
+                                          # ("" = the remote's default branch; dftracer-agents: develop)
 
 
 # The phronix scope: its bundled layer, capabilities under <topic>/<name>.
 def phronix_scope() -> Scope:
     import phronix
     return Scope(project="phronix", package="phronix",
-                 cap_dir=Path(phronix.__file__).resolve().parent / ".phronix" / "capabilities", root=True, nested=True)
+                 cap_dir=Path(phronix.__file__).resolve().parent / ".phronix" / "capabilities", root=True, nested=True,
+                 branch="develop")
 
 
 # Where an unowned capability is filed inside phronix (by name prefix), so the bundled layer stays browsable.
