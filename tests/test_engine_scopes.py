@@ -132,7 +132,7 @@ def test_update_rebases_the_contribution_and_says_how_to_open_the_pr(chain):
     item = r["upstream"][0]
     assert item["rebase"] == "ok" and item["clone_updated"], item
     assert item["contribution"]["ahead"] == 1
-    assert "push -u origin contrib/proj" in item["to_do"]["push"]
+    assert "push --force-with-lease -u origin contrib/proj" in item["to_do"]["push"]
     wt = Path(item["contribution"]["worktree"])
     assert (wt / "README.md").read_text() == "upstream moved\n"          # rebased on top of it
     assert (chain["clone"] / "README.md").exists()                         # the clone fast-forwarded
@@ -179,3 +179,69 @@ def test_standing_text_is_not_an_overlap_and_a_keep_is_committed_with_its_reason
     r = consolidate.keep(["proj_a", "proj_b"], "different on purpose")
     assert Path(r["file"]) == own.parent / "consolidation_keep.json"
     assert consolidate.decisions() == [{"ids": "proj_a|proj_b", "why": "different on purpose"}]
+
+
+# ------------------------------------------------------------------------------- rebase, merge, push
+def _upstream_commit(chain, rel, text, msg="upstream change"):
+    f = chain["seed"] / "src" / "uppkg" / ".agents" / "capabilities" / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(text)
+    git(chain["seed"], "add", "-A"); git(chain["seed"], "commit", "-q", "-m", msg)
+    git(chain["seed"], "push", "-q", "-f", "origin", "HEAD:main")
+
+
+def test_lessons_from_both_sides_merge_by_themselves(chain):
+    from phronix.engine import learning, upstream
+    learning.add("workload_x", "ours: use the big input", source="user")
+    _upstream_commit(chain, "workload_x/LESSONS.md", "# Lessons: workload_x\n\n- [L-up] theirs: pin the compiler\n")
+    r = upstream.update()["upstream"][0]
+    assert r["rebase"] == "ok" and r["rebase_resolved"] == ["src/uppkg/.agents/capabilities/workload_x/LESSONS.md"], r
+    text = (chain["proj"] / "vendor/contrib/up/src/uppkg/.agents/capabilities/workload_x/LESSONS.md").read_text()
+    assert "theirs: pin the compiler" in text and "ours: use the big input" in text and "<<<<<<<" not in text
+
+
+def test_only_the_contributions_are_replayed_when_the_base_was_rewritten(chain):
+    from phronix.engine import learning, upstream
+    learning.add("workload_x", "ours: a lesson", source="user")
+    # upstream rewrites history: the commit the contribution was made on is replaced by an amended one
+    git(chain["seed"], "commit", "-q", "--amend", "-m", "init, amended")
+    git(chain["seed"], "push", "-q", "-f", "origin", "HEAD:main")
+    git(chain["clone"], "fetch", "-q", "origin"); git(chain["clone"], "reset", "-q", "--hard", "origin/main")
+    r = upstream.update(pull=False)["upstream"][0]
+    wt = chain["proj"] / "vendor/contrib/up"
+    assert r["rebase"] == "ok" and r["contribution"]["ahead"] == 1, r
+    assert git(wt, "log", "--format=%s", "-2").splitlines() == ["proj: lesson for workload_x", "init, amended"]
+
+
+def _code_conflict(chain):
+    from phronix.engine import capstore, upstream
+    d = upstream.target_dir(next(iter(__import__("phronix.engine.config", fromlist=["S"]).S.upstream)), "workload_x")
+    (d / "tool.py").write_text("def register(mcp):\n    pass  # ours\n")
+    upstream.commit_pending("proj: change workload_x code")
+    _upstream_commit(chain, "workload_x/tool.py", "def register(mcp):\n    pass  # theirs\n")
+
+
+def test_a_code_conflict_without_the_agent_leaves_the_branch_as_it_was(chain):
+    from phronix.engine import upstream
+    _code_conflict(chain)
+    wt = chain["proj"] / "vendor/contrib/up"
+    before = git(wt, "rev-parse", "HEAD")
+    r = upstream.update(resolve=False)["upstream"][0]
+    assert r["rebase"] == "conflict" and r["conflicts"] == ["src/uppkg/.agents/capabilities/workload_x/tool.py"]
+    assert git(wt, "rev-parse", "HEAD") == before and "rebase" not in git(wt, "status")
+
+
+def test_the_agent_merges_a_code_conflict_and_push_publishes_the_branch(chain, tmp_path):
+    from phronix.engine import config, upstream
+    agent = tmp_path / "fake-claude"            # stands in for Claude Code: keeps both sides, no markers
+    agent.write_text("#!/bin/bash\nfor f in $(git diff --name-only --diff-filter=U); do\n"
+                     "  { git show :2:$f; echo '    # and ours'; } > $f; git add $f; done\necho merged\n")
+    agent.chmod(0o755)
+    config.S.agent = lambda: str(agent)
+    _code_conflict(chain)
+    r = upstream.push()["upstream"][0]
+    assert r["rebase"] == "ok" and r["rebase_merged_by_agent"] == ["src/uppkg/.agents/capabilities/workload_x/tool.py"], r
+    assert r["pushed"] is True and "compare/main...contrib/proj" in r["pull_request"] or r["pushed"] is True
+    remote = git(chain["origin"], "rev-parse", "contrib/proj")
+    assert remote == git(chain["proj"] / "vendor/contrib/up", "rev-parse", "HEAD")
+    config.S.agent = None

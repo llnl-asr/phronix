@@ -36,6 +36,7 @@ class Settings:
     module_prefix = "phronix"                 # names of the modules capabilities are loaded as
     context_tag = "capability-context"        # the tag knowledge.context wraps its hits in
     bootstrap = ""                            # "module" or "module:function" that configures the engine (run in check sandboxes)
+    agent: Optional[Callable[[], Optional[str]]] = None   # the merge agent's executable (Claude Code), when the project knows it
     scope: Optional[Scope] = None             # this project's scope
     upstream: List[Scope] = []                # the scopes it builds on, phronix first
     configured = False
@@ -48,7 +49,7 @@ def configure(project: str, env_prefix: str, package_dir, state_dir: Optional[Ca
               module_prefix: str = "", context_tag: str = "", standing: str = "", shared_agent_tools: Optional[List[str]] = None,
               trace_rule: str = "", trace_reader: Optional[str] = None, bootstrap: str = "",
               scope: Optional[Scope] = None, upstream: Optional[List[Scope]] = None, project_root=None,
-              store: Optional[Path] = None) -> Settings:
+              store: Optional[Path] = None, agent: Optional[Callable[[], Optional[str]]] = None) -> Settings:
     """Set the project this process serves. ``standing`` / ``shared_agent_tools`` / ``trace_rule`` / ``trace_reader``
     replace the engine's defaults (capstore.STANDING, SHARED_AGENT_TOOLS, TV_RULE, TRACE_READER) for this project.
     ``bootstrap`` names what configures the engine for this project ("module" or "module:function"); a check sandbox
@@ -63,6 +64,7 @@ def configure(project: str, env_prefix: str, package_dir, state_dir: Optional[Ca
     own = Path(store).resolve() if store else S.package_dir / ".agents" / "capabilities"
     S.scope = scope or Scope(project=project, package=S.package_dir.name, cap_dir=own)
     S.upstream = list(upstream or [])
+    S.agent = agent
     S.project_root = Path(project_root).resolve() if project_root else _checkout(S.package_dir)
     S.configured = True
     capstore.PKG = S.package_dir
@@ -89,6 +91,23 @@ def _checkout(package_dir: Path) -> Path:
 def chain() -> List[Scope]:
     """Upstream first, this project last."""
     return [*S.upstream, *([S.scope] if S.scope else [])]
+
+
+def agent_bin() -> Optional[str]:
+    """The agent that merges a conflicted rebase (Claude Code): the project's own finder, <P>_CLAUDE_BIN, or claude on
+    PATH or in ~/.local/bin."""
+    import shutil
+    if S.agent is not None:
+        try:
+            found = S.agent()
+        except Exception:
+            found = None
+        if found:
+            return found
+    for cand in (env("CLAUDE_BIN"), shutil.which("claude"), str(Path.home() / ".local" / "bin" / "claude")):
+        if cand and Path(cand).is_file() and os.access(cand, os.X_OK):
+            return cand
+    return None
 
 
 def env(name: str, default: Optional[str] = None) -> Optional[str]:

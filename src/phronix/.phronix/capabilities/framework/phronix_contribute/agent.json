@@ -1,0 +1,12 @@
+{
+ "description": "Contributes this project's changes to upstream capabilities back: rebase with merging, push, pull-request links.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "phronix_contribute"
+ ],
+ "permission_mode": "default",
+ "instructions": "Use contrib_status, contrib_rebase, contrib_push and contrib_check only; never git by hand in a contribution worktree."
+}

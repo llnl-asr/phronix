@@ -1,0 +1,32 @@
+{
+ "name": "phronix_contribute",
+ "version": 1,
+ "enabled": true,
+ "topic": "framework",
+ "stages": [],
+ "description": "Contribute what this project learned about another project's capabilities back to it: show the contribution branches, rebase them on the upstream's newer version (merging conflicts, the agent for anything that is not a lesson, worked entry or capability.json) and push them for a pull request. Load when the user asks to push, rebase, update or contribute back, or a rebase reports a conflict.",
+ "tools": [
+  "contrib_status",
+  "contrib_rebase",
+  "contrib_push",
+  "contrib_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "contrib_status",
+   "contrib_rebase",
+   "contrib_push"
+  ],
+  "validator": [
+   "contrib_check"
+  ]
+ },
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794630369,
+   "by": "phronix",
+   "why": "rebase with merging, and push, for contributions up the chain"
+  }
+ ]
+}

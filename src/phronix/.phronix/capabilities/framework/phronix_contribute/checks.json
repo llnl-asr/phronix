@@ -1,0 +1,42 @@
+[
+ {
+  "tool": "contrib_check",
+  "args": {
+   "report_json": "{\"upstream\": [{\"project\": \"dftracer-agents\", \"rebase\": \"ok\", \"pushed\": true, \"pull_request\": \"https://github.com/o/r/compare/main...contrib/p?expand=1\", \"contribution\": {\"ahead\": 2}}]}"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "contrib_check",
+  "args": {
+   "report_json": "{\"upstream\": [{\"project\": \"phronix\", \"rebase\": \"conflict\", \"conflicts\": [\"x/tool.py\"], \"pushed\": false, \"push_note\": \"not pushed\", \"contribution\": {\"ahead\": 1}}]}"
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "contrib_check",
+  "args": {
+   "report_json": "not json"
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "contrib_status",
+  "args": {},
+  "expect": {
+   "contains": "upstream"
+  }
+ }
+]
