@@ -324,3 +324,41 @@ def test_the_repositories_overview_and_per_repo_actions(chain):
     row = {r["project"]: r for r in upstream.repos(fetch=True)["repos"]}["up"]
     assert row["contribution"]["push_state"] == "pushed" and row["actions"] == ["pull", "push", "switch"]
     assert upstream.push(only="nope")["upstream"] == []
+
+
+def test_this_projects_own_checkout_pulls_pushes_and_switches_like_an_upstream(tmp_path, monkeypatch):
+    """The agents' changes to the project's own capabilities (worked entries, lessons) are committed on its develop
+    and pushed on a new branch with a pull-request link; code changes are never committed."""
+    from phronix.engine import config, configure, upstream
+    origin = tmp_path / "me.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "develop", str(origin)], check=True)
+    me = tmp_path / "me"
+    subprocess.run(["git", "clone", "-q", str(origin), str(me)], check=True, capture_output=True)
+    git(me, "config", "user.email", "t@example.org"); git(me, "config", "user.name", "t")
+    caps = me / "src" / "mepkg" / ".agents" / "capabilities"
+    bundle(caps, "me_thing")
+    (me / "src" / "mepkg" / "code.py").write_text("x = 1\n")
+    git(me, "add", "-A"); git(me, "commit", "-q", "-m", "init"); git(me, "push", "-q", "origin", "HEAD:develop")
+    git(me, "remote", "set-head", "origin", "develop")
+    sc = Scope("me", "mepkg", caps, prefixes=("me_",))
+    configure(project="me", env_prefix="TME", package_dir=me / "src" / "mepkg", scope=sc, upstream=[], project_root=me)
+    try:
+        row = upstream.repos()["repos"][0]
+        assert row["project"] == "me" and row["role"] == "this project" and row["actions"] == ["pull", "push"]
+        (caps / "me_thing" / "WORKED.md").write_text("# What worked: me_thing\n- four nodes\n")   # an agent wrote it
+        assert upstream.repos()["repos"][0]["pending_changes"] == 1
+        p = upstream.push(only="me")["upstream"][0]
+        assert p["committed"]["files"] == 1 and p["pushed"] and p["pushed_branch"].startswith("contrib/me-"), p
+        assert git(me, "branch", "--show-current") == "develop"
+        assert git(origin, "show", f"{p['pushed_branch']}:src/mepkg/.agents/capabilities/me_thing/WORKED.md").endswith("four nodes")
+        row = upstream.repos()["repos"][0]
+        assert "switch" in row["actions"] and row["contribution"]["push_state"] == "pushed"
+        # a code change is not the agents' to commit: it stays, and Pull latest says why it cannot run
+        (me / "src" / "mepkg" / "code.py").write_text("x = 2\n")
+        r = upstream.pull("me")
+        assert r["rebase"] in ("dirty", "up_to_date") and git(me, "status", "--porcelain").strip().endswith("code.py")
+        git(me, "checkout", "-q", "--", "src/mepkg/code.py")
+        assert upstream.switch_to_branch("me")["status"] == "ok"
+        assert git(me, "rev-parse", "HEAD") == git(me, "rev-parse", "origin/develop")
+    finally:
+        config.S.upstream, config.S.scope = [], None
