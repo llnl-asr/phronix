@@ -15,8 +15,8 @@
  # See the License for the specific language governing permissions and
  # limitations under the License.
 
-SaveDirName = ${LUSTRE}/ipic3d-opt-demo
-RestartDirName = ${LUSTRE}/ipic3d-opt-demo
+SaveDirName = ${LUSTRE}/${PIPELINE}/baseline/data
+RestartDirName = ${LUSTRE}/${PIPELINE}/baseline/data
 
 # New flags:
 Case              = GEM          # Select the case
