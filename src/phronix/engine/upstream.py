@@ -415,11 +415,31 @@ def _pushed(repo: Path) -> List[str]:
     return [b for b in _git(repo, "config", "--get-all", _pushed_key()).stdout.split() if b]
 
 
+def _pr_key() -> str:
+    return f"contrib.{re.sub(r'[^A-Za-z0-9]', '', _cfg.S.project) or 'project'}.prurl"
+
+
 def _pr_url(repo: Path, base: str, head: str) -> str:
-    """The page that opens a pull request of ``head`` into ``base`` (GitHub remotes), or ""."""
+    """The page that opens a pull request of ``head`` into ``base``: built for GitHub remotes; for others (GitLab) the
+    merge-request link the server printed when ``head`` was pushed (kept in git config), or ""."""
     url = _git(repo, "remote", "get-url", "origin").stdout.strip()
     m = re.search(r"github\.com[:/](.+?)(?:\.git)?/?$", url)
-    return f"https://github.com/{m.group(1)}/compare/{base}...{head}?expand=1" if m else ""
+    if m:
+        return f"https://github.com/{m.group(1)}/compare/{base}...{head}?expand=1"
+    for line in _git(repo, "config", "--get-all", _pr_key()).stdout.splitlines():
+        b, _, u = line.partition(" ")
+        if b == head and u:
+            return u
+    return ""
+
+
+def _printed_pr_url(output: str, base: str) -> str:
+    """The merge-request link a GitLab server prints on push, aimed at ``base``."""
+    m = re.search(r"(https?://\S+/-/merge_requests/new\?\S+)", output or "")
+    if not m:
+        return ""
+    u = m.group(1)
+    return u if "target_branch" in u else f"{u}&merge_request%5Btarget_branch%5D={base}"
 
 
 def push(resolve: bool = True, only: Optional[str] = None) -> Dict:
@@ -449,6 +469,9 @@ def push(resolve: bool = True, only: Optional[str] = None) -> Dict:
             continue
         _git(repo, "fetch", "-q", "origin", f"+refs/heads/{name}:refs/remotes/origin/{name}")
         _git(repo, "config", "--add", _pushed_key(), name)
+        printed = _printed_pr_url((r.stderr or "") + (r.stdout or ""), c["branch"])
+        if printed:
+            _git(repo, "config", "--add", _pr_key(), f"{name} {printed}")
         item.update(pushed_branch=name, pull_request=_pr_url(repo, c["branch"], name), switch_to=c["branch"],
                     contribution=_contribution(repo, _scopes(item["project"])[0]))
     return rep
