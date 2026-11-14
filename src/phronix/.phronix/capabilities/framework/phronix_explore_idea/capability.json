@@ -1,0 +1,28 @@
+{
+ "name": "phronix_explore_idea",
+ "description": "How to explore one idea/step from the research plan in a throwaway worktree under a short budget: find several genuinely different ways to do THIS step (research_add_approach with aspect), try each against the failing case, measure what changes, and record the finding (research_observe) including failures and partial results. Load when dispatched as an explorer, when two approaches touch the same line, or when tempted to describe an idea instead of trying it.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_explore_idea_plan",
+  "phronix_explore_idea_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_explore_idea_plan"
+  ],
+  "validator": [
+   "phronix_explore_idea_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-explore-idea (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

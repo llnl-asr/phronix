@@ -1,0 +1,124 @@
+[
+ {
+  "tool": "phronix_agent_authoring_plan",
+  "args": {
+   "goal": "a new phronix-learner agent"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_agent_authoring_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_agent_authoring_check",
+  "args": {
+   "record": {
+    "name": "phronix-learner",
+    "file_stem": "phronix-learner",
+    "description": "Harvests a finished session into durable knowledge; use after a session ends, before the privacy scan.",
+    "model_level": "level_3",
+    "tools": [
+     "Read",
+     "mcp__phronix__skill_write"
+    ],
+    "skills": [
+     "phronix-self-learning"
+    ],
+    "missing_skills": [],
+    "edited_rendered_files": [],
+    "behaviour_change": false,
+    "synced": true
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_agent_authoring_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_agent_authoring_plan",
+  "args": {
+   "goal": "a new phronix-learner agent",
+   "facts": {
+    "shared_rule": true
+   }
+  },
+  "expect": {
+   "contains": "common-sections.yaml once"
+  }
+ },
+ {
+  "tool": "phronix_agent_authoring_plan",
+  "args": {
+   "goal": "a new phronix-learner agent",
+   "facts": {
+    "behaviour_change": true
+   }
+  },
+  "expect": {
+   "contains": "Ask the user to confirm"
+  }
+ },
+ {
+  "tool": "phronix_agent_authoring_check",
+  "args": {
+   "record": {
+    "name": "reviewer",
+    "description": "Reviews code",
+    "model_level": "claude-opus-4",
+    "tools": [
+     "Read"
+    ],
+    "missing_skills": [],
+    "edited_rendered_files": [
+     ".claude/agents/reviewer.md"
+    ],
+    "synced": false
+   }
+  },
+  "expect": {
+   "contains": "revert the edit to the rendered file"
+  }
+ },
+ {
+  "tool": "phronix_agent_authoring_check",
+  "args": {
+   "record": {
+    "name": "reviewer",
+    "description": "Reviews changed code; use after a feature lands",
+    "model_level": "level_2",
+    "tools": [
+     "Read"
+    ],
+    "missing_skills": [],
+    "edited_rendered_files": [],
+    "behaviour_change": true,
+    "user_confirmed": false,
+    "synced": true
+   }
+  },
+  "expect": {
+   "contains": "confirm the behaviour change"
+  }
+ }
+]

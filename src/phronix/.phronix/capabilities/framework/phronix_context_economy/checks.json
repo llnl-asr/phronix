@@ -1,0 +1,112 @@
+[
+ {
+  "tool": "phronix_context_economy_plan",
+  "args": {
+   "goal": "find where the tracer stage retries"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_context_economy_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_context_economy_check",
+  "args": {
+   "record": {
+    "task": "add a retry to the tracer stage",
+    "skills_query": "retry tracer stage",
+    "memory_query": "tracer stage failures",
+    "index_matches_read": true,
+    "files_read": [
+     "tracer.py:120"
+    ],
+    "located_by_graph": true,
+    "edits_shared": true,
+    "blast_radius": "2 callers: run_stage, smoke",
+    "whole_skill_loaded": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_context_economy_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_context_economy_plan",
+  "args": {
+   "goal": "find where the tracer stage retries",
+   "facts": {
+    "stale_graph": true
+   }
+  },
+  "expect": {
+   "contains": "graph_ensure(force=True)"
+  }
+ },
+ {
+  "tool": "phronix_context_economy_plan",
+  "args": {
+   "goal": "find where the tracer stage retries",
+   "facts": {
+    "editing_shared": true
+   }
+  },
+  "expect": {
+   "contains": "blast radius"
+  }
+ },
+ {
+  "tool": "phronix_context_economy_check",
+  "args": {
+   "record": {
+    "task": "x",
+    "skills_query": "x",
+    "index_matches_read": true
+   }
+  },
+  "expect": {
+   "contains": "one query finds only the stronger store"
+  }
+ },
+ {
+  "tool": "phronix_context_economy_check",
+  "args": {
+   "record": {
+    "task": "x",
+    "skills_query": "x",
+    "memory_query": "y",
+    "index_matches_read": true,
+    "files_read": [
+     "a.py"
+    ],
+    "located_by_graph": false,
+    "edits_shared": true,
+    "whole_skill_loaded": true,
+    "whole_load_reason": "convenient"
+   }
+  },
+  "expect": {
+   "contains": "state the blast radius"
+  }
+ }
+]

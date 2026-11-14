@@ -1,0 +1,37 @@
+{
+ "name": "system_tuolumne",
+ "version": 1,
+ "enabled": true,
+ "description": "Tuolumne (and its family, e.g. hetchy): Cray PE runtime library path, Rabbit #DW capacity sizing, and a check of a planned job against the rules learnt there (queue by purpose, chassis, gfs2 sharing, Lustre profile, flux flag pitfalls).",
+ "tools": [
+  "tuolumne_runtime_env",
+  "tuolumne_dw_capacity",
+  "tuolumne_check_job"
+ ],
+ "review": [],
+ "layer": "project",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1793859508.4593241,
+   "by": "haridev",
+   "proposal": "a3ea339a21ff",
+   "why": "Runs on Tuolumne repeatedly failed on the same site rules (missing Cray runtime dirs, -x VAR, gfs2 across chassis, wrong queue, undersized capacity); the prose skill held them as text. They are deterministic, so they are tools now, with the site facts and error history in the skill.",
+   "sha1": "73b6560d84d5"
+  }
+ ],
+ "stages": [
+  "scope",
+  "alloc",
+  "run"
+ ],
+ "pvc": {
+  "predictor": [
+   "tuolumne_runtime_env",
+   "tuolumne_dw_capacity"
+  ],
+  "validator": [
+   "tuolumne_check_job"
+  ]
+ }
+}

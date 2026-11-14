@@ -1,0 +1,62 @@
+{
+ "name": "workload_vpic_kokkos",
+ "version": 3,
+ "enabled": true,
+ "description": "VPIC-Kokkos (TauferLab/vpic-kokkos devel): CMake args that build a fast Cray/OpenMP build, the traced/untraced flux run command (TLS tunable, --tpp), a sized I/O-enabled short_pulse deck copy, and a build check; plus (v3) the VPIC-Kokkos recipe/check: two-stage deck compile and annotated-install symlinks, bare-identifier REGION macros, Weibel smoke vs production portability_test decks (N*M*K ranks), benchmark.cxx ENABLE_OUTPUT gate, MPI-bound diagnosis and the field_advance_kernels_t segfault. Load for vpic, 'Bad domain decompostion', libsci_cray_mp.so TLS errors.",
+ "tools": [
+  "vpic_cmake_args",
+  "vpic_run_command",
+  "vpic_deck_prepare",
+  "vpic_build_check",
+  "workload_vpic_kokkos_recipe",
+  "workload_vpic_kokkos_check"
+ ],
+ "review": [
+  "line 86: writes or deletes files (write_text)"
+ ],
+ "layer": "project",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1793989388.2615507,
+   "by": "haridev",
+   "proposal": "727c2739a19c",
+   "why": "Exploration 20261106-095720-67f5a119 built, annotated, traced and ran VPIC-Kokkos by hand; it found several non-obvious fixes (Release needed for -O3, Cray wrappers, install/bin/vpic broken, static TLS tunable, --tpp, deck sizing with I/O on) that no capability owns.",
+   "sha1": "e382499f6ecb"
+  },
+  {
+   "version": 2,
+   "ts": 1794505631.0644498,
+   "by": "haridev",
+   "proposal": "f57fe97105e7",
+   "why": "Explorations 20261110-085150-69cc1bfb / 20261111-202500-0de3a1b5 built the write_functions branch with parallel HDF5 and dftracer; add the HDF5 configure arguments (hdf5_root, HDF5_NO_FIND_PACKAGE_CONFIG_FILE, -DVPIC_ENABLE_HDF5) and the run-time HDF5 lib dir, plus corner cases.",
+   "sha1": "16cd37a49111"
+  },
+  {
+   "version": 3,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "merged dftracer-agents skill workload-vpic-kokkos: CPU-only Kokkos build, two-stage deck compile and annotated-install symlinks, annotation macro rules, deck sizing, MPI-bound diagnosis, energy-reduction patches (species half verified, field half reverted: struct growth segfault), benchmark.cxx ENABLE_OUTPUT I/O profile; added workload_vpic_kokkos_recipe (predictor) and workload_vpic_kokkos_check (validator), declared pvc, 8 lessons and WORKED.md."
+  }
+ ],
+ "stages": [
+  "smoke",
+  "instrument",
+  "baseline",
+  "explore",
+  "optimize"
+ ],
+ "pvc": {
+  "predictor": [
+   "vpic_cmake_args",
+   "vpic_run_command",
+   "vpic_deck_prepare",
+   "workload_vpic_kokkos_recipe"
+  ],
+  "validator": [
+   "vpic_build_check",
+   "workload_vpic_kokkos_check"
+  ]
+ },
+ "topic": "workloads"
+}

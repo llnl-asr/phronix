@@ -1,0 +1,114 @@
+[
+ {
+  "tool": "phronix_privacy_plan",
+  "args": {
+   "goal": "the lessons and memories this session wrote"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1.1\""
+  }
+ },
+ {
+  "tool": "phronix_privacy_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_privacy_check",
+  "args": {
+   "record": {
+    "target": "new lessons from the run",
+    "scan_before": "findings",
+    "redacted": true,
+    "scan_after": "clean",
+    "suspects_run": true,
+    "dismissed": [
+     {
+      "suspect": "gcc-12.1.1",
+      "reason": "software version, not a hostname (R3)"
+     }
+    ],
+    "patterns_added": [],
+    "patched_files_by_hand": false,
+    "text": "Build in $SCRATCH_ROOT/<user>/app on <cluster><node>; job <job-id>."
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_privacy_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_privacy_plan",
+  "args": {
+   "goal": "the lessons and memories this session wrote",
+   "facts": {
+    "scan_dirty": true
+   }
+  },
+  "expect": {
+   "contains": "privacy_redact()"
+  }
+ },
+ {
+  "tool": "phronix_privacy_plan",
+  "args": {
+   "goal": "the lessons and memories this session wrote",
+   "facts": {
+    "new_leak_class": true,
+    "path_rule": true
+   }
+  },
+  "expect": {
+   "contains": "structure_safe=False"
+  }
+ },
+ {
+  "tool": "phronix_privacy_check",
+  "args": {
+   "record": {
+    "target": "skill",
+    "scan_before": "clean",
+    "suspects_run": false,
+    "patched_files_by_hand": false,
+    "text": "ok"
+   }
+  },
+  "expect": {
+   "contains": "even on a clean scan"
+  }
+ },
+ {
+  "tool": "phronix_privacy_check",
+  "args": {
+   "record": {
+    "target": "skill",
+    "scan_before": "findings",
+    "redacted": true,
+    "scan_after": "clean",
+    "suspects_run": true,
+    "patched_files_by_hand": true,
+    "text": "run in /g/g92/someone/x by someone@example.org"
+   }
+  },
+  "expect": {
+   "contains": "privacy_add_pattern for the class"
+  }
+ }
+]

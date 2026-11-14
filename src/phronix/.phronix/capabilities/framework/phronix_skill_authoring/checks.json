@@ -1,0 +1,129 @@
+[
+ {
+  "tool": "phronix_skill_authoring_plan",
+  "args": {
+   "goal": "a solution skill for pallets__flask-4045 (dotted blueprint names)"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_skill_authoring_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_skill_authoring_check",
+  "args": {
+   "record": {
+    "name": "flask-blueprint-dot-name",
+    "subject": "blueprint name validation in flask",
+    "description": "Fix Blueprint names containing a dot: raise ValueError in Blueprint.__init__ and add_url_rule; load for pallets flask-4045 style failures.",
+    "instructions": [
+     "In src/flask/blueprints.py, Blueprint.__init__, before self.name = name, insert `if \".\" in name: raise ValueError(...)`"
+    ],
+    "labels_defined": [
+     "I1",
+     "R1"
+    ],
+    "labels_cited": [
+     "I1"
+    ],
+    "solves_problem": true,
+    "failure_modes": [
+     "assert instead of raise ValueError scores 0/2: the neighbouring asserts are the trap"
+    ],
+    "contains_lessons": false,
+    "index_hand_written": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_skill_authoring_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_skill_authoring_plan",
+  "args": {
+   "goal": "a solution skill for pallets__flask-4045 (dotted blueprint names)",
+   "facts": {
+    "solves_problem": true
+   }
+  },
+  "expect": {
+   "contains": "Name every way it can still go wrong"
+  }
+ },
+ {
+  "tool": "phronix_skill_authoring_plan",
+  "args": {
+   "goal": "a solution skill for pallets__flask-4045 (dotted blueprint names)",
+   "facts": {
+    "pair_of_subjects": true
+   }
+  },
+  "expect": {
+   "contains": "association"
+  }
+ },
+ {
+  "tool": "phronix_skill_authoring_check",
+  "args": {
+   "record": {
+    "name": "x",
+    "subject": "blueprints",
+    "description": "Fix blueprints for the flask-4045 dotted name issue (raise ValueError).",
+    "instructions": [],
+    "labels_defined": [
+     "R1"
+    ],
+    "solves_problem": true,
+    "failure_modes": [],
+    "contains_lessons": false,
+    "index_hand_written": false
+   }
+  },
+  "expect": {
+   "contains": "Rules and References are supporting material"
+  }
+ },
+ {
+  "tool": "phronix_skill_authoring_check",
+  "args": {
+   "record": {
+    "name": "x",
+    "subject": "build and deploy",
+    "description": "notes",
+    "instructions": [
+     "do it"
+    ],
+    "labels_defined": [
+     "I1"
+    ],
+    "solves_problem": false,
+    "contains_lessons": true,
+    "index_hand_written": false
+   }
+  },
+  "expect": {
+   "contains": "skill_write_lesson"
+  }
+ }
+]

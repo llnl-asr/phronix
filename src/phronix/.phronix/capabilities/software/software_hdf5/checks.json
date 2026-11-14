@@ -1,0 +1,230 @@
+[
+ {
+  "tool": "software_hdf5_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_hdf5"
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_recipe",
+  "args": {
+   "section": "build"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "build",
+     "detect",
+     "dftracer",
+     "download",
+     "env",
+     "ior_hdf5_flags",
+     "l2_chunk_cache",
+     "l2_metadata",
+     "lustre_stripe",
+     "source_policy",
+     "verify_collective",
+     "versions"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "module load cray-hdf5-parallel"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_cray_hdf5_module": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "module load PrgEnv-gnu"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_cray_hdf5_module": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "wget https://github.com/HDFGroup/hdf5/releases/download/hdf5_1.14.5/hdf5-1.14.5.tar.gz"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_github_hdf5_tarball": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "curl -fkL https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.14/hdf5-1.14.5/src/hdf5-1.14.5.tar.gz -o hdf5-1.14.5.tar.gz"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_github_hdf5_tarball": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "tar xf hdf5-1.10.7.tar.gz\nCC=mpicc ./configure --enable-parallel"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "parallel_hdf5_min_1_14": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "tar xf hdf5-1.14.5.tar.gz\nCC=mpicc ./configure --enable-parallel"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "parallel_hdf5_min_1_14": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "cmake -S dftracer -B build -DDFTRACER_ENABLE_MPI=ON -DHDF5_ROOT=${WORKSPACE}/hdf5_1.14"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "dftracer_enable_hdf5": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "cmake -S dftracer -B build -DDFTRACER_ENABLE_HDF5=ON -DHDF5_ROOT=${WORKSPACE}/hdf5_1.14"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "dftracer_enable_hdf5": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "export HDF5_DIR=${WORKSPACE}/hdf5_1.14"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "hdf5_lib_on_ld_path": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "export HDF5_DIR=${WORKSPACE}/hdf5_1.14\nexport LD_LIBRARY_PATH=${WORKSPACE}/hdf5_1.14/lib:$LD_LIBRARY_PATH"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "hdf5_lib_on_ld_path": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "tar xf hdf5-1.14.3.tar.gz"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "patch_chid_t_1_14_3": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "tar xf hdf5-1.14.3.tar.gz\nsed -i 's/H5Aread_async(chid_t attr_id/H5Aread_async(hid_t attr_id/' ${WORKSPACE}/hdf5_1.14/include/H5Apublic.h"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "patch_chid_t_1_14_3": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_hdf5_check",
+  "args": {
+   "commands": "module load PrgEnv-gnu\ncurl -fkL https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.14/hdf5-1.14.5/src/hdf5-1.14.5.tar.gz -o hdf5-1.14.5.tar.gz\ntar xf hdf5-1.14.5.tar.gz && cd hdf5-1.14.5\nCC=mpicc ./configure --prefix=${WORKSPACE}/hdf5_1.14 --enable-parallel --enable-shared --enable-build-mode=production --with-zlib=/usr\nmake -j16 && make install\nexport HDF5_DIR=${WORKSPACE}/hdf5_1.14\nexport LD_LIBRARY_PATH=${WORKSPACE}/hdf5_1.14/lib:$LD_LIBRARY_PATH\ncmake -S dftracer -B build -DDFTRACER_ENABLE_HDF5=ON -DHDF5_ROOT=${WORKSPACE}/hdf5_1.14\nlfs setstripe -c 16 -S 4M /p/lustre5/$USER/app/run1"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

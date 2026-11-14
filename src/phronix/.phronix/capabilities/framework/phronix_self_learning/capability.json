@@ -1,0 +1,28 @@
+{
+ "name": "phronix_self_learning",
+ "description": "Turn a session into durable knowledge: check what exists first, enumerate every error/fix, ordering, flag, user correction and repeated hand procedure, route each to its tier (capability, skill rule/instruction, pitfall, dated lesson, memory, common section), de-duplicate, read back, prove and privacy-scan. Load before recording anything and before finishing any session that discovered something; recording is mandatory, 'learned nothing' must be said explicitly.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_self_learning_plan",
+  "phronix_self_learning_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_self_learning_plan"
+  ],
+  "validator": [
+   "phronix_self_learning_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-self-learning (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

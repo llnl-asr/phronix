@@ -1,0 +1,9 @@
+# Lessons: workload_sw4
+
+- [L-4c90136e] SW4 Cray clang build fails 'error: expected a for, while, or do-while loop to follow ivdep' -> 6 sites (GridGenerator.C, rhs4curvilinearc.C) put #pragma ivdep before #pragma omp simd -> delete the #pragma ivdep line (omp simd already asserts independence) (date not recorded in source; converted 2026-11-13)
+- [L-73b2c7a7] SW4 link fails on LAPACK symbols (dgetrf/dgetrs/dgesv/dgels) -> libsci is not auto-linked by Cray MPICH mpicc/mpic++ (only cc/CC/ftn) -> add -L$(CRAY_LIBSCI_PREFIX_DIR)/lib -lsci_cray_mp -Wl,-rpath,... to EXTRA_LINK_FLAGS (date not recorded in source; converted 2026-11-13)
+- [L-0594ad6d] SW4 annotation yields parse failures on every .C file -> source_parser._try_clang treats suffix.lower()=='.c' as C -> rename src/*.C to .cpp (and 4 Makefile refs) and pass language="cpp" (date not recorded in source; converted 2026-11-13)
+- [L-da3ebf21] SW4 annotated EW.C has ~200 'use of undeclared identifier DFTRACER_CPP_FUNCTION' -> annotator put the dftracer include after the last #include (line 8602) -> move it above the first macro use (date not recorded in source; converted 2026-11-13)
+- [L-a19fbaa8] SW4 traced run 2.8x slower (1.37 s -> 3.86 s), 97% of app events from one function -> EW::getDepth runs once per grid point -> exclude_functions=["getDepth"] (1.59 s) (date not recorded in source; converted 2026-11-13)
+- [L-b6e8cbc0] SW4 main.C FINI on early exits before INIT -> annotator anchored INIT after MPI_Comm_size below the argument-error exits -> move INIT block right after MPI_Comm_rank (date not recorded in source; converted 2026-11-13)
+- [L-5d0c1575] SW4 fastmarching.C fails to compile after annotation -> add_braces inserted '{' inside a multi-line if condition -> strip DFTRACER_CPP_ lines, diff vs pristine, delete inserted lines by index (date not recorded in source; converted 2026-11-13)

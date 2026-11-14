@@ -1,0 +1,28 @@
+{
+ "name": "phronix_task_tracker",
+ "description": "Keep one task's tracker.md (The problem, How it has been approached, What worked, What did not work, Notes), rewritten and reorganised after every phase (attempt, evaluation, research pass) so nothing is lost, nothing appears twice, and every line traces to evidence. Load after each phase of a task, when a tracker grows shorter or more optimistic each pass, mixes two task ids, or lists the same finding several times ('attempt, attempt, attempt').",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_task_tracker_plan",
+  "phronix_task_tracker_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_task_tracker_plan"
+  ],
+  "validator": [
+   "phronix_task_tracker_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-task-tracker (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

@@ -1,0 +1,11 @@
+{
+ "name": "workload_genesis_run",
+ "description": "Genesis sweep of any ice4hpc app (input x node-scale x ppn) into a validated, compacted, published dftracer trace corpus with PAPI, GPU, power, node and MPI layers: predictors render the step recipe and the GATE 3 matrix arithmetic, the validator checks command lists against the sweep's hard-won rules. Load to plan, run, resume, compact or publish a genesis sweep, or on stalled sweeps, multiplexed PAPI, 0-byte service traces, 'queue X not valid for user', 'Invalid generic resource (gres) specification', 'chain: 1/1 jobs already live', rc=143 after 'Simulation complete', 'Verification: PASSED' not found.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["plan", "explore", "smoke", "instrument", "baseline", "package"],
+ "tools": ["workload_genesis_run_recipe", "workload_genesis_run_matrix", "workload_genesis_run_check"],
+ "pvc": {"predictor": ["workload_genesis_run_recipe", "workload_genesis_run_matrix"], "validator": ["workload_genesis_run_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill genesis_run (SKILL.md verbatim in docs/REFERENCE.md, SKILL.md.bak as docs/SKILL.previous.md, scripts/ in docs/scripts)"}]
+}

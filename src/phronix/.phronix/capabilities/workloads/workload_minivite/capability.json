@@ -1,0 +1,33 @@
+{
+ "name": "workload_minivite",
+ "description": "miniVite (ECP-ExaGraph) distributed Louvain proxy (C++11, MPI+OpenMP, Makefile): solver lives in headers (annotate dspl.hpp/graph.hpp/utils.hpp with -include mpi.h), three per-vertex hot helpers to exclude, -ldftracer_core in OPTFLAGS, MPICH_MAX_THREAD_SAFETY, RGG sizing (generation dominates), full-feature 2-node baseline. Load for minivite, Louvain, MPI_THREAD_MULTIPLE abort, distExecuteLouvainIteration.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_minivite_recipe",
+  "workload_minivite_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_minivite_recipe"
+  ],
+  "validator": [
+   "workload_minivite_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-minivite"
+  }
+ ]
+}

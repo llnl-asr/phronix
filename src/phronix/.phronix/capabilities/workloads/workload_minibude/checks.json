@@ -1,0 +1,56 @@
+[
+ {
+  "tool": "workload_minibude_recipe",
+  "args": {},
+  "expect": {
+   "contains": "--offload-arch=gfx942"
+  }
+ },
+ {
+  "tool": "workload_minibude_recipe",
+  "args": {
+   "variant": "nope"
+  },
+  "expect": {
+   "contains": "unknown variant"
+  }
+ },
+ {
+  "tool": "workload_minibude_check",
+  "args": {
+   "commands": [
+    "cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMODEL=hip"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_minibude_check",
+  "args": {
+   "commands": [
+    "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMODEL=hip -DCMAKE_CXX_COMPILER=<rocm>/bin/hipcc -DCXX_EXTRA_FLAGS=--offload-arch=gfx942",
+    "build/bude --deck data/bm1 -i 1000 -p 8 -w 64"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_minibude_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

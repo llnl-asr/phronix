@@ -1,0 +1,8 @@
+# Lessons: workload_1000genome
+
+- [L-9d27cb27] session_annotation_report returns 0/0 functions (0.0%) despite annotations under annotated/bin/*.py -> an unmodified full clone left at annotated/source/ won _resolve_annotated_root by file-existence overlap (87 > 5) -> fixed in _count_counterparts to score roots by content-differs-from-source; check for leftover unmodified clones next to the annotated output (undated, from dftracer-agents workload-1000genome)
+- [L-ae3f5997] module-level tarfile.open()/extractall()/close() in mutation_overlap.py and frequency.py is not traced -> it runs at script scope, no decorator reaches it -> wrap by hand with `with DFTracerFn(...):` (dftracer-annotation-lessons PP9) (undated)
+- [L-4f20a41c] individuals.py dominates (81.85%) with an O(rows x individuals x ncols) loop and write-then-reopen tar step -> row-invariant VCF parse recomputed for 2504 individuals; scratch files re-read into the tar -> IND_ROW_PRECOMPUTE=1 (-93.4%) + IND_TAR_STREAM=1 (-99.5%, 193x), gates default OFF, outputs md5-identical (2026-07-26)
+- [L-599e72d8] gc.disable()+gc.freeze() on individuals.py -> +1.7% regression (acyclic object graph) -> rejected (2026-07-26)
+- [L-0544323b] 193x task speedup gave only 1.29x on the 4-node PMC DAG (316.5 s -> 244.7 s) -> individuals_merge is a width-1 barrier and levels 5-7 untouched -> compute DAG level widths from the .dag file before predicting a workflow speedup (2026-07-26)
+- [L-a758f3a1] mutation_overlap.py pair_individuals pairs an individual with itself -> likely upstream logic bug -> do NOT fix in an optimization pipeline (changes numerical output); report only (2026-07-26)

@@ -1,0 +1,28 @@
+{
+ "name": "phronix_diagnosis_pivot",
+ "description": "What to do when two attempts have failed in exactly the same way (same tests, same reason, same text missing): stop refining the change, name what both attempts assumed as a falsifiable claim, check the edits even run, read the assertion literally, and take a genuinely different path. Load on a second identical failure, when a retry differs only in values/indentation/names, or when a fix keeps 'improving' while the outcome never changes.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_diagnosis_pivot_plan",
+  "phronix_diagnosis_pivot_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_diagnosis_pivot_plan"
+  ],
+  "validator": [
+   "phronix_diagnosis_pivot_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-diagnosis-pivot (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

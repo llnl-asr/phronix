@@ -1,0 +1,28 @@
+{
+ "name": "phronix_self_healing",
+ "description": "Diagnose and repair the framework when a tool, skill, agent file or harness wiring is broken, stale or missing: status first, match the symptom to its cause, verify the diagnosis, fix the class not the instance, prove the heal and record it. Load the moment something in the framework misbehaves, before working around it: skill invisible, agent behaves like an older version, edits to a rendered agent vanish, permission prompt mid-run, no memory injected, stale graph line numbers, capability missing after write or restart.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_self_healing_plan",
+  "phronix_self_healing_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_self_healing_plan"
+  ],
+  "validator": [
+   "phronix_self_healing_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-self-healing (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

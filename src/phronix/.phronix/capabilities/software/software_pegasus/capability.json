@@ -1,0 +1,33 @@
+{
+ "name": "software_pegasus",
+ "description": "Pegasus WMS workflows (e.g. montage-workflow-v3) on HPC without an HTCondor pool: planning-only userspace Condor (never started), Pegasus 5.0.7 binary, pegasus-mpi-cluster (PMC) rebuilt against the system MPI, sites.yml + pegasus.properties for PMC-only code generation, pegasus-plan --conf, PMC launched under flux run with a wrapper exporting LD_LIBRARY_PATH and dftracer env, rank sizing, dftracer trace verification. Load for any Pegasus workflow work, or on: 'libmpichcxx.so.10 => not found'; successive 'cannot open shared object file' (libmpi_cray.so.12, libpmi.so.0, libpals.so.0); 'File Server not specified for shared-scratch filesystem'; 'FileNotFoundException: .../run0001 (Is a directory)' at MPIExec.generatePMCInputFile; \"ModuleNotFoundError: No module named 'six.moves'\"; 'ABORT: failure.cpp(22): Invalid DAG record: MAXJOBS'; stage_in tasks hang then exit 256; PMC silent after 'Running PMC cluster with DAG'.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "install",
+  "build",
+  "run",
+  "trace"
+ ],
+ "tools": [
+  "software_pegasus_recipe",
+  "software_pegasus_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_pegasus_recipe"
+  ],
+  "validator": [
+   "software_pegasus_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608403.054877,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-pegasus"
+  }
+ ]
+}

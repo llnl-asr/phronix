@@ -1,0 +1,163 @@
+[
+ {
+  "tool": "system_tuolumne_spindle_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "system_tuolumne_spindle"
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_recipe",
+  "args": {
+   "section": "ab_protocol"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "ab_protocol",
+     "default",
+     "fastload",
+     "levels",
+     "measured",
+     "recommendation",
+     "set_level",
+     "skip_conditions",
+     "source",
+     "standalone_cli",
+     "verify"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": "flux proxy <JOBID> bash run.sh\nexport SPINDLE_FLUXOPT=disable"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "spindle_env_before_flux": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": "export SPINDLE_FLUXOPT=disable\nflux proxy <JOBID> bash run.sh"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "spindle_env_before_flux": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": "export SPINDLE_FLUXOPT=max"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "spindle_valid_level": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": "flux run -N4 -n16 -o fastload=on -o spindle.level=high bash run.sh"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_fastload_with_spindle_level": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": "spindle --hostbin=./hosts.sh flux run -N4 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_standalone_spindle_cli": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": "flux run -N4 -n16 -g1 -o spindle.level=high bash run_script.sh"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "prefer_env_over_level_flag": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": "export SPINDLE_FLUXOPT=high\nflux run -N4 -n16 -g1 bash run_script.sh"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "prefer_env_over_level_flag": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tuolumne_spindle_check",
+  "args": {
+   "commands": "export SPINDLE_FLUXOPT=disable\nflux proxy <JOBID> bash ${WORKSPACE}/workspaces/${SESSION}/tmp/run_pecan.sh\nenv | grep FLUX_SPINDLE_REALPATH"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

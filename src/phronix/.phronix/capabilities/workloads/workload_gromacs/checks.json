@@ -1,0 +1,7 @@
+[
+ {"tool": "workload_gromacs_recipe", "args": {}, "expect": {"contains": "-DGMX_BUILD_MANUAL=OFF"}},
+ {"tool": "workload_gromacs_recipe", "args": {"variant": "nope"}, "expect": {"contains": "unknown variant"}},
+ {"tool": "workload_gromacs_check", "args": {"commands": ["cmake -S source -B build -DGMX_MPI=ON -DGMX_BUILD_HELP=OFF"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_gromacs_check", "args": {"commands": ["module load cmake/3.29.2", "cmake -S source -B build -DGMX_MPI=ON -DGMX_BUILD_HELP=OFF -DGMX_BUILD_MANUAL=OFF"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_gromacs_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

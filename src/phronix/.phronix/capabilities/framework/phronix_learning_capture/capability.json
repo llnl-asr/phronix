@@ -1,0 +1,28 @@
+{
+ "name": "phronix_learning_capture",
+ "description": "The fast tier (every ten seconds) of the always-on learner: write down every observation of one kind of work (bash, python, traversal, tests, patch, matching, config, git, measurement, tooling) as a short block in that kind-of-work skill, update the block the graph already has, build a probe_ tool (category=<kind>) when the repeat is a procedure, and report TOOL/NO-TOOL per finding with research_observe(topic=learning). Load when running capture, when the learner writes only to its own skills, builds zero tools, or records an approach as refuted after one failed attempt.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_learning_capture_plan",
+  "phronix_learning_capture_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_learning_capture_plan"
+  ],
+  "validator": [
+   "phronix_learning_capture_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-learning-capture (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

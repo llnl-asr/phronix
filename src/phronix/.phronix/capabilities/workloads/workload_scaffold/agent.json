@@ -1,0 +1,13 @@
+{
+ "description": "Renders and checks the ScaFFold environment/config/run recipe; never installs or runs.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep"
+ ],
+ "skills": [
+  "workload_scaffold"
+ ],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_scaffold_recipe, check any proposed command list with workload_scaffold_check, and follow the Corrector section for each failed check. Do not run builds or jobs."
+}

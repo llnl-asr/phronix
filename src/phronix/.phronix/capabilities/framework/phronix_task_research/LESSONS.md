@@ -1,0 +1,5 @@
+# Lessons: phronix_task_research
+
+- [L-7f6a510b] pytest-5495: an attempt forty steps in read one 2000-line conversation file and the request returned 400 ContextWindowExceededError, killing the try with no patch -> the full conversation is append-only and largest exactly when context is tightest -> conversation_outline, conversation_search, conversation_turn(-1): only the turn you need (I8) (2026-09-15, phronix-task-research I8)
+- [L-1de6d56f] tries 2 and 3 loaded the solution skill and got nothing -> the skill's instructions were empty and the only learning sat unread in LESSONS.md -> read LESSONS.md first and write both halves: skill_write (fix) and skill_write_lesson (what failed) (I7) (2026-09-15, phronix-task-research I7)
+- [L-f45f6fe3] across five tasks only the skill holding a real diff passed in every reuse run; psf-requests-3362 recorded 'replace iter_content with iter_lines', passed, then failed the next run -> a prose description has to be re-derived each time and re-derivation is a coin flip -> the solution carries the diff; run solution_check (R4) (2026-09-15, phronix-task-research R4)

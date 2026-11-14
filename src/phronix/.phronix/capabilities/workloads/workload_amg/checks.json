@@ -1,0 +1,8 @@
+[
+ {"tool": "workload_amg_recipe", "args": {}, "expect": {"contains": "HYPRE_BoomerAMGGetCumNnzAP"}},
+ {"tool": "workload_amg_recipe", "args": {"ranks": 32}, "expect": {"json": {"p_for_ranks": "4 4 2"}}},
+ {"tool": "workload_amg_check", "args": {"commands": ["flux run -N 2 -n 8 -c 20 ./test/amg -P 4 4 2 -n 100 100 100 -problem 1"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_amg_check", "args": {"commands": ["make -j 8 2>&1 | tee build.log", "grep -c \"error:\" build.log", "ls -la test/amg", "flux run -N 2 -n 8 -c 20 env OMP_NUM_THREADS=8 ./test/amg -P 2 2 2 -n 100 100 100 -problem 1"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_amg_check", "args": {"commands": ["CFLAGS=-Wno-implicit-function-declaration make -j 8", "ls test/amg"]}, "expect": {"contains": "no_wno_implicit"}},
+ {"tool": "workload_amg_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

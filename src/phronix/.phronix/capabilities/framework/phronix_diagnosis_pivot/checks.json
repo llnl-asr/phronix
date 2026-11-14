@@ -1,0 +1,96 @@
+[
+ {
+  "tool": "phronix_diagnosis_pivot_plan",
+  "args": {
+   "goal": "two attempts both failed test_cli_columns missing 'Subdomain'"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_diagnosis_pivot_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_diagnosis_pivot_check",
+  "args": {
+   "record": {
+    "failure": "test_cli_columns: 'Subdomain' not in output (twice)",
+    "assumption": "the column name Domain is right and only the logic is wrong",
+    "edits_run": "yes",
+    "wanted": "columns Subdomain and Host",
+    "produced": "column Domain",
+    "new_path": "rename the column to Subdomain and add Host",
+    "differs_because": "changes the string the test asserts instead of the logic",
+    "same_edit": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_diagnosis_pivot_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_diagnosis_pivot_plan",
+  "args": {
+   "goal": "two attempts both failed test_cli_columns missing 'Subdomain'",
+   "facts": {
+    "edits_not_run": true
+   }
+  },
+  "expect": {
+   "contains": "fix where they land"
+  }
+ },
+ {
+  "tool": "phronix_diagnosis_pivot_check",
+  "args": {
+   "record": {
+    "failure": "same",
+    "assumption": "",
+    "edits_run": "yes",
+    "wanted": "x",
+    "produced": "y",
+    "new_path": "move the check up",
+    "same_edit": true
+   }
+  },
+  "expect": {
+   "contains": "the same edit with better values is not a new approach"
+  }
+ },
+ {
+  "tool": "phronix_diagnosis_pivot_check",
+  "args": {
+   "record": {
+    "failure": "same",
+    "assumption": "this function produces the output",
+    "wanted": "x",
+    "produced": "y",
+    "new_path": "p",
+    "differs_because": "d"
+   }
+  },
+  "expect": {
+   "contains": "deliberate exception"
+  }
+ }
+]

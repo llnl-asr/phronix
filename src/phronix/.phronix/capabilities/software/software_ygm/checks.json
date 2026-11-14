@@ -1,0 +1,225 @@
+[
+ {
+  "tool": "software_ygm_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_ygm"
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_recipe",
+  "args": {
+   "section": "annotation"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "annotation",
+     "dftracer_from_source",
+     "link_dftracer",
+     "project",
+     "session",
+     "smoke",
+     "toolchain_tuolumne"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "module load PrgEnv-cray\ncmake -S ygm -B build_ann"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ygm_no_cray_clang": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "module load PrgEnv-gnu gcc-native/11.2\ncmake -S ygm -B build_ann"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ygm_no_cray_clang": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "cmake -S ygm -B build -DCMAKE_CXX_STANDARD=17"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ygm_cxx20": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "cmake -S ygm -B build -DCMAKE_CXX_STANDARD=20"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ygm_cxx20": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "export DFTRACER_CMAKE_ARGS=\"-DDFTRACER_ENABLE_MPI=ON\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "dftracer_mpi_impl_craympich": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "export DFTRACER_CMAKE_ARGS=\"-DDFTRACER_ENABLE_MPI=ON -DDFTRACER_MPI_IMPL=CRAYMPICH -DBRAHMA_MPI_VERSION=900001\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "dftracer_mpi_impl_craympich": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "export DFTRACER_CMAKE_ARGS=\"-DDFTRACER_ENABLE_MPI=ON -DDFTRACER_MPI_IMPL=CRAYMPICH\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "brahma_mpi_version": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "export DFTRACER_CMAKE_ARGS=\"-DDFTRACER_ENABLE_MPI=ON -DDFTRACER_MPI_IMPL=CRAYMPICH -DBRAHMA_MPI_VERSION=900001\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "brahma_mpi_version": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "export DFTRACER_CMAKE_ARGS=\"-DDFTRACER_ENABLE_MPI=ON -DDFTRACER_MPI_IMPL=CRAYMPICH -DBRAHMA_MPI_VERSION=900001\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "verify_single_mpi_runtime": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "export DFTRACER_CMAKE_ARGS=\"-DDFTRACER_ENABLE_MPI=ON -DDFTRACER_MPI_IMPL=CRAYMPICH -DBRAHMA_MPI_VERSION=900001\"\nldd ${PREFIX}/lib/libdftracer_core.so | grep mpi"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "verify_single_mpi_runtime": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "cmake -S annotated/source -B build_ann -DCMAKE_CXX_STANDARD=20"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "annotated_build_links_dftracer": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "cmake -S annotated/source -B build_ann -DCMAKE_CXX_STANDARD=20 -DDFTRACER_ROOT=${PREFIX}"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "annotated_build_links_dftracer": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ygm_check",
+  "args": {
+   "commands": "module load PrgEnv-gnu gcc-native/11.2\nexport CC=/opt/cray/pe/mpich/9.0.1/ofi/gnu/11.2/bin/mpicc CXX=/opt/cray/pe/mpich/9.0.1/ofi/gnu/11.2/bin/mpicxx\nexport DFTRACER_CMAKE_ARGS=\"-DDFTRACER_ENABLE_MPI=ON -DDFTRACER_MPI_IMPL=CRAYMPICH -DBRAHMA_MPI_VERSION=900001\"\nldd ${PREFIX}/lib/libdftracer_core.so | grep mpi\nrm -rf build_ann\ncmake -S annotated/source -B build_ann -DCMAKE_CXX_STANDARD=20 -DYGM_BUILD_TESTS=ON -DDFTRACER_ROOT=${PREFIX}\ncmake --build build_ann -j 16"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

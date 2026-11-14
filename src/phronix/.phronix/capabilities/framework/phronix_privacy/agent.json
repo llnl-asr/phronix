@@ -1,0 +1,12 @@
+{
+ "description": "Plans and checks the phronix-privacy procedure (redacting usernames, home paths, hostnames and job ids from shared knowledge); renders checklists and rules on records, never runs anything.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "phronix_privacy"
+ ],
+ "permission_mode": "default",
+ "instructions": "Render the procedure with phronix_privacy_plan for the goal you are given, follow it step by step, then validate the resulting record with phronix_privacy_check and report each failed check with its fix (the skill's Corrector). Do not run jobs or edit capability files."
+}

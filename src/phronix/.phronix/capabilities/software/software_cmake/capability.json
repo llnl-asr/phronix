@@ -1,0 +1,30 @@
+{
+ "name": "software_cmake",
+ "description": "CMake build system: detection (top-level CMakeLists.txt, project(), option(), find_package CONFIG vs MODULE vs pkg-config), the session_configure / session_build_install / session_build_annotated flow, dftracer injection through CMAKE_PREFIX_PATH, and stale-cache repair. Load for any project whose top level is CMakeLists.txt, or on 'Could not find a package configuration file provided by dftracer', a silently ignored -D option, or a stale CMakeCache.txt pointing at a deleted compiler/prefix.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build"
+ ],
+ "tools": [
+  "software_cmake_recipe",
+  "software_cmake_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_cmake_recipe"
+  ],
+  "validator": [
+   "software_cmake_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608361.564155,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-cmake"
+  }
+ ]
+}

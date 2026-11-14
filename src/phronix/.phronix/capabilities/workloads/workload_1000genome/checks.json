@@ -1,0 +1,7 @@
+[
+ {"tool": "workload_1000genome_recipe", "args": {}, "expect": {"contains": "IND_ROW_PRECOMPUTE"}},
+ {"tool": "workload_1000genome_recipe", "args": {"variant": "x"}, "expect": {"contains": "unknown variant"}},
+ {"tool": "workload_1000genome_check", "args": {"commands": ["python daxgen.py -c 1", "pegasus-plan --sites condorpool workflow.yml"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_1000genome_check", "args": {"commands": ["python daxgen.py -i 2 -c 1", "pegasus-plan --sites local workflow.yml", "pegasus-mpi-cluster workflow.dag"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_1000genome_check", "args": {"commands": "  "}, "expect": {"json": {"status": "inconclusive"}}}
+]

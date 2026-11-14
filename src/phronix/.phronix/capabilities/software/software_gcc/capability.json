@@ -1,0 +1,30 @@
+{
+ "name": "software_gcc",
+ "description": "GCC / GNU toolchain, site-neutral: probing which GCC versions a site offers (module -t avail gcc, multiple module families), pairing GCC with an MPI wrapper (Cray per-compiler wrapper dirs vs site MPI modules that follow the loaded GCC), compiler -> MPI -> CC/CXX load order, switching compilers on an existing CMake/autotools/venv build, and GCC as the libstdc++ header provider for clang-based compilers ('Selected GCC installation:'). Points to the system_* capability that holds each site's module names. Load for any build that needs GCC/GNU instead of the site default compiler, or on mpicc using a different compiler than the gcc on PATH, CMake refusing a compiler change in CMakeCache.txt, or clang/hipcc failing on missing/old C++ standard-library headers.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build"
+ ],
+ "tools": [
+  "software_gcc_recipe",
+  "software_gcc_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_gcc_recipe"
+  ],
+  "validator": [
+   "software_gcc_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607282.6797483,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-gcc"
+  }
+ ]
+}

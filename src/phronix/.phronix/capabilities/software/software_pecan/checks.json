@@ -1,0 +1,341 @@
+[
+ {
+  "tool": "software_pecan_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_pecan"
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_recipe",
+  "args": {
+   "section": "app_env_vars"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "app_env_vars",
+     "app_fixes",
+     "classification",
+     "comparison_rules",
+     "dataloader_tracing",
+     "dataloader_tuning",
+     "dataset",
+     "dftracer_service",
+     "env_tuolumne",
+     "flux_launch",
+     "measured",
+     "optimization_backlog",
+     "pyg_extensions",
+     "scope",
+     "source"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "module load python/3.13.2"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "python_311_for_rocm_torch": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "module load python/3.11.5"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "python_311_for_rocm_torch": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "cd pytorch_sparse-0.6.18 && python setup.py bdist_wheel"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "rocm_arch_for_pyg_ext": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "export PYTORCH_ROCM_ARCH=gfx942\ncd pytorch_sparse-0.6.18 && CC=gcc CXX=g++ python setup.py bdist_wheel"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "rocm_arch_for_pyg_ext": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "cd pytorch_sparse-0.6.18 && CC=mpicc CXX=mpic++ python setup.py bdist_wheel"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "torch_sparse_plain_gcc": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "cd pytorch_sparse-0.6.18 && CC=gcc CXX=g++ python setup.py bdist_wheel"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "torch_sparse_plain_gcc": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux run -N4 --tasks-per-node=4 --gpus-per-task=1 python -u main_app.py"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "flux_no_mixed_per_resource_task": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux run -N4 -n16 -g1 python -u main_app.py"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "flux_no_mixed_per_resource_task": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux run -N4 -n4 -c1 dftracer_service start $TRACE_DIR"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "service_not_flux_run": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux submit -N4 -n4 -c1 dftracer_service start $TRACE_DIR"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "service_not_flux_run": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux submit -N4 --tasks-per-node=1 dftracer_service start $TRACE_DIR"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "service_no_tasks_per_node": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux submit -N4 -n4 -c1 dftracer_service start $TRACE_DIR"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "service_no_tasks_per_node": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "export MASTER_ADDR=$(hostname)"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "master_addr_from_nodelist": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "export MASTER_ADDR=$(flux hostlist -n 0 \"$NODELIST\")"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "master_addr_from_nodelist": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux run -N4 -n16 -g1 python main_app.py"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "python_unbuffered": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux run -N4 -n16 -g1 python -u main_app.py"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "python_unbuffered": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "flux submit -N4 -n4 -c1 dftracer_service start $TRACE_DIR"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "service_env_exported": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1 DFTRACER_LOG_FILE=$TRACE_DIR/pecan\nflux submit -N4 -n4 -c1 dftracer_service start $TRACE_DIR"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "service_env_exported": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "export LD_PRELOAD=$DFT_PREFIX/lib/libdftracer_preload.so"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ld_preload_modern_libstdcxx": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "export LD_PRELOAD=$CONDA_PREFIX/lib/libstdc++.so.6:$DFT_PREFIX/lib/libdftracer_preload.so"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ld_preload_modern_libstdcxx": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_pecan_check",
+  "args": {
+   "commands": "module load python/3.11.5\nexport PYTORCH_ROCM_ARCH=gfx942\ncd pytorch_scatter-2.1.2 && CC=mpicc CXX=mpic++ python setup.py bdist_wheel\nmodule load gcc-native/13\ncd pytorch_sparse-0.6.18 && CC=gcc CXX=g++ python setup.py bdist_wheel\npip install dist/*.whl pyyaml\nexport DFTRACER_ENABLE=1 DFTRACER_LOG_FILE=$TRACE_DIR/pecan PECAN_TORCH_COMPILE=0\nexport LD_PRELOAD=$CONDA_PREFIX/lib/libstdc++.so.6:$DFT_PREFIX/lib/libdftracer_preload.so\nflux submit -N4 -n4 -c1 dftracer_service start $TRACE_DIR\nexport MASTER_ADDR=$(flux hostlist -n 0 \"$NODELIST\")\nflux run -N4 -n16 -g1 python -u main_app.py config.yaml\nflux submit -N4 -n4 -c1 dftracer_service stop $TRACE_DIR"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

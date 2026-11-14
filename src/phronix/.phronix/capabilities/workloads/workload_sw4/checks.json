@@ -1,0 +1,50 @@
+[
+ {
+  "tool": "workload_sw4_recipe",
+  "args": {},
+  "expect": {
+   "contains": "-lsci_cray_mp"
+  }
+ },
+ {
+  "tool": "workload_sw4_check",
+  "args": {
+   "commands": [
+    "#pragma ivdep",
+    "make"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_sw4_check",
+  "args": {
+   "commands": [
+    "EXTRA_LINK_FLAGS = -fopenmp -lsci_cray_mp",
+    "make",
+    "clang_annotate_file(file, language=\"cpp\", exclude_functions='[\"getDepth\"]')",
+    "flux run -N2 -n16 -c11 env OMP_NUM_THREADS=11 ./sw4 loh1.in"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_sw4_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

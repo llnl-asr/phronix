@@ -1,0 +1,41 @@
+{
+ "name": "knowledge",
+ "description": "Find what is known and remember what is true. Load before an unfamiliar task, an unfamiliar error, or recording a fact.",
+ "version": 3,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "knowledge_search",
+  "knowledge_read",
+  "memory_write",
+  "knowledge_validate"
+ ],
+ "review": [],
+ "history": [
+  {
+   "version": 1,
+   "why": "bundled"
+  },
+  {
+   "version": 2,
+   "ts": 1794610045,
+   "by": "conversion",
+   "why": "import the shared engine (agent_capabilities.engine) instead of moirai_agents, so dftracer-agents and rabbit-agent run it too; add WORKED.md"
+  },
+  {
+   "version": 3,
+   "ts": 1794617324,
+   "by": "fixall",
+   "why": "import phronix.engine: the engine moved into phronix, and this capability with it"
+  }
+ ],
+ "pvc": {
+  "predictor": [
+   "knowledge_search",
+   "memory_write"
+  ],
+  "validator": [
+   "knowledge_validate"
+  ]
+ }
+}

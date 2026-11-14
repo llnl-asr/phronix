@@ -1,0 +1,8 @@
+{
+ "description": "Checks genesis corpus leaves against the published-leaf contract and checks publish command lists; never moves or deletes data.",
+ "level": "level_1",
+ "tools": ["Read", "Grep", "Glob"],
+ "skills": ["workload_genesis_leaf_contract", "workload_genesis_run"],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the contract with workload_genesis_leaf_contract_recipe; check a proposed publish/finalize command list with workload_genesis_leaf_contract_check; check published leaves with workload_genesis_leaf_contract_leaf_check(archive_root, sets). Follow the Corrector section per failing clause. Never delete, move or compact data yourself."
+}

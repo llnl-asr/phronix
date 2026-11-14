@@ -1,0 +1,28 @@
+{
+ "name": "phronix_stage_finalize",
+ "description": "Close out a research stage that ran out of time: file what it already established, to the record its phase owes (research_set_aspects, research_add_approach, research_record_trial, research_evaluate_approach, ...), mark partial results partial, and explore nothing further. Load when a stage hit its budget/timeout, a stage named approaches in prose and filed none, or the next stage has no input.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_stage_finalize_plan",
+  "phronix_stage_finalize_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_stage_finalize_plan"
+  ],
+  "validator": [
+   "phronix_stage_finalize_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-stage-finalize (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

@@ -1,0 +1,28 @@
+{
+ "name": "phronix_build_solution",
+ "description": "Turn what the explored ideas found into the solution: a skill holding a pipeline of steps, with every deterministic step built as an MCP tool (capability_new) and only the judgement left as prose. Load after the exploration of (three) ideas against a real failure is finished, when writing the solution skill, or when a solution skill has an empty Instructions section, cites labels that do not resolve, opens with 'research on <repo>' instead of the problem, or describes the bug without the fix.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_build_solution_plan",
+  "phronix_build_solution_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_build_solution_plan"
+  ],
+  "validator": [
+   "phronix_build_solution_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-build-solution (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

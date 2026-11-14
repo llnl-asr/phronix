@@ -1,0 +1,12 @@
+{
+ "description": "Plans and checks the phronix-self-research procedure (researching how a task should be done before doing it); renders checklists and rules on records, never runs anything.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "phronix_self_research"
+ ],
+ "permission_mode": "default",
+ "instructions": "Render the procedure with phronix_self_research_plan for the goal you are given, follow it step by step, then validate the resulting record with phronix_self_research_check and report each failed check with its fix (the skill's Corrector). Do not run jobs or edit capability files."
+}

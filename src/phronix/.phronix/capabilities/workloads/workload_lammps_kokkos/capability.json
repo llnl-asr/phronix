@@ -1,0 +1,33 @@
+{
+ "name": "workload_lammps_kokkos",
+ "description": "LAMMPS + KOKKOS/HIP on AMD MI300A (Cray PE, Flux, ROCm 7.x): elcapitan_kokkos preset, Cray GTL vs ROCm libamdhip64 soname mismatch, HSA_XNACK/MPICH_GPU_SUPPORT_ENABLED, -k on g 1, dftracer finalize() symbol collision in main.cpp (0-byte traces), 50-file annotation scope, device-code and include-placement annotator defects, lattice2box/create_atom event blowup. Load for lammps, kokkos HIP, 'libamdhip64.so.6', 'cxil_map: write error', 'static declaration of finalize'.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_lammps_kokkos_recipe",
+  "workload_lammps_kokkos_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_lammps_kokkos_recipe"
+  ],
+  "validator": [
+   "workload_lammps_kokkos_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-lammps-kokkos"
+  }
+ ]
+}

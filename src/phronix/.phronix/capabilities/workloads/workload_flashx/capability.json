@@ -1,0 +1,11 @@
+{
+ "name": "workload_flashx",
+ "description": "Flash-X (Fortran/C/C++ multiphysics AMR, Python setup + GNU Make) Sedov 3D with dftracer on Tuolumne: GNU 11.2 MPI wrappers, -fallow-argument-mismatch, source HDF5, +parallelIO, init/fini shim or PRELOAD, flux proxy wrapper script, Paramesh AMR production sizing, measured 7.6x I/O ladder; predictor renders the recipe, validator checks commands and flash.par. Load for flash-x, flashx, Sedov, flash.par, useCollectiveHDF5, 'skipping the following line due to a syntax error', libcraymp.so, lmod hang under flux proxy.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["explore", "smoke", "instrument", "baseline", "optimize"],
+ "tools": ["workload_flashx_recipe", "workload_flashx_check"],
+ "pvc": {"predictor": ["workload_flashx_recipe"], "validator": ["workload_flashx_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill workload-flashx"}]
+}

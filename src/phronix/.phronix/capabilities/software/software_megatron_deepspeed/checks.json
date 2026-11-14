@@ -1,0 +1,225 @@
+[
+ {
+  "tool": "software_megatron_deepspeed_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_megatron_deepspeed"
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_recipe",
+  "args": {
+   "section": "env"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "env",
+     "final_report",
+     "flags",
+     "gaps",
+     "measurement",
+     "results",
+     "system"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "export NCCL_NET=libfabric"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_nccl_net_set": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "unset NCCL_NET"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_nccl_net_set": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "flux run -N4 -n16 python pretrain_bert.py --num-workers 2"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "aws_ofi_rccl_on_ld_path": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "export LD_LIBRARY_PATH=${PREFIX}/aws-ofi-rccl/lib:$LD_LIBRARY_PATH\nflux run -N4 -n16 python pretrain_bert.py --num-workers 2"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "aws_ofi_rccl_on_ld_path": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "python pretrain_bert.py --num-workers 0"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "bert_num_workers_nonzero": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "python pretrain_bert.py --num-workers 2"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "bert_num_workers_nonzero": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "python pretrain_bert.py --use-flash-attn-v2"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_flash_attn_flags": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "python pretrain_bert.py --num-workers 2"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_flash_attn_flags": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "python pretrain_bert.py --zero-stage 1"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_zero_stage_1_bert": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "python pretrain_bert.py --zero-stage 0"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_zero_stage_1_bert": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "python pretrain_gpt.py --bf16"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_bf16_mi300a": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "python pretrain_gpt.py --fp16"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_bf16_mi300a": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_megatron_deepspeed_check",
+  "args": {
+   "commands": "export LD_LIBRARY_PATH=${PREFIX}/aws-ofi-rccl/lib:$LD_LIBRARY_PATH\nunset NCCL_NET\nflux run -N4 -n16 -g1 python pretrain_bert.py --num-workers 2 --train-iters 400 --fp16 --deepspeed --deepspeed_config ds_config_bert.json"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

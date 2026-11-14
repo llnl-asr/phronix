@@ -1,0 +1,28 @@
+{
+ "name": "phronix_learning_reconcile",
+ "description": "The slow tier (every minute) of the always-on learner: per subject find the graph neighbourhood, merge sibling subjects into one topic skill (old names left as pointer skills), shape topic skills as answer then cases (situation, what worked, what settled it), merge duplicate blocks by label keeping both specifics, reference instead of restating, retire only what evidence falsified (a failed attempt does not falsify the approach), and improve the learner's own skills from repeated patterns. Load when consolidating lessons or skills, when one issue produced several near-identical skills, or before retiring a lesson because an attempt failed.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_learning_reconcile_plan",
+  "phronix_learning_reconcile_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_learning_reconcile_plan"
+  ],
+  "validator": [
+   "phronix_learning_reconcile_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-learning-reconcile (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

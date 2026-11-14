@@ -1,0 +1,170 @@
+[
+ {
+  "tool": "software_cmake_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_cmake"
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_recipe",
+  "args": {
+   "section": "annotated"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "annotated",
+     "build_install",
+     "configure",
+     "detect",
+     "dftracer_discovery",
+     "stale_cache_fix"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "pkg-config --cflags dftracer"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_pkgconfig_dftracer": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "cmake -S source -B build -DCMAKE_PREFIX_PATH=$DFT_PREFIX"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_pkgconfig_dftracer": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "rm -rf build/"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_whole_build_wipe_for_cache": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "rm build/CMakeCache.txt"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_whole_build_wipe_for_cache": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "cmake ."
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "cmake_out_of_source": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "cmake -S source -B build"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "cmake_out_of_source": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "pip install --pre dftracer\nfind_package(dftracer CONFIG REQUIRED)"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_find_package_with_wheel": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "pip install --pre dftracer\ntarget_link_libraries(app PRIVATE dftracer_core_imported)"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_find_package_with_wheel": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_cmake_check",
+  "args": {
+   "commands": "cmake -S source -B build -DCMAKE_INSTALL_PREFIX=install -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH=$DFT_PREFIX\nmake -j8\nmake install"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

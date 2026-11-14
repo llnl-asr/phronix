@@ -1,0 +1,275 @@
+[
+ {
+  "tool": "tools_dftracer_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "tools_dftracer"
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_recipe",
+  "args": {
+   "section": "cmake_consumer"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "cmake_consumer",
+     "install_default",
+     "install_pypi_pre_sdist",
+     "install_source",
+     "merge",
+     "order",
+     "packages",
+     "reinstall",
+     "runtime_env",
+     "service",
+     "stale_brahma_check",
+     "trace_bind_check",
+     "tuolumne_link",
+     "venv"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "session_install_dftracer(run_id, prebuilt=\"prerelease\")"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_uncomposed_prerelease": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "session_install_dftracer(run_id, prebuilt=\"compose\", mpi=True)"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_uncomposed_prerelease": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "pip install --pre dftracer"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "prerelease_needs_compose": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "pip install --pre \"dftracer[modules]\" dftracer-modules\ndftracer-compose --enable mpi,hdf5 --disable papi,hwloc,hip,cuda"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "prerelease_needs_compose": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "pip install \"git+https://github.com/llnl-asr/dftracer.git@develop\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "source_build_cc_cxx_first": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "export CC=$(which mpicc)\nexport CXX=$(which mpic++)\nexport LD_LIBRARY_PATH=/usr/lib64:$LD_LIBRARY_PATH\nexport DFTRACER_ENABLE_PYTHON=ON\npip install \"git+https://github.com/llnl-asr/dftracer.git@develop\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "source_build_cc_cxx_first": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "git clone https://github.com/llnl-asr/dftracer.git && cmake -S dftracer -B build"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_manual_clone_cmake": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "pip install --pre \"dftracer[modules]\" dftracer-modules\ndftracer-compose --enable mpi\nfind_package(dftracer CONFIG REQUIRED)"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_find_package_on_prerelease": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1\nexport DFTRACER_LOG_FILE=traces/run1/trace"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "inc_metadata_with_enable": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1\nexport DFTRACER_INC_METADATA=1"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "inc_metadata_with_enable": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "dftracer_service stop $DFT_SVC_DIR\nsleep 5"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "service_stop_wait_flush": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "dftracer_merge -d raw -o compacted/all.pfw.gz"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "merge_output_pfw": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "dftracer_merge -d raw -o compacted/all.pfw --compress --force"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "merge_output_pfw": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "dftracer_compact -d raw -o out"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_dftracer_compact": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "export LDFLAGS=\"-lstdc++fs\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_blind_lstdcxxfs": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_dftracer_check",
+  "args": {
+   "commands": "pip install --pre \"dftracer[modules]\" dftracer-modules\ndftracer-compose --enable mpi,hdf5 --disable papi,hwloc,hip,cuda\ndftracer_install_info --composition\npython -c \"from dftracer.python import dftracer, dft_fn\"\nexport DFTRACER_ENABLE=1\nexport DFTRACER_INC_METADATA=1\nexport DFTRACER_LOG_FILE=${WORKSPACE}/workspaces/${SESSION}/traces/run1/trace\n\"$DFT_SVC_BIN\" stop \"$DFT_SVC_DIR\"\nfor _i in $(seq 1 60); do [ -s \"$T\" ] && break; sleep 1; done\ndftracer_merge -d raw/set1 -o compacted/set1.pfw --compress --force"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

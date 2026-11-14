@@ -1,0 +1,34 @@
+{
+ "name": "software_rocm",
+ "description": "ROCm / HIP / rocprofiler-sdk knowledge for dftracer HIP tracing on AMD GPUs (MI300A): the strict init ordering rocprofiler_force_configure needs (import torch before initialize_log, before touching the GPU), building DFTRACER_ENABLE_HIP_TRACING against a ROCm >= 6.2 prefix on CMAKE_PREFIX_PATH (else it silently compiles out), PyTorch-profiler coexistence for exactly one profiler window, ROCm base-vs-patched tree matching with the torch wheel, MI300A unified-memory scope, XLA preallocation on APUs, RCCL transport (rccl/working-env, aws-ofi-rccl on LD_LIBRARY_PATH, never guess NCCL_NET), the DDP fork-bomb on non-exclusive flux run, and the HIP-tracing observer effect. Load for any DFTRACER_ENABLE_HIP_TRACING session or ROCm/HIP/RCCL build or run issue, or on: 'Error Calling hsa_iterate_agents: HSA_STATUS_ERROR_NOT_INITIALIZED', \"Check failed: '_v' Must be non nullptr\", zero HIP_RUNTIME_API/KERNEL_DISPATCH events, 'Memory access fault by GPU node-N ... Reason: Unknown', RCCL hangs or slow host-TCP collectives, Ray TrainingFailedError at a profiler cycle boundary.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "run",
+  "smoke",
+  "trace",
+  "optimize"
+ ],
+ "tools": [
+  "software_rocm_recipe",
+  "software_rocm_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_rocm_recipe"
+  ],
+  "validator": [
+   "software_rocm_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607433.301887,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-rocm"
+  }
+ ]
+}

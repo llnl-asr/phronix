@@ -1,0 +1,32 @@
+{
+ "name": "software_ygm",
+ "description": "YGM (github.com/llnl/ygm), LLNL's header-only C++20 async MPI messaging library, annotated with dftracer: include <dftracer/dftracer.h> in every annotated header (split .hpp/.ipp), manual annotation of .ipp files (clang_extract_functions returns 0), linking dftracer through a manual IMPORTED target (-DDFTRACER_ROOT), PrgEnv-gnu + gcc-native/11.2 instead of Cray-clang 20 (spdlog/fmt consteval error), from-source dftracer with DFTRACER_ENABLE_MPI=ON / CRAYMPICH / BRAHMA_MPI_VERSION=900001 built with the SAME MPI wrapper, and the test_comm.cpp smoke test. Load for YGM builds/annotation, or on DFTRACER_CPP_* undefined inside ygm detail headers, 0 functions from clang_extract_functions on comm.ipp, `consteval` not a constant expression in fmt under Cray-clang, undefined dftracer symbols at link, or both libmpi_cray and libmpi_gnu_112 in one process. Benchmark runs live in workload_ygm_bench.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "annotate",
+  "smoke"
+ ],
+ "tools": [
+  "software_ygm_recipe",
+  "software_ygm_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_ygm_recipe"
+  ],
+  "validator": [
+   "software_ygm_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608129.7182996,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-ygm"
+  }
+ ]
+}

@@ -1,0 +1,11 @@
+{
+ "name": "workload_h5bench",
+ "description": "h5bench (HDF5 I/O benchmark suite, CMake, C) with dftracer: binary names, -DH5BENCH_ALL=ON, HDF5 chid_t patch, -ldftracer_core link fixes, annotation pitfalls (assert/else-if braces, INIT NULL args, 3-arg METADATA), INI configs, write-then-read, du-verified sizing, ROMIO hint syntax and Lustre optimization history; predictor renders the recipe, validator checks commands and INI configs. Load for h5bench, h5bench_write, 'cannot find -ldftracer', 'unknown type name chid_t', hint_get_key unrecognized value, DELAYED_CLOSE_TIMESTEPS segfault.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["explore", "smoke", "instrument", "baseline", "optimize"],
+ "tools": ["workload_h5bench_recipe", "workload_h5bench_check"],
+ "pvc": {"predictor": ["workload_h5bench_recipe"], "validator": ["workload_h5bench_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill workload-h5bench"}]
+}

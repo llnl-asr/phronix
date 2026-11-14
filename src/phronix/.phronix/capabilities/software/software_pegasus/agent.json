@@ -1,0 +1,14 @@
+{
+ "description": "Installs Pegasus + planning-only Condor, rebuilds PMC against the system MPI, plans PMC-only DAGs and runs them under Flux with dftracer, using software_pegasus_recipe and software_pegasus_check.",
+ "level": "level_1",
+ "tools": [
+  "Read",
+  "Grep",
+  "Glob"
+ ],
+ "skills": [
+  "software_pegasus"
+ ],
+ "permission_mode": "default",
+ "instructions": "Query software_pegasus_recipe (install_*, pmc_rebuild, properties, sites_yml, plan, verify_plan, run_pmc) before acting; run software_pegasus_check over every planned command list. Verify the DAG (TASK/EDGE only) and replica paths before launching PMC."
+}

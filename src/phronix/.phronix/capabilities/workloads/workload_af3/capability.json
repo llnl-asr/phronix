@@ -1,0 +1,33 @@
+{
+ "name": "workload_af3",
+ "description": "AlphaFold3 (AF3, JAX/XLA inference on ROCm): default model dir, smallest input 1eby, CCE libs before venv (NoOpProfiler), @functools.cache vs @_dft.log ordering ('TypeError: unsupported callable'), ROCm jax_triton patch, quadratic-in-bucket inference cost and the confirmed 1088 bucket win, ptm/iptm correctness, triton/compile-cache traps. Load for af3, alphafold, run_alphafold.py, HIP_ERROR_OutOfMemory on compilation cache.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_af3_recipe",
+  "workload_af3_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_af3_recipe"
+  ],
+  "validator": [
+   "workload_af3_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-af3"
+  }
+ ]
+}

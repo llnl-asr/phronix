@@ -1,0 +1,255 @@
+[
+ {
+  "tool": "software_slurm_alloc_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_slurm_alloc"
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_recipe",
+  "args": {
+   "section": "allocate"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "allocate",
+     "cancel",
+     "discover",
+     "env_traps",
+     "estimate",
+     "gpus",
+     "pending_reasons",
+     "run",
+     "sweeps",
+     "verify"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "scancel -u $USER"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_scancel_all_user_jobs": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "scancel $JOBID"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_scancel_all_user_jobs": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "srun --jobid=$J -N2 -n8 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "overlap_for_steps_in_allocation": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "srun --jobid=$J --overlap -N2 -n8 ./app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "overlap_for_steps_in_allocation": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "pkill -f dftracer_service"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_pkill_f": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "kill \"$SVC_PID\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_pkill_f": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "salloc -p pdebug -N2 -t 60 --no-shell"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "check_maxnodes_before_multinode": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "scontrol show partition pdebug | tr ' ' '\\n' | grep MaxNodes\nsalloc -p pdebug -N2 -t 60 --no-shell"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "check_maxnodes_before_multinode": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "srun --jobid=$J --overlap -N2 -n8 --gres=gpu:4 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "kill_on_bad_exit_for_gpu_app": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "timeout 3600 srun --jobid=$J --overlap -N2 -n8 --gres=gpu:4 --kill-on-bad-exit=1 ./app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "kill_on_bad_exit_for_gpu_app": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "FOO=1 BAR=2 \\\n# set flags\nsrun --overlap -n4 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_backslash_then_comment": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "( export FOO=1 BAR=2; srun --overlap -n4 ./app )"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_backslash_then_comment": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "srun -n1 bash -lc 'module load gcc; ./app'"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_module_in_bash_lc": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "srun -n1 bash -c 'source env.sh; which gcc; ./app'"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_module_in_bash_lc": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_slurm_alloc_check",
+  "args": {
+   "commands": "sinfo -o \"%20P %5a %10l %6D %10T %N\"\nscontrol show partition pbatch | tr ' ' '\\n' | grep -E \"MaxNodes|MaxTime|TotalNodes|State\"\nsbatch -p pbatch -N2 -t 60 --gres=gpu:4 --test-only --wrap=\"hostname\"\nsalloc -p pbatch -N2 -t 60 --gres=gpu:4 --no-shell\n( export FOO=1; timeout 3600 srun --jobid=$J --overlap -N2 -n8 --nodelist=\"$SLICE\" --gres=gpu:4 --kill-on-bad-exit=1 ./app ) >> run.log 2>&1\nsacct -j $J -o JobID,JobName,State,ExitCode,NNodes,NTasks,Elapsed,Start,End\nscancel $J"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

@@ -1,0 +1,120 @@
+[
+ {
+  "tool": "phronix_self_healing_plan",
+  "args": {
+   "goal": "permission prompt mid-run for a new tool"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_self_healing_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_self_healing_check",
+  "args": {
+   "record": {
+    "symptom": "agent behaves like an older version",
+    "status_checked": true,
+    "cause": "rendered agent file stale",
+    "repair": "agents_sync",
+    "verified_diagnosis": true,
+    "edited_files": [
+     ".phronix/agents/router.yaml"
+    ],
+    "manual_workaround": false,
+    "class_fix": "startup self-heal compares template and rendered hashes",
+    "proof": "verify_run(target=router) pass",
+    "lesson": "agent acts old -> rendered file stale -> agents_sync"
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_self_healing_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_self_healing_plan",
+  "args": {
+   "goal": "permission prompt mid-run for a new tool",
+   "facts": {
+    "needs_restart": true
+   }
+  },
+  "expect": {
+   "contains": "name the exact tools"
+  }
+ },
+ {
+  "tool": "phronix_self_healing_plan",
+  "args": {
+   "goal": "permission prompt mid-run for a new tool",
+   "facts": {
+    "repeated_repair": true
+   }
+  },
+  "expect": {
+   "contains": "capability_new"
+  }
+ },
+ {
+  "tool": "phronix_self_healing_check",
+  "args": {
+   "record": {
+    "symptom": "edits vanish",
+    "status_checked": true,
+    "cause": "build artifact",
+    "repair": "edit",
+    "verified_diagnosis": true,
+    "edited_files": [
+     ".claude/agents/router.md"
+    ],
+    "manual_workaround": false,
+    "class_fix": "x",
+    "proof": "y",
+    "lesson": "a -> b -> c"
+   }
+  },
+  "expect": {
+   "contains": "rendered files are build artifacts"
+  }
+ },
+ {
+  "tool": "phronix_self_healing_check",
+  "args": {
+   "record": {
+    "symptom": "tool broken",
+    "status_checked": false,
+    "cause": "c",
+    "repair": "r",
+    "verified_diagnosis": false,
+    "manual_workaround": true,
+    "class_fix": "",
+    "proof": "",
+    "lesson": "fixed"
+   }
+  },
+  "expect": {
+   "contains": "do not reproduce its job by hand"
+  }
+ }
+]

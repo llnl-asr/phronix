@@ -1,0 +1,198 @@
+[
+ {
+  "tool": "software_mpifileutils_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_mpifileutils"
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_recipe",
+  "args": {
+   "section": "drm_policy"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "drm_policy",
+     "launch",
+     "module",
+     "threshold",
+     "tools",
+     "verify_cross_fs",
+     "workflow"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "ml mpifileutils"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pin_mpifileutils_version": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "module load mpifileutils/0.12"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pin_mpifileutils_version": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "dcp /p/lustre5/$USER/a /p/lustre5/$USER/b"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "launch_via_scheduler": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "flux run -n 16 -q pdebug dcp /p/lustre5/$USER/a /p/lustre5/$USER/b"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "launch_via_scheduler": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "flux run -n 8 -q pdebug drm workspaces/run1/build"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_drm_in_session_workspace": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "flux run -n 8 -q pdebug drm /p/lustre5/$USER/old_traces"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_drm_in_session_workspace": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "du -sb --apparent-size src dst"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_du_byte_verify": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "find src -type f -printf '%s\\n' | awk '{s+=$1} END{print s+0}'"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_du_byte_verify": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "flux run -n 16 -q pdebug dcp /p/lustre5/$USER/a /p/lustre5/$USER/b"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "verify_after_copy": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "flux run -n 16 -q pdebug dcp /p/lustre5/$USER/a /p/lustre5/$USER/b\nflux run -n 16 -q pdebug dcmp /p/lustre5/$USER/a /p/lustre5/$USER/b"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "verify_after_copy": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_mpifileutils_check",
+  "args": {
+   "commands": "module load mpifileutils/0.12\nflux run -n 8 -q pdebug dwalk --text /p/lustre5/$USER/src_tree\nflux run -n 16 -q pdebug dcp /p/lustre5/$USER/src_tree /p/lustre5/$USER/dst_tree\nflux run -n 16 -q pdebug dcmp /p/lustre5/$USER/src_tree /p/lustre5/$USER/dst_tree\nflux run -n 16 -q pdebug drm /p/lustre5/$USER/src_tree\nquota -v"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

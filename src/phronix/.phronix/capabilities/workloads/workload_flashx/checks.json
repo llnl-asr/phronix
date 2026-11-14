@@ -1,0 +1,9 @@
+[
+ {"tool": "workload_flashx_recipe", "args": {}, "expect": {"contains": "+parallelIO"}},
+ {"tool": "workload_flashx_recipe", "args": {"variant": "production_384"}, "expect": {"contains": "nblockx"}},
+ {"tool": "workload_flashx_recipe", "args": {"variant": "nope"}, "expect": {"contains": "unknown variant"}},
+ {"tool": "workload_flashx_check", "args": {"commands": ["export FC=ftn", "./flashx flash_production.par", "flux proxy f123 flux run -N 8 -n 384 -x DFTRACER_ENABLE ./flashx"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_flashx_check", "args": {"commands": ["git submodule update --init --recursive", "HDF5_PATH=<WS>/hdf5_1.14 bash setup Sedov -auto -3d +parallelIO", "FFLAGS += -fallow-argument-mismatch", "useCollectiveHDF5 = .true.", "flux proxy f123 flux run -N 8 -n 384 --exclusive ./production_run.sh"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_flashx_check", "args": {"commands": "iProcs = 8"}, "expect": {"contains": "paramesh_amr_procs"}},
+ {"tool": "workload_flashx_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}}
+]

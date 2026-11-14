@@ -1,0 +1,34 @@
+{
+ "name": "software_mpi",
+ "description": "MPI and MPI-IO (ROMIO) knowledge for dftracer work: ROMIO hints files vs Cray MPICH MPICH_MPIIO_HINTS (pattern:key=value:key=value format), the confirmed hint set on cray-mpich 9.0.1, storage-specific guidance (cb_read hurts and ds_write=disable is fatal on VAST NVMe), cb_nodes being accepted but ignored on Cray MPICH without CRAY_CB_NODES_MULTIPLIER, env propagation through mpirun -x / flux run --env / wrapper scripts, building dftracer with DFTRACER_ENABLE_MPI, the mpi.h include-path issue in clang_syntax_check, mpi4py on Cray MPICH (libmpi.so.12 vs libmpi_cray.so.12), and reading MPI_Barrier as a load-imbalance sink. Load for any MPI or collective I/O work, or on: MPICH_MPIIO_HINTS lost/binary missing under flux run --env, 'unrecognized value' for a hint, hints echoed but aggregator count stuck at 2, 'fatal error: mpi.h: No such file or directory', 'RuntimeError: cannot load MPI library ... libmpi.so.12', no MPI_File_* events in the trace, MPI_Barrier dominating a profile.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "run",
+  "trace",
+  "analyze",
+  "optimize"
+ ],
+ "tools": [
+  "software_mpi_recipe",
+  "software_mpi_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_mpi_recipe"
+  ],
+  "validator": [
+   "software_mpi_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794608403.0349665,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-mpi"
+  }
+ ]
+}

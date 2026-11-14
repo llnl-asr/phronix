@@ -1,0 +1,339 @@
+[
+ {
+  "tool": "system_dane_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "system_dane"
+   }
+  }
+ },
+ {
+  "tool": "system_dane_recipe",
+  "args": {
+   "section": "bank_check"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "bank_check",
+     "false_gpu_signals",
+     "filesystems",
+     "hardware",
+     "launcher",
+     "modules",
+     "network",
+     "papi",
+     "partitions",
+     "permissions",
+     "power",
+     "transfers",
+     "verification_status"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "system_dane_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE_HIP_TRACING=1"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_gpu_tracing": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_gpu_tracing": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "module load papi/6.0.0.1"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_papi_600_module": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "papi_avail"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_papi_600_module": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "sbatch -p pall -N2 -t 60 --wrap hostname"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_pall": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "sbatch -p pci -N2 -t 60 --wrap hostname"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_pall": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "sbatch -p pserial -N4 -t 2-00:00:00 --wrap ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pserial_single_node": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "sbatch -p pserial -N1 -t 2-00:00:00 --wrap ./app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pserial_single_node": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "salloc -p pdebug -N32 -t 60"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pdebug_max20": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "salloc -p pdebug -N16 -t 60"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pdebug_max20": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "ln -sfn /p/lustre5/$USER/data ${SESSION}/dataset"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_lustre5": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "ln -sfn /p/lustre1/$USER/data ${SESSION}/dataset"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_lustre5": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "flux alloc -N2 -t 1h"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_flux": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "salloc -p pdebug -N2 -t 60 --no-shell"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_flux": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "srun -N1 --ntasks-per-node=224 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ppn_max_112": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "srun -N1 --ntasks-per-node=112 ./app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ppn_max_112": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_variorum_power": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "export DFTRACER_ENABLE=1\nexport DFTRACER_DISABLE_VARIORUM_POWER=1"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_variorum_power": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "sbatch -p pci -N2 -t 60 --wrap hostname"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "bank_check_first": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "sacctmgr -nP show assoc user=$USER cluster=dane format=Account,Partition,QOS\nsbatch -p pci -N2 -t 60 --wrap hostname"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "bank_check_first": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_dane_check",
+  "args": {
+   "commands": "sacctmgr -nP show assoc user=$USER cluster=dane format=Account,Partition,QOS\nmodule load gcc/12.1.1-magic\nmodule load mvapich2/2.3.7\nexport CC=$(command -v mpicc) CXX=$(command -v mpicxx)\nexport DFTRACER_ENABLE=1\nexport DFTRACER_DISABLE_VARIORUM_POWER=1\nln -sfn /p/lustre1/$USER/dataset ${SESSION}/dataset\nreadlink -f ${SESSION}/dataset && test -d ${SESSION}/dataset && echo RESOLVES || echo DANGLES\nsalloc -p pdebug -N8 -t 60 --no-shell\nsrun --jobid=$J --overlap -N8 --ntasks-per-node=112 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

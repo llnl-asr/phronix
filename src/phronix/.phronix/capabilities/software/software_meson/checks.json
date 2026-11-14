@@ -1,0 +1,172 @@
+[
+ {
+  "tool": "software_meson_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_meson"
+   }
+  }
+ },
+ {
+  "tool": "software_meson_recipe",
+  "args": {
+   "section": "cray_clang_c99"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "cray_clang_c99",
+     "dependency_resolution",
+     "detect",
+     "direct_flow",
+     "known_sites",
+     "lesson_tagging",
+     "reconfigure",
+     "session_tools"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_meson_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "rm -rf builddir && meson setup builddir -Duse_system_flux=true"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_rm_builddir_to_reconfigure": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "meson setup builddir -Duse_system_flux=true"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_rm_builddir_to_reconfigure": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "meson compile"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "compile_install_with_C": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "meson compile -C builddir"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "compile_install_with_C": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "meson setup builddir -Dc_args=-D_POSIX_C_SOURCE=200809L"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "gnu_source_not_posix": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "meson setup builddir -Dc_args=-D_GNU_SOURCE"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "gnu_source_not_posix": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "git clone https://github.com/flux-framework/flux-core ../flux-core"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pkgconfig_probe_before_sibling": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "pkg-config --exists flux-core\ngit clone https://github.com/flux-framework/flux-core ../flux-core"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pkgconfig_probe_before_sibling": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_meson_check",
+  "args": {
+   "commands": "pkg-config --exists flux-core\nmeson setup builddir -Duse_system_flux=true -Dc_args=-D_GNU_SOURCE\nmeson compile -C builddir\nmeson install -C builddir"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

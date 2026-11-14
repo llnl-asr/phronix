@@ -1,0 +1,611 @@
+---
+name: system_matrix
+description: System profile for matrix (LLNL, 4x NVIDIA H100 sm_90 + 2x Xeon 8480+ Sapphire Rapids, TOSS 4, Slurm): the gcc/mvapich2/cuda toolchain that works, pdebug/pci/pbatch limits and backlogs, where CUPTI really lives (not /usr/local/cuda), the 17-preset PAPI ceiling, unreadable CPU power (NVML only), the pip index override, and the Slurm traps (RestrictedCoresPerGPU, DefMemPerCPU, WaitTime=30, MVAPICH MPI interceptors). Load for any dftracer session, build or job launch on matrix, or on 'Invalid generic resource (gres) specification', 'Requested node configuration is not available', 'reserved for jobs in higher priority partitions', a rank OOM-killed ~4 s in, a truncated service_<host>.pfw.gz with step CANCELLED by your own uid, CUDA events with ts == 0, 0 MPIDFTracer::MPI_ symbols, 'Resource deadlock avoided', SIGPIPE rc 141 at the second MPI_Init, pip 'Name or service not known', or dftracer_split 'Device or resource busy' rc 134.
+---
+Cross-references: [[software_slurm_alloc]] [[software_cupti]] [[software_papi]] [[software_mpi]] [[software_pip]] [[tools_dftracer]] [[tools_dftracer_utils]] [[system_dane]] [[system_tuolumne]] [[workload_minife]] [[workload_xsbench]] [[workload_amg]] [[workload_genesis_run]] [[capability_builder]]
+
+# system_matrix
+
+Converted from dftracer-agents skill `system-matrix`. Tools: `system_matrix_recipe` (predictor) and `system_matrix_check` (validator). The structured sections below are the operating rules; the full original skill text follows under 'Source' so no fact, pitfall or dated lesson is lost.
+
+## Rules
+- Probe GPU / CUPTI / PAPI facts on a compute node via srun, never on the login node (login nodes have no GPU and no NVIDIA driver; nvidia-smi fails there).
+- Put module loads in a sourced script file and verify with `which`: `module purge` + `module load` inside `bash -lc` silently rolls back to intel-classic + mvapich2.
+- Toolchain: gcc/12.1.1-magic, mvapich2/2.3.7 (gcc-12.1.1 build), cuda/12.6.0; CC/CXX = mpicc/mpicxx; CUDA 12.6 supports gcc <= 13.
+- Always pin `DFTRACER_CUDA_PATH=/usr/tce/packages/cuda/cuda-12.6.0` (or another module toolkit): the site-default /usr/local/cuda-12.0 has no CUPTI and a toolkit auto-detect silently disables GPU tracing.
+- Use the system PAPI (/usr/lib64/libpapi.so.5, 5.6.0.0): 19 hardware counters, 17 presets, 10 fit at once. Never load papi/6.0.0.1 (0 counters, 0 presets).
+- CPU power is unavailable (MSR root-only, no msr_safe, RAPL energy_uj 0400); sample GPU power with NVML. Do not enable variorum: it is fatal to dftracer_service. systems.yaml pins tracing.power: off.
+- pip: export PIP_INDEX_URL=https://wci-repo.llnl.gov/repository/pypi-group/simple, PIP_TRUSTED_HOST=wci-repo.llnl.gov, PIP_EXTRA_INDEX_URL= (env beats the user-level NVIDIA PyIndex pip.conf that points at unroutable pypi.org).
+- Partitions: pdebug for every single-node run (MaxNodes=1, schedules at once); pci for multi-node (MaxNodes=10, 24 h); pbatch last resort (heavily backlogged). Compare pbatch vs pci with `sbatch --test-only` before committing.
+- Ask for exactly the nodes you need: backfill is driven by node count and insensitive to walltime.
+- Allocate multi-node jobs with `--exclusive --gres=gpu:4` even for a CPU-only app (RestrictedCoresPerGPU=28 otherwise gives 28 of 112 cores and subset steps fail with a gres error).
+- Add `--mem=0` to the application srun step (DefMemPerCPU=4599 caps a -c 1 rank at ~4.5 GB). Probe memory with the same -c the workload uses.
+- Co-scheduled steps (telemetry daemon + app) need `--overlap` and `--nodelist=<csv>` pinning; use `--wait=0` on any step whose tasks legitimately exit at different times (WaitTime=30).
+- `--kill-on-bad-exit=1` plus an outer `timeout` keeps one dead rank from hanging a sweep in an MPI collective.
+- `--gres=gpu:4` exposes all four GPUs to every task; `--gpus-per-task=1` restricts and renumbers - pick per how the app selects its device (miniFE breaks under --gpus-per-task).
+- One MPI program per srun step; never loop several MPI launches inside one step.
+- Build dftracer from github llnl-asr/dftracer develop (feature/cupti already merged), at or after commit 324522f (CUDA ts fix) for any GPU sweep, with the MVAPICH interceptor and handle_mpi() recursion patches carried forward; verify with nm symbol counts, not build success.
+- Drive a node-scale row as one non-blocking sbatch per scale, submitted together, not a --wait chain.
+- Point TMPDIR for dftracer_split / compaction at Lustre, not the NFS workspace.
+- Application data on Lustre (/p/lustre1, /p/lustre2, /p/lustre5); dftracer traces in the session workspace; session dataset/ is a symlink to Lustre and the app's working directory is <WS>/dataset/<run>/.
+
+## Constraints
+- Slurm, not Flux: no flux alloc / flux proxy muscle memory from system_tuolumne transfers.
+- No sudo ever; kernel modules (msr_safe) cannot be loaded, so the MSR/RAPL power path cannot be fixed from inside a job.
+- CUPTI profiling is open to ordinary users (NVreg_RestrictProfilingToAdminUsers=0) - confirm rather than assume on a sibling cluster.
+- perf_event_paranoid disables PAPI perf_event_uncore; per-process perf_event counters work. No CUDA/NVML PAPI component.
+- Lustre here uses a composite (PFL) default layout (lcm_entry_count > 1): read per-component layout with `lfs getstripe -d` before any striping claim.
+- Do not swap dftracer versions mid-sweep unless the fix affects the collected data (a CUDA-only fix is no reason for a CPU-only app).
+
+## Corner cases
+### `srun -p pdebug -N2` -> 'Invalid generic resource (gres) specification'; `sbatch --test-only -N2` -> 'Requested node configuration is not available'
+Cause: pdebug is MaxNodes=1; neither message names MaxNodes. Fix: multi-node work goes to pci. Verify: `scontrol show partition pdebug | tr ' ' '\n' | grep MaxNodes`.
+
+### `srun: error: Unable to create step for job <id>: Invalid generic resource (gres) specification` at N>=2
+Cause: RestrictedCoresPerGPU=28; a job without GPUs gets 28 cores/node and any step asking for a subset of nodes fails. Fix: allocate `--exclusive --gres=gpu:4`, even for CPU-only apps. Verify: N=4 subset steps start.
+
+### Rank OOM-killed ~4 s in during setup on an idle 503 GB node
+Cause: CR_CORE_MEMORY with DefMemPerCPU=4599 caps a -c 1 rank at ~4.49 GB. Fix: `--mem=0` on the app srun step (nodes are --exclusive). Trap: a -c 8 probe gets ~36 GB and passes - probe with the real -c.
+
+### `--exclusive` job pending for days with a receding start estimate
+Cause: other tenants hold 28-core slices leaving nodes 'mixed'; --exclusive needs a wholly free node. Shorter walltime and dropping --exclusive (once GPUs are requested) do not help. Re-probe with `sbatch --test-only`; estimates are snapshots.
+
+### Pending pci job: 'reserved for jobs in higher priority partitions'
+pci is a subset of pbatch's nodes; ordinary contention, not broken hardware. Check with `sinfo -h -p A -o %N ; sinfo -h -p B -o %N`.
+
+### Exactly one truncated `service_<host>.pfw.gz`; `srun: error: <host>: task N: Killed`, wait rc 137 ~31 s after teardown; sacct 'CANCELLED by <uid>' (your own)
+Cause: site WaitTime=30 kills remaining tasks 30 s after the first exits; per-node daemons finish at different times. Fix: `--wait=0` on that srun step. Longer flush waits or a synchronous stop do not help.
+
+### CUDA events with `ts == 0`
+Cause: dftracer before develop commit 324522f ('fixed cuda time calculation'). Fix: build at or after it; a captured corpus cannot be repaired. Verify: count events with ts == 0 (expect 0). CPU-only apps unaffected.
+
+### `nm -DC libdftracer_core.so | grep -c MPIDFTracer::MPI_` returns 0
+Cause: brahma/dftracer guard MPI interceptors on CRAYMPICH|MPICH|OPENMPI; MVAPICH matches none (and the OpenMPI here is too old). Fix: carry the MVAPICH interceptor fix and handle_mpi() recursion fix onto develop. Verify: ~298 MPIDFTracer::MPI_ and ~59 MPIIODFTracer::MPI_ symbols.
+
+### `std::system_error: Resource deadlock avoided` (1 rank + PAPI), ~50 % hangs spinning in free() at 2-4 ranks, SIGSEGV in gotcha_get_wrappee at finalize
+Cause: mvapich2 libmpi exports its own ptmalloc calling sysconf/mprotect/madvise/munmap under its arena lock; dftracer develop intercepts those via GOTCHA. Fix: dftracer_reentry_guard.patch (pass the four calls straight to kernel/__sysconf before BRAHMA_MAP_OR_FAIL, opt back in with DFTRACER_TRACE_ALLOC_SYSCALLS=1, plus per-thread depth guard). Verified 8/8 clean 4-rank runs after, 1/8 before.
+
+### Second MPI_Init in one srun step dies with SIGPIPE, rc 141, no output
+Cause: EPIPE writing cmd=init to the step's PMI socket. Harness artifact. Fix: one srun per run.
+
+### dftracer_split rc 134 'filesystem_error ... Device or resource busy' after writing chunks
+Cause: temp index under NFS $TMPDIR leaves .nfsXXXX files at removal. Fix: TMPDIR on Lustre (GENESIS_COMPACT_TMPDIR).
+
+### pip: retries five times then 'Name or service not known'
+Cause: pypi.org resolves (IPv6) but has no route; user-level ~/.config/pip/pip.conf (NVIDIA PyIndex) overrides /etc/pip.conf. Fix: PIP_INDEX_URL / PIP_TRUSTED_HOST / PIP_EXTRA_INDEX_URL= in the environment.
+
+### probe_power() reports rocm_smi, rapl_powercap and msr - none work
+Cause: probe keys on file existence (/opt/rocm-6.4.3 and /opt/rocm-7.2.0 exist on an NVIDIA-only machine). systems.yaml sets tracing.power: off (opted_out: True, can_enable: False).
+
+### Module loads vanish with no error
+Cause: `module purge && module load` inside `bash -lc` - the login profile reloads intel-classic + mvapich2. Fix: sourced script file, verify with `which`.
+
+### 'I killed the driver' but it keeps submitting
+Cause: the background driver lives on another login node. Search all login nodes for argv[1] == script path, confirm death by its log stopping. `pkill -f <script>` also kills the monitoring shell (observed exit 144).
+
+### Build auto-detects /usr/local/cuda-12.0 and GPU tracing is silently off
+That toolkit has no extras/ and no include/cupti.h. Pin DFTRACER_CUDA_PATH to a module toolkit. nsight-systems' bundled libcupti.so has no headers - unusable to build.
+
+## Parallel plan
+
+Independent calls go out together in one message: predictor calls on different inputs, and lookups such as knowledge_search or lesson_search, do not depend on each other. Sequential, and why: the validator runs after the predictor whose result it rules on, and the corrector only after the validator's verdict. Larger fan-outs build on [[tools_parallel]] (parallel_plan / parallel_call / parallel_validate).
+
+## Corrector
+- Predictor `system_matrix_recipe` renders the recipe; validator `system_matrix_check` rules on a proposed recipe or command list. Attempts follow measured progress: three to start, more while the failures change; the same failure twice stops the loop for the user.
+- `no_multinode_pdebug` fails: Use -p pci for multi-node work; keep pdebug for N=1. Then render with `system_matrix_recipe` and validate again.
+- `no_papi_600_module` fails: Use the system PAPI /usr/lib64/libpapi.so.5 (5.6.0.0); load no papi module. Then render with `system_matrix_recipe` and validate again.
+- `no_usr_local_cuda` fails: Point it at /usr/tce/packages/cuda/cuda-12.6.0. Then render with `system_matrix_recipe` and validate again.
+- `cuda_path_pinned` fails: export DFTRACER_CUDA_PATH=/usr/tce/packages/cuda/cuda-12.6.0. Then render with `system_matrix_recipe` and validate again.
+- `no_variorum` fails: Leave variorum off (DFTRACER_BUILD_VARIORUM=OFF) and use NVML for GPU power. Then render with `system_matrix_recipe` and validate again.
+- `no_bash_lc_modules` fails: Put module loads in a sourced script and verify with which. Then render with `system_matrix_recipe` and validate again.
+- `multinode_exclusive_gres` fails: Allocate multi-node jobs with --exclusive --gres=gpu:4 (even CPU-only). Then render with `system_matrix_recipe` and validate again.
+- `daemon_step_wait0` fails: Add --wait=0 (and --overlap --nodelist) to the daemon srun step. Then render with `system_matrix_recipe` and validate again.
+- `pip_site_mirror` fails: export PIP_INDEX_URL=https://wci-repo.llnl.gov/repository/pypi-group/simple PIP_TRUSTED_HOST=wci-repo.llnl.gov PIP_EXTRA_INDEX_URL= Then render with `system_matrix_recipe` and validate again.
+- `one_mpi_per_srun` fails: Issue one srun per MPI run. Then render with `system_matrix_recipe` and validate again.
+- `no_pkill_f` fails: Match /proc/*/cmdline argv[1] == script path on every login node; confirm by the log stopping. Then render with `system_matrix_recipe` and validate again.
+- Multi-node on pdebug -> move to pci (`-p pci`).
+- CUDA path /usr/local/cuda -> DFTRACER_CUDA_PATH=/usr/tce/packages/cuda/cuda-12.6.0.
+
+## Self-heal
+- If a step fails with a gres error, check node count vs partition MaxNodes and whether the allocation requested --gres=gpu:4 before anything else.
+- If a sweep's GPU events have ts == 0 or MPI events are missing, check the dftracer commit and the MPIDFTracer symbol count before debugging the app.
+- If a probe reports a GPU vendor or power source, verify readability / device presence (nvidia-smi on a compute node, energy_uj mode) before trusting it.
+
+## Self-learn
+- Record new matrix scheduler measurements (queue estimates, partition limits) with the date and partition; they drift.
+- Re-verify the dftracer patch set (MVAPICH interceptors, reentry guard) each time a newer develop is taken, and update the expected symbol counts here.
+- What is explored here becomes a capability: see capability_builder. A new fact, pitfall or verified recipe for this system goes into system_matrix via capability_update (recipe data and a check rule for what is deterministic, the skill for judgement, a dated LESSONS.md entry for the symptom -> cause -> fix); something that is not about it gets its own workload_/software_/system_/tools_ capability.
+
+## What works
+- (2026-08-26) gcc/12.1.1-magic + mvapich2/2.3.7 + cuda/12.6.0 from a sourced script, CUDA_HOME and DFTRACER_CUDA_PATH pinned to /usr/tce/packages/cuda/cuda-12.6.0, CC/CXX = mpicc/mpicxx: full miniFE CUDA genesis sweep (1176 runs).
+- (2026-08-26) Single-node pdebug throughput ~5.5 runs/min with tracing, service telemetry and GPU power on; a 294-run single-node sweep takes ~1 h; job-launch latency, not tracing, is the bottleneck.
+- (undated) `--exclusive --gres=gpu:4` + `--mem=0` on the app step + `--wait=0` on the daemon step: multi-node genesis cells run and every service trace is complete.
+- (undated) dftracer_reentry_guard.patch on develop with mvapich2: 8/8 clean 4-rank runs (1/8 before).
+- (undated) CPU-only AMG corpus: ~780,000 sampled timestamps across N=1..8, ppn=1..64, 0 with ts == 0.
+
+## Source: dftracer-agents `system-matrix` (verbatim, headings demoted)
+_Original description:_ > System profile for matrix (LLNL NVIDIA H100 + Intel Sapphire Rapids, TOSS 4, Slurm) — the toolchain that actually works, the three partitions and their very different limits and backlogs, where CUPTI really lives, the PAPI ceiling, and the two permission walls (MSR/RAPL power, pip index) that block things which work elsewhere. Load this skill for any dftracer session, build, or job launch on matrix.
+
+Cross-references: [[slurm-alloc]] [[software-cupti]] [[software-papi]] [[tools-dftracer]] [[system-tuolumne]] [[workload-minife]]
+
+matrix is the NVIDIA counterpart to [[system-tuolumne]]'s AMD/Cray world.
+Almost nothing about the tuolumne profile transfers: different vendor,
+different scheduler flavour, different module tree, different power story.
+
+---
+
+#### 1. Hardware
+
+Per compute node (measured on a `pdebug` node):
+
+| | |
+|---|---|
+| GPUs | **4 × NVIDIA H100 80GB HBM3**, compute capability **9.0** (`sm_90`) |
+| driver | 610.43.02 |
+| CPU | 2 × **Intel Xeon Platinum 8480+** (Sapphire Rapids) |
+| cores | 112 effective (56/socket), **8 NUMA regions**, `RestrictedCoresPerGPU=28` |
+| memory | ~515 GB |
+| OS | RHEL 8.10 / TOSS 4 |
+| scheduler | **Slurm** (not Flux) |
+
+Login nodes have **no GPU and no NVIDIA driver** — `nvidia-smi` fails there.
+Probe GPU/CUPTI/PAPI facts from a compute node via `srun`, never from the
+login node.
+
+---
+
+#### 2. Partitions — three of them, wildly different
+
+```
+sinfo -o "%20P %5a %10l %6D %10T %N"
+scontrol show partition <name> | tr ' ' '\n' | grep -E "MaxNodes|MaxTime|TotalNodes"
+```
+
+| partition | MaxNodes | total nodes | MaxTime | typical backlog |
+|---|---|---|---|---|
+| `pdebug` | **1** | 2 | 1 h | usually empty |
+| `pbatch` | 10 | 35 | 24 h | **heavily backlogged** (observed 177 queued, ~4-day start estimate for *any* size) |
+| `pci` | 10 | 20 | 24 h | usually near-idle |
+
+> **`pdebug` is `MaxNodes=1`.** Any multi-node job there is rejected outright —
+> `srun -p pdebug -N2` answers "Invalid generic resource (gres) specification"
+> and `sbatch --test-only -N2` answers "Requested node configuration is not
+> available". Neither message mentions MaxNodes, so the cause is easy to
+> misread. **A multi-node scaling study cannot use pdebug at all.**
+
+> **Prefer `pci` over `pbatch` for multi-node work.** Same MaxNodes and MaxTime,
+> a third fewer nodes, but in practice a fraction of the queue. Always compare
+> both before committing — the difference measured once was *4 days vs 1 hour*
+> for the same 8-node job:
+> ```bash
+> for p in pbatch pci; do
+>   printf "%s: " $p
+>   sbatch -p $p -N8 -t 60 --test-only --wrap=hostname 2>&1 | sed 's/.*to start at //;s/ using.*//'
+> done
+> ```
+
+---
+
+#### 3. Toolchain that works
+
+`module purge` + `module load` inside `bash -lc` **silently rolls back** here —
+the login profile reloads the default `intel-classic` + `mvapich2` set and your
+loads vanish with no error. Put module loads in a **sourced script file**, then
+verify with `which`, never assume (same lesson as
+`feedback-flux-proxy-wrapper`).
+
+```bash
+module load gcc/12.1.1-magic      # CUDA 12.6 supports gcc <= 13
+module load mvapich2/2.3.7        # resolves to the gcc-12.1.1 build
+module load cuda/12.6.0
+export CUDA_HOME=/usr/tce/packages/cuda/cuda-12.6.0
+export CC=$(command -v mpicc) CXX=$(command -v mpicxx)
+```
+
+Available: `gcc` 10.3.1–13.3.1, `clang` 14–22, `intel`/`intel-classic`,
+MPI = `mvapich2` 2.3.6/2.3.7 or `openmpi/4.1.2` (per-compiler builds under
+`/usr/tce/modulefiles/MPI/<compiler>/`).
+
+---
+
+#### 4. CUDA and CUPTI — do not trust `/usr/local/cuda`
+
+> **The site-default `/usr/local/cuda-12.0` has NO CUPTI.** No `extras/`, no
+> `include/cupti.h`. A build that auto-detects the toolkit will find it, skip
+> CUPTI, and disable GPU tracing *silently*.
+
+The module-managed toolkits all ship CUPTI in the merged layout
+(`<root>/include/cupti.h`, `<root>/lib64/libcupti.so`):
+`cuda/11.8.0`, `12.2.2`, `12.6.0`, `12.9.1`, `13.1.1`.
+
+**Always pin it:** `DFTRACER_CUDA_PATH=/usr/tce/packages/cuda/cuda-12.6.0`.
+See [[software-cupti]] for the full backend contract.
+
+`libcupti.so.*` files under `nsight-systems/*/target-linux-x64/` are Nsight's
+bundled injection libs — no headers, not usable to build against.
+
+Profiling permission is **open** here: `NVreg_RestrictProfilingToAdminUsers=0`,
+so CUPTI attaches as an ordinary user. Verified: `cuptiGetTimestamp` and
+`cuptiActivityEnable(CONCURRENT_KERNEL)` both return `CUPTI_SUCCESS`,
+`CUPTI_API_VERSION=24`.
+
+---
+
+#### 5. PAPI — 17 presets, not 30
+
+The **system** PAPI (`/usr/lib64/libpapi.so.5`, version **5.6.0.0**, an
+LLNL-patched build) is the only one that sees the Sapphire Rapids PMU:
+
+* **19 hardware counters**, **17 presets** available, **10 fit at once**
+* active component `perf_event` (PMUs `ix86arch, perf, perf_raw, spr`)
+* `rapl` component **disabled** ("CPU model not supported")
+* `perf_event_uncore` **disabled** (needs `perf_event_paranoid=0`)
+* **no CUDA/NVML PAPI component**
+
+> **The `papi/6.0.0.1` module is useless here** — it reports
+> **0 hardware counters and 0 presets** on this CPU (it predates Sapphire
+> Rapids). Do not "upgrade" to it.
+
+Any plan inherited from an MI300A/Cray system that says "capture all 30 PAPI
+presets" must be re-derived: here it is 17, and they do not all fit at once.
+The measured exact partition and the counter-dropping trap are in
+[[software-papi]].
+
+---
+
+#### 6. Power — CPU power is NOT available
+
+| source | status |
+|---|---|
+| variorum / MSR | ❌ `/dev/cpu/*/msr` is `crw------- root root`; **`msr_safe` module not loaded**; cannot be fixed from inside a job |
+| RAPL sysfs | ❌ `/sys/class/powercap/intel-rapl:0/energy_uj` is `-r--------` (root-only); only `name` is world-readable |
+| **NVML GPU power** | ✅ **works as an ordinary user** |
+
+```bash
+nvidia-smi --query-gpu=index,power.draw,utilization.gpu,memory.used \
+           --format=csv,noheader,nounits
+```
+
+So on matrix, **sample GPU power with NVML** and treat CPU/package power as
+unavailable pending a site-admin change (load `msr_safe`, or relax the RAPL
+permissions). Enabling variorum in a dftracer build here is not merely useless
+— it is **actively fatal to `dftracer_service`**; see [[tools-dftracer]].
+
+> **`probe_power()` reports three power sources here and NONE of them work.**
+> Measured output on a matrix compute node:
+> ```
+> - gpu: rocm_smi     (/opt/rocm-7.2.0)                  <-- FALSE POSITIVE: no AMD GPU here
+> - cpu: rapl_powercap(/sys/class/powercap/intel-rapl)    <-- energy_uj is mode 0400
+> - cpu: msr          (/dev/cpu/0/msr)                    <-- root-only, no msr_safe
+> ```
+> The probe keys on **directory/file existence**, not readability or vendor: matrix has
+> `/opt/rocm-6.4.3` and `/opt/rocm-7.2.0` installed despite having only NVIDIA GPUs, so
+> the AMD branch fires. This is why `systems.yaml` sets **`tracing.power: off`** for
+> matrix — verified to produce `opted_out: True`, `can_enable: False`, so no session
+> wastes a build on a power backend that cannot return a single sample here.
+
+---
+
+#### 7. pip cannot reach PyPI — use the site Nexus mirror
+
+`pypi.org` resolves (IPv6) but has **no route**; pip retries five times and
+dies with `Name or service not known`.
+
+`/etc/pip.conf` correctly points at the reachable site mirror, but a
+**user-level `~/.config/pip/pip.conf` written by "NVIDIA PyIndex" overrides it**
+and points back at `pypi.org`. Config precedence puts the user file above the
+global one, so every pip install in a fresh venv fails.
+
+Fix per-session **via environment** (env beats every config file) rather than
+editing the user's global pip.conf:
+
+```bash
+export PIP_INDEX_URL=https://wci-repo.llnl.gov/repository/pypi-group/simple
+export PIP_TRUSTED_HOST=wci-repo.llnl.gov
+export PIP_EXTRA_INDEX_URL=
+```
+
+---
+
+#### 8. Job-launch notes
+
+* `--overlap` is required to co-schedule a second step (e.g. a telemetry
+  daemon) with the application step on the same nodes.
+* Pin co-scheduled steps to the same nodes with `--nodelist=<csv>` so that in
+  an allocation larger than the job they cannot drift onto other nodes.
+* `--gres=gpu:4` exposes all four GPUs to every task; `--gpus-per-task=1`
+  restricts each task to one and renumbers it. Which you want depends entirely
+  on how the application picks its device — see [[workload-minife]] for a code
+  that breaks under `--gpus-per-task`.
+* `--kill-on-bad-exit=1` plus an outer `timeout` keeps one dead rank from
+  hanging a sweep forever in an MPI collective.
+
+---
+
+#### 9. Scheduler: Slurm
+
+matrix runs **Slurm**, not Flux — so none of the `flux alloc` / `flux proxy`
+muscle memory from [[system-tuolumne]] transfers. The full workflow, the
+mandatory rules, and the traps live in **[[slurm-alloc]]**; load that before any
+allocation or job launch here. The matrix-specific facts are:
+
+```bash
+salloc  -p pdebug -N1 -t 55 --gres=gpu:4 --no-shell         # N=1 work, starts at once
+sbatch  --parsable -p pci -N<n> -t <min> --gres=gpu:4 \
+        --job-name=<name> -o <log>/%x_%j.log --wrap "<script>"
+srun    --jobid=<J> --overlap -N<n> -n<tasks> --gres=gpu:4 <cmd>
+```
+
+**Partition strategy (measured, and it is not obvious):**
+
+* `pdebug` — the only partition that schedules immediately, and `MaxNodes=1`.
+  Use it for every single-node run; it cannot serve anything larger.
+* `pci` — use this for multi-node work, **not** `pbatch`. Same `MaxNodes=10`
+  and 24 h limit, roughly a day of queue instead of three-to-four.
+* `pbatch` — largest node pool, worst queue. Last resort.
+
+**Ask exactly for the nodes you need.** Backfill here is driven by node count
+and is completely insensitive to walltime (measured across 60/120/240/720 min —
+identical estimates). Requesting 8 nodes for a 2-node job cost ~13 hours of
+extra queue for no benefit:
+
+| request on `pci` | est. start |
+|---|---|
+| 2 nodes | ~19 h |
+| 4 nodes | ~32 h |
+| 8 nodes | ~33 h |
+
+Always confirm with the scheduler rather than guessing:
+
+```bash
+sbatch -p <part> -N<n> -t <min> --gres=gpu:4 --test-only --wrap="hostname"
+```
+
+> Remember `pci ⊂ pbatch` (§2): a pending `pci` job reporting *"reserved for
+> jobs in higher priority partitions"* is being outranked on shared nodes, not
+> hitting broken hardware.
+
+---
+
+#### 10. Filesystems
+
+| path | use |
+|---|---|
+| `/p/lustre1`, `/p/lustre2`, `/p/lustre5` | **Lustre PFS** — all application data, datasets, checkpoints, per-run output |
+| `/usr/workspace/<user>` (= `/usr/WS2/<user>`) | NFS workspace — source, builds, venvs, **dftracer traces** |
+
+Same split as every other site (see `feedback-lustre-io`): **application data on
+Lustre, dftracer traces in the session workspace.** A session's `dataset/` should
+be a symlink to a Lustre directory, and any stage that runs the application
+should point the app's own working directory at `<WS>/dataset/<run>/` so output
+physically lands on the PFS.
+
+Lustre here uses a **composite (PFL) layout** by default — `lfs getstripe -d`
+reports `lcm_entry_count > 1` rather than a single stripe count. Read the
+per-component layout before making any striping claim; a flat
+"stripe_count = N" statement is not meaningful against a PFL default.
+
+---
+
+#### 11. Permissions
+
+* **No sudo, ever.** Kernel modules cannot be loaded, which is exactly why the
+  variorum/MSR power path in §6 is unavailable and cannot be worked around from
+  inside a job.
+* CUDA/CUPTI profiling **is** permitted for ordinary users
+  (`NVreg_RestrictProfilingToAdminUsers=0`) — unusually permissive, and worth
+  confirming rather than assuming on a sibling cluster.
+* `perf_event_paranoid` is restrictive enough to disable PAPI's
+  `perf_event_uncore` component; per-process `perf_event` counters still work.
+
+---
+
+#### 12. Session lessons (dated)
+
+**2026-08-26 — a full genesis trace sweep (miniFE, CUDA variant, 1176 runs)**
+
+* The build/annotate/run traps for the app itself are in [[workload-minife]];
+  the dftracer service traps are in [[tools-dftracer]]; CUPTI is in
+  [[software-cupti]]; the exact PAPI partition is in [[software-papi]].
+* Single-node throughput measured on `pdebug`: ~**5.5 runs/min** for a
+  1-node/1-4-rank miniFE run with tracing, service telemetry and GPU-power
+  sampling all on — i.e. a 294-run single-node sweep completes in about an hour.
+  Tracing overhead was not the bottleneck; job-launch latency was.
+* A whole node-scale row is best driven as **one non-blocking `sbatch` per
+  scale**, submitted together, rather than a `--wait` chain — otherwise a single
+  deep-queued large job blocks all the smaller work behind it.
+
+#### Partitions share nodes — "reserved for higher priority" is contention, not breakage
+
+Check whether two partitions are drawn from the same hardware:
+
+```bash
+sinfo -h -p A -o %N ; sinfo -h -p B -o %N
+```
+
+If A's nodes are a subset of B's and B outranks A, jobs pending in A report
+*"reserved for jobs in higher priority partitions"*. That is ordinary contention on shared
+hardware, **not** a broken or drained node — do not go hunting for a fault.
+
+#### Slurm: three traps that make multi-node jobs fail in ways that name the wrong cause
+
+Measured during a genesis sweep on this machine. All three cost hours before being
+root-caused, and none of the error messages point at the real problem.
+
+##### Cores are bound to GPUs, so a default allocation gets 28 of 112 cores
+
+`RestrictedCoresPerGPU=28` with 4 GPUs per node. A job that does **not** request
+GPUs is given only **28 cores per node**, not 112. Worse, in a **multi-node**
+allocation every `srun` step that asks for a SUBSET of the job's nodes then dies
+with:
+
+```
+srun: error: Unable to create step for job <id>: Invalid generic resource (gres) specification
+```
+
+which names gres, not cores, and not the node count. Measured: at `N=1` every step
+form succeeds; at `N=4` every step form fails, and the only cells that passed were
+the ones whose slice happened to be the WHOLE allocation.
+
+**Fix:** allocate with `--exclusive --gres=gpu:4` even for a CPU-only app. Requesting
+all 4 GPUs releases all 112 cores, and `--exclusive` keeps the node un-shared (two
+tenants otherwise contaminate each other's PAPI counters and per-host power).
+
+##### `DefMemPerCPU=4599` silently caps a `-c 1` rank at ~4.5 GB
+
+`SelectTypeParameters=CR_CORE_MEMORY`, so memory is allocated per CPU. A rank asking
+for one core gets ~4.49 GB **no matter how idle the 503 GB node is**. A rank needing
+30.8 GB is OOM-killed about 4 s in, during setup.
+
+**Fix:** add `--mem=0` to the application `srun` step (all node memory). Nodes are
+already held `--exclusive`, so this affects no other tenant, and CPU-per-rank stays
+the experimental control.
+
+**The trap inside the trap:** a memory-probe run with `-c 8` gets ~36 GB and passes
+cleanly, "validating" a configuration the real sweep never runs. Probe with the same
+`-c` the workload will actually use, or the probe certifies the wrong thing.
+
+##### `--exclusive` is often unschedulable here, and that is not a queue-depth problem
+
+Other tenants hold 28-core slices, leaving most nodes in state `mixed`. An
+`--exclusive` request needs a WHOLLY free node, so it waits behind backfill
+indefinitely: measured 38 h pending with the estimated start time *receding*
+(12:20 -> 15:10 -> 04:22 -> 11:43 -> next day) rather than converging. Shortening the
+walltime does not help; dropping `--exclusive` does not help either once GPUs are
+requested. Re-probe with `sbatch --test-only`, and expect estimates to be snapshots
+rather than commitments.
+
+#### A background driver can survive on a DIFFERENT login node
+
+A long-running submitter started from an interactive session lives on whichever login
+node that session was on. If the session later lands on another login node, every
+local `ps`/`/proc` search finds nothing while the driver happily goes on submitting —
+so "I killed it" is reported repeatedly and is repeatedly wrong. One survived every
+cleanup for half a day this way.
+
+Search all login nodes, and confirm death by an *effect* (its log stopped advancing),
+never by a failed process search:
+
+```bash
+for h in <login-nodes>; do
+  ssh "$h" 'for p in /proc/[0-9]*; do
+      a1=$(tr "\0" "\n" < $p/cmdline 2>/dev/null | sed -n "2p")
+      case "$a1" in */driver.sh) echo "$h $(basename $p)";; esac
+    done'
+done
+```
+
+Match on **argv[1] being exactly the script path**. A substring match on the whole
+command line also matches the monitoring shell that mentions the script, which is how
+`pkill -f <script>` kills the session doing the killing (observed twice, exit 144).
+
+#### `WaitTime=30` silently truncates the trace of any co-scheduled daemon
+
+This site sets **`WaitTime = 30`** (`scontrol show config`). srun terminates *all
+remaining tasks* 30 s after the **first** task in a step exits.
+
+A node-counter daemon launched as one task per node (`-N n -n n -c1`) finishes at a
+slightly different time on each node, because each node's trace is a different size
+and is gzipped at shutdown. So the fastest node's daemon exits, srun starts its
+30 s timer, and the slower node's daemon is **SIGKILLed mid-flush**.
+
+The symptoms name nothing useful:
+
+* exactly ONE `service_<host>.pfw.gz` is a truncated gzip, never an app trace
+* `srun: error: <host>: task N: Killed`, and the step's `wait` returns **137**
+  about **31 s** after teardown began
+* `sacct` records the step as **`CANCELLED by <uid>`** — your own uid, because srun
+  cancels on your behalf, which reads as "my harness killed it" and sends you
+  looking in the wrong place entirely
+* the application step is `COMPLETED` with `rc=0` and every app trace intact
+
+**Fix: `--wait=0` on any srun step whose tasks legitimately exit at different
+times** (0 = never terminate stragglers). Nothing else works: the daemon is not
+slow, so a longer flush wait does not help, and making its `stop` synchronous does
+not help either — the step is being killed from outside.
+
+#### dftracer source for this machine: `llnl-asr/develop`, plus MVAPICH patches
+
+Build from **`https://github.com/llnl-asr/dftracer` `develop`** — the canonical
+org. `feature/cupti` is already merged into `develop`, so there is no separate
+GPU branch to choose. The older `czgitlab` mirror still exists but should not be
+the default.
+
+Two things about this machine make the source choice load-bearing:
+
+##### 1. The CUDA timestamp fix is mandatory for any GPU sweep here
+
+`develop` commit **`324522f` ("fixed cuda time calculation")** repairs CUDA
+events landing with **`ts == 0`**. matrix is the NVIDIA machine, so any sweep
+that traces GPU activity must build at or after that commit — a corpus captured
+before it has unusable GPU timestamps and no post-processing can recover them.
+
+A **CPU-only** application is unaffected: CUPTI compiles in and observes nothing,
+so there are no CUDA events to carry a bad timestamp. Confirm it rather than
+assume — sample `ts` from a finished trace:
+
+```python
+# expect zero hits; a non-trivial count means the corpus is compromised
+sum(1 for e in events if e.get("ts") == 0)
+```
+
+Measured on a CPU-only AMG corpus here: ~780,000 timestamps sampled across
+N=1..8 and ppn=1..64, **0 with `ts == 0`**.
+
+##### 2. MPI tracing needs patches that are NOT upstream
+
+Stock brahma/dftracer guard every MPI interceptor on
+`CRAYMPICH | MPICH | OPENMPI`; **MVAPICH matches none**, so they compile out
+silently and `libdftracer_core.so` carries **0** `MPIDFTracer::MPI_*` symbols
+with nothing warning. matrix has only MVAPICH2 and an OpenMPI too old for
+brahma's guard, so a plain `develop` build here loses the entire
+`p2p`/`collective`/`comm` layer.
+
+Whenever you take a newer `develop`, the MVAPICH interceptor fix and the
+`handle_mpi()` self-call recursion fix must be carried forward onto it, and
+verified by symbol count — not by the build succeeding:
+
+```bash
+nm -DC libdftracer_core.so | grep -c "MPIDFTracer::MPI_"     # expect ~298, never 0
+nm -DC libdftracer_core.so | grep -c "MPIIODFTracer::MPI_"   # expect ~59
+```
+
+**Do not swap dftracer versions mid-sweep** unless the fix affects the data being
+collected: it splits the corpus's provenance across two tracer builds, which then
+has to be recorded per leaf. For a CPU-only app a CUDA-only fix is not a reason
+to swap.
+
+#### MVAPICH2's own malloc deadlocks dftracer's memory-syscall interceptors
+
+`libmpi.so` from mvapich2 exports its **own ptmalloc** (`malloc/free/calloc`), which
+calls `sysconf`, `mprotect`, `madvise`, `munmap` **while holding its arena lock**.
+dftracer develop (brahma >= the "POSIX and STDIO functions" commit) intercepts
+those calls everywhere via GOTCHA, including inside libmpi, so the interceptor
+logged -- allocated/freed -- under the arena lock:
+
+* 1 rank + PAPI: `std::system_error: Resource deadlock avoided` -> abort (the PAPI
+  sampler thread re-entered the logger through `malloc -> new_heap -> mprotect`);
+* 2-4 ranks: one rank spins forever in `free()` (`nanosleep` inside libmpi's malloc,
+  called from `sysconf` interceptor), its peer waits in `MPI_Barrier`: ~50 % hangs;
+* at finalize: `gotcha_wrap` callocs -> libmpi malloc -> `sysconf` interceptor ->
+  `gotcha_get_wrappee` on a table being rebuilt -> SIGSEGV.
+
+Fix (patch in the XSBench matrix genesis folder, `dftracer_reentry_guard.patch`):
+pass those four calls straight to the kernel / `__sysconf` **before**
+`BRAHMA_MAP_OR_FAIL` (opt back in with `DFTRACER_TRACE_ALLOC_SYSCALLS=1`), plus a
+per-thread tracer-depth guard. Verified 8/8 clean 4-rank runs after, 1/8 before.
+CPU-only AMG on an older dftracer never hit it (those interceptors did not exist).
+
+#### One MPI process per srun step
+
+Launching a second MPI program from the SAME `srun` step (e.g. a debug loop
+`srun bash -c 'for m in a b; do ./app; done'`) fails the second `MPI_Init` with
+`SIGPIPE` (rc 141, EPIPE writing `cmd=init` to the step's PMI socket), with no
+output. That is a harness artifact, not an app/tracer bug: one `srun` per run.
+
+#### dftracer_split on NFS TMPDIR aborts after writing its chunks
+
+`dftracer_split` builds its temp index under `$TMPDIR` and removes it at exit; on
+the NFS workspace still-open files become `.nfsXXXX` and the removal throws
+`filesystem_error ... Device or resource busy` -> rc 134 although the chunks were
+written. Point `TMPDIR` for compaction at Lustre (`GENESIS_COMPACT_TMPDIR`).

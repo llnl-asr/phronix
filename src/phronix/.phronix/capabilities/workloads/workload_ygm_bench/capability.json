@@ -1,0 +1,33 @@
+{
+ "name": "workload_ygm_bench",
+ "description": "ygm-bench (llnl/ygm-bench, traced benchmark of YGM) on Tuolumne: build against the annotated YGM via FETCHCONTENT_SOURCE_DIR_YGM, per-entry INIT/FINI, selective aggregation for the hot progress loop, MPI_Iallreduce rank-density collapse, YGM_COMM_IRECV_SIZE_KB env name/OOM, the 4x32 -n 5600 11-min reference run; predictor renders it, validator checks a command list. Load for ygm-bench, around_the_world_ygm, barrier_bench, MAX_WAITSOME_IALLREDUCE, OOM at 96 ranks/node.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_ygm_bench_recipe",
+  "workload_ygm_bench_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_ygm_bench_recipe"
+  ],
+  "validator": [
+   "workload_ygm_bench_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-ygm-bench"
+  }
+ ]
+}

@@ -1,0 +1,197 @@
+[
+ {
+  "tool": "system_container_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "system_container"
+   }
+  }
+ },
+ {
+  "tool": "system_container_recipe",
+  "args": {
+   "section": "detect"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "detect",
+     "modules",
+     "mpi",
+     "packages",
+     "paths",
+     "privileges"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "system_container_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "module load openmpi"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_module_system": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "sudo apt-get install -y openmpi-bin"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_module_system": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "srun -n 4 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "mpirun_launcher": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "mpirun -n 4 ./app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "mpirun_launcher": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "mpirun -n 4 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "mpirun_checked": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "which mpirun\nmpirun -n 4 ./app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "mpirun_checked": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "sudo rm -rf /opt/app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "sudo_only_for_packages": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "sudo apt-get install -y cmake"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "sudo_only_for_packages": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "sudo apt-get install cmake"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "noninteractive_install": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "sudo apt-get install -y cmake"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "noninteractive_install": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_container_check",
+  "args": {
+   "commands": "test -f /.dockerenv && echo container\nmkdir -p workspaces/${SESSION}/tmp\nwhich mpirun || sudo apt-get install -y openmpi-bin libopenmpi-dev\npython3 -m venv workspaces/${SESSION}/venv\nmpirun -n 4 ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

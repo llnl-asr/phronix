@@ -1,0 +1,4 @@
+# Lessons: phronix_research_plan
+
+- [L-88f7c81f] django-13551: the plan record filled with 'A1:'/'A2:' aspects and every count read healthy -> the A1/A2 keys returned by research_add_approach were echoed into step names; the method was never decomposed -> name aspects as steps (what has to become true) and attach ways with research_add_approach(..., aspect=<step>); research_set_aspects now rejects numbered candidates (2026-09-15, phronix-research-plan I5b)
+- [L-844a335b] pylint-dev__pylint-7114: four ideas kept (module-name-conflict-resolution, init-file-fallback, module-search-order, expand_modules); three tries, five containers each, every candidate scoring zero -> every idea changed get_python_path in pylint/lint/expand_modules.py: four names for one reading of the problem -> state a distinct `where` per idea and move along an axis (layer, lifecycle, direction, polarity, scope, time) when two share one (2026-09-15, phronix-research-plan I6)

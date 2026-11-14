@@ -1,0 +1,4 @@
+# Lessons: phronix_build_solution
+
+- [L-9d16685a] the solution skill for pallets__flask-4045 scored 0/2 for the model handed it (the same task from scratch scored 1/2 on its first try) -> it held the complete correct answer inside 7,433 characters of Rules and References with an EMPTY Instructions section, and cited an I1 that did not exist -> the Instructions must contain the steps that fix the problem (file, function, line, change); every cited label must resolve (R0) (2026-09-15, phronix-build-solution R0 (measured))
+- [L-17a8aa30] a weaker model given a skill carrying the exact correct code reproduced the message string verbatim and still wrote assert instead of raise ValueError, scoring 0/2 -> the skill did not say which look-alike construct is wrong -> list corner cases per step: the construct that looks equivalent and is not (I5b) (2026-09-15, phronix-build-solution I5b, phronix-skill-authoring R0c)

@@ -1,0 +1,198 @@
+[
+ {
+  "tool": "software_ray_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_ray"
+   }
+  }
+ },
+ {
+  "tool": "software_ray_recipe",
+  "args": {
+   "section": "diagnose"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "diagnose",
+     "env",
+     "failure_signature",
+     "head",
+     "trace_reading",
+     "verified_versions",
+     "worker"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_ray_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "ray start --head --port=6379"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "empty_ld_preload_before_ray_start": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "export LD_PRELOAD=\"\"\nray start --head --port=6379"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "empty_ld_preload_before_ray_start": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "python -c 'import ray; ray.init()'"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ray_address_for_init": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "export RAY_ADDRESS=10.0.0.1:6379\npython -c 'import ray; ray.init()'"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ray_address_for_init": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "ray start --head --num-gpus=0"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "head_keeps_gpus": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "ray start --head --num-gpus=4"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "head_keeps_gpus": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "sleep 3600; ray stop"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_fixed_sleep_before_ray_stop": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "while [ ! -f \"$DONE\" ]; do sleep 5; done; ray stop"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_fixed_sleep_before_ray_stop": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "cat events.txt | grep plasma_store"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "filter_worker_cmdlines_for_spill": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "cat events.txt | grep -v default_worker.py | grep plasma_store"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "filter_worker_cmdlines_for_spill": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_ray_check",
+  "args": {
+   "commands": "export LD_PRELOAD=\"\"\nray start --head --port=6379 --num-gpus=4\nexport RAY_ADDRESS=10.0.0.1:6379\npython -c 'import ray; ray.init(); print(ray.cluster_resources())'\nwhile [ ! -f \"$DONE\" ]; do sleep 5; done; ray stop"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

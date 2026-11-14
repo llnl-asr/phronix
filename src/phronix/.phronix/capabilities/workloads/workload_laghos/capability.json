@@ -1,0 +1,33 @@
+{
+ "name": "workload_laghos",
+ "description": "Laghos (CEED/Laghos, MFEM, MI300A HIP, ice4hpc deployment) recipe: rocmcc/cray-mpich toolchain of the prebuilt deps, dos2unix + expected make link failure + explicit link, install flags (hdf5=False, hip=True, rocm 6.4.2), annotation compile flags, FINI on every exit, run configs/sizing, SELECTIVE dur<100 aggregation, 9 exact PAPI runs, variorum ALWAYS, dftracer_split flags; predictor renders it, validator checks a command list. Load for laghos, mfem, \"source file is not valid UTF-8\", zero CPP_APP events.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_laghos_recipe",
+  "workload_laghos_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_laghos_recipe"
+  ],
+  "validator": [
+   "workload_laghos_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-laghos"
+  }
+ ]
+}

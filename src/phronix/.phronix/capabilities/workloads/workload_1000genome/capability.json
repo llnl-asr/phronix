@@ -1,0 +1,11 @@
+{
+ "name": "workload_1000genome",
+ "description": "1000genome-workflow (Pegasus + PMC, pure-Python tasks) recipe: task scripts and cost share, PMC-only execution, run sizing (3.9 h -> 10-20 min), annotation targets and module-level tar I/O fixup, measured individuals.py optimization gates (IND_ROW_PRECOMPUTE, IND_TAR_STREAM; 193x task, 1.29x DAG), pair_individuals upstream bug; predictor renders it, validator checks a command list. Load for 1000genome, individuals.py, mutation_overlap.py, session_annotation_report 0/0 on a Python workflow.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["explore", "smoke", "instrument", "baseline", "optimize"],
+ "tools": ["workload_1000genome_recipe", "workload_1000genome_check"],
+ "pvc": {"predictor": ["workload_1000genome_recipe"], "validator": ["workload_1000genome_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill workload-1000genome"}]
+}

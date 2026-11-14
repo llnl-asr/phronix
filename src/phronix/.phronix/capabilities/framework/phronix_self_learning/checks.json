@@ -1,0 +1,126 @@
+[
+ {
+  "tool": "phronix_self_learning_plan",
+  "args": {
+   "goal": "the build-and-trace session that just finished"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_self_learning_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_self_learning_check",
+  "args": {
+   "record": {
+    "checked_existing": true,
+    "nothing_learned": false,
+    "privacy_scan": "clean",
+    "items": [
+     {
+      "tier": "lesson",
+      "text": "undefined reference to `foo' -> -fno-common default in gcc 10 -> add -fcommon to CFLAGS",
+      "action": "append"
+     },
+     {
+      "tier": "memory_feedback",
+      "text": "Ask before migrations. Why: staging locked once. How to apply: ask first.",
+      "action": "append"
+     },
+     {
+      "tier": "rule",
+      "text": "build on one compute node",
+      "action": "rewrite",
+      "confirmed": true
+     }
+    ]
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_self_learning_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_self_learning_plan",
+  "args": {
+   "goal": "the build-and-trace session that just finished",
+   "facts": {
+    "nothing_learned": true
+   }
+  },
+  "expect": {
+   "contains": "explicitly"
+  }
+ },
+ {
+  "tool": "phronix_self_learning_plan",
+  "args": {
+   "goal": "the build-and-trace session that just finished",
+   "facts": {
+    "generic_rule": true
+   }
+  },
+  "expect": {
+   "contains": "common-sections.yaml"
+  }
+ },
+ {
+  "tool": "phronix_self_learning_check",
+  "args": {
+   "record": {
+    "checked_existing": true,
+    "items": [
+     {
+      "tier": "lesson",
+      "text": "add -fcommon to CFLAGS",
+      "action": "append"
+     }
+    ],
+    "privacy_scan": "clean"
+   }
+  },
+  "expect": {
+   "contains": "error text as it appears"
+  }
+ },
+ {
+  "tool": "phronix_self_learning_check",
+  "args": {
+   "record": {
+    "checked_existing": false,
+    "items": [
+     {
+      "tier": "rule",
+      "text": "x",
+      "action": "delete"
+     }
+    ],
+    "privacy_scan": "findings"
+   }
+  },
+  "expect": {
+   "contains": "needs the user's confirmation"
+  }
+ }
+]

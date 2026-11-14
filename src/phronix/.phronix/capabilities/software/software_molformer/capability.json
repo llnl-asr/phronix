@@ -1,0 +1,34 @@
+{
+ "name": "software_molformer",
+ "description": "IBM MoLFormer (chemical-language transformer; PyTorch + PyTorch Lightning + apex, plus a Ray Train/Tune variant) build/annotate/run facts on ROCm (Tuolumne MI300A): ROCm-matched torch wheel, ROCm/apex fork, dftracer HIP-tracing build, entry-point-only initialize_log, --exclusive flux launch and PMI-var unset against the DDP fork bomb, 1-task-per-node multi-node launch, HF revision pin and cache on PFS, torch-profiler windows. Load for any MoLFormer work, or on: empty/near-empty dftracer trace with no error; hundreds of `bash wrapper.sh` processes / no output for minutes; 'You requested gpu: [0,1,2,3] But your machine only has: [0]'; 'Duplicate GPU detected : rank N and rank 0 both on CUDA device' (ncclInvalidUsage); KeyError 'LSB_MCPU_HOSTS' / 'NCCL_IB_CUDA_SUPPORT'; 'Child process ... terminated with code -6' / exit 137; libcaffe2_nvrtc.so not found; nvcc / CUDA_HOME missing building apex; lightning_fabric Ampere-capability crash; Ray driver idle with 'cluster only has ... GPUs available'; LocalEntryNotFoundError for ibm/MoLFormer-XL-both-10pct; `agent.cpp:640] Check failed: '_v' Must be non nullptr`; zero PP events.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "annotate",
+  "run",
+  "trace",
+  "optimize"
+ ],
+ "tools": [
+  "software_molformer_recipe",
+  "software_molformer_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_molformer_recipe"
+  ],
+  "validator": [
+   "software_molformer_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607357.851291,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-molformer"
+  }
+ ]
+}

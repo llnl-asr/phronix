@@ -1,0 +1,33 @@
+{
+ "name": "software_papi",
+ "description": "PAPI hardware-counter tracing with dftracer (DFTRACER_ENABLE_PAPI_TRACING, DFTRACER_PAPI_EVENTS, DFTRACER_PAPI_SAMPLE_INTERVAL_MS, DFTRACER_PAPI_MULTIPLEX): the real hardware-counter budget from papi_avail (not the preset count), derived presets that cost several counters and silently multiplex or get dropped, building an exact counter partition one run per set, verifying exactness from args.multiplex and the counters that landed in the trace, probing on a compute node, the family-grouped event layout (cat == 'papi'), teardown races, and the papi/7.2.0.2 site pin. Load for any DFTRACER_ENABLE_PAPI_TRACING work, or on: 'counters were requested but this machine has M hardware counters, so they are time-shared', 'PAPI counter PAPI_X is one native event subtracted from another ... dropping it', requested counters missing from the trace, args.multiplex == 1, analyses filtering cat CACHE/FLOP/BRANCH/TLB reading zero, SIGSEGV in PAPI_library_init, crash in gotcha_get_wrappee at finalize, zero-byte traces on long runs.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "build",
+  "run",
+  "trace",
+  "analyze"
+ ],
+ "tools": [
+  "software_papi_recipe",
+  "software_papi_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "software_papi_recipe"
+  ],
+  "validator": [
+   "software_papi_check"
+  ]
+ },
+ "topic": "software",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794607615.7091334,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill(s) software-papi"
+  }
+ ]
+}

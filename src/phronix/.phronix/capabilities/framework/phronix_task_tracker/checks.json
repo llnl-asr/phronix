@@ -1,0 +1,123 @@
+[
+ {
+  "tool": "phronix_task_tracker_plan",
+  "args": {
+   "goal": "django__django-13551 after try 2"
+  },
+  "expect": {
+   "contains": "\"id\": \"I4\""
+  }
+ },
+ {
+  "tool": "phronix_task_tracker_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_task_tracker_check",
+  "args": {
+   "record": {
+    "task_id": "django__django-13551",
+    "problem": "the email is in the hash but a custom user model has no email attribute",
+    "approached": [
+     "try1 -> used user.email in _make_hash_value",
+     "try2 -> used get_email_field_name()"
+    ],
+    "worked": [
+     "get_email_field_name() form: test_custom_email_field passes"
+    ],
+    "did_not_work": [
+     "user.email in the hash -> TypeError: must be str, not NoneType at tokens.py:99 -> CustomEmailField has no email attribute"
+    ],
+    "notes": [],
+    "other_task_ids": []
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_task_tracker_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_task_tracker_plan",
+  "args": {
+   "goal": "django__django-13551 after try 2",
+   "facts": {
+    "other_task_id": true
+   }
+  },
+  "expect": {
+   "contains": "start a new record"
+  }
+ },
+ {
+  "tool": "phronix_task_tracker_check",
+  "args": {
+   "record": {
+    "task_id": "t",
+    "problem": "p",
+    "approached": [
+     "a"
+    ],
+    "did_not_work": [
+     "email handling needs more work"
+    ],
+    "other_task_ids": []
+   }
+  },
+  "expect": {
+   "contains": "<why it is not the answer>"
+  }
+ },
+ {
+  "tool": "phronix_task_tracker_check",
+  "args": {
+   "record": {
+    "task_id": "t",
+    "problem": "p",
+    "approached": [
+     "attempt one ran the stage",
+     "attempt one ran the stage"
+    ],
+    "other_task_ids": []
+   }
+  },
+  "expect": {
+   "contains": "count on the existing entry"
+  }
+ },
+ {
+  "tool": "phronix_task_tracker_check",
+  "args": {
+   "record": {
+    "task_id": "t",
+    "problem": "p",
+    "approached": [
+     "a"
+    ],
+    "other_task_ids": [
+     "other-1"
+    ]
+   }
+  },
+  "expect": {
+   "contains": "start a new record"
+  }
+ }
+]

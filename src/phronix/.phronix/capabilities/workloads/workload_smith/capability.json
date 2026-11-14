@@ -1,0 +1,33 @@
+{
+ "name": "workload_smith",
+ "description": "Smith (LLNL/smith, formerly Serac) 3D implicit thermal-structural FEM on MFEM (C++20, CMake+BLT, MPI): group-gated prebuilt TPLs, codevelop from-source dependency chain, std::format/<format> and SuperLU/STRUMPACK upstream build bugs, no smith driver binary, composable_thermo_mechanics as run target, annotation flags and the hot GetElementVDofs accessor. Load for smith, serac, \"no member named 'format' in namespace 'std'\", SuperLUSolver errors.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_smith_recipe",
+  "workload_smith_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_smith_recipe"
+  ],
+  "validator": [
+   "workload_smith_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-smith"
+  }
+ ]
+}

@@ -1,0 +1,8 @@
+{
+ "description": "Renders and checks the h5bench build/annotate/run recipe (H5BENCH_ALL, dftracer_core link, INI configs, write-then-read, sizing, ROMIO/Lustre history); never builds or runs.",
+ "level": "level_1",
+ "tools": ["Read", "Grep"],
+ "skills": ["workload_h5bench"],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_h5bench_recipe, check any proposed command list or INI config with workload_h5bench_check, and follow the Corrector section for each failed check. Check Optimization history before proposing any tuning. Do not run builds or jobs."
+}

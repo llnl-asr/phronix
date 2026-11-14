@@ -1,0 +1,8 @@
+{
+ "description": "Renders and checks the IOR 4.0.0 build/annotate/run recipe (autotools quirks, dftracer link chain, ROMIO VAST/Lustre findings); never builds or runs.",
+ "level": "level_1",
+ "tools": ["Read", "Grep"],
+ "skills": ["workload_ior"],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_ior_recipe, check any proposed command list with workload_ior_check, and follow the Corrector section for each failed check. Check Failed configurations before proposing any tuning. Do not run builds or jobs."
+}

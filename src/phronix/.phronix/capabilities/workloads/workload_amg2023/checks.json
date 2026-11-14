@@ -1,0 +1,7 @@
+[
+ {"tool": "workload_amg2023_recipe", "args": {}, "expect": {"contains": "-DHYPRE_PREFIX"}},
+ {"tool": "workload_amg2023_check", "args": {"commands": ["cmake -S src -B build -DAMG_WITH_MPI=TRUE -DAMG_WITH_OMP=TRUE", "target_link_libraries(amg -ldftracer)"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_amg2023_check", "args": {"commands": ["cmake -S src -B build -DCMAKE_BUILD_TYPE=Release -DHYPRE_PREFIX=ws/hypre -DAMG_WITH_MPI=TRUE -DAMG_WITH_OMP=TRUE", "flux run -N 2 -n 16 build/amg -P 4 2 2 -n 240 240 240 -problem 1"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_amg2023_check", "args": {"commands": ["flux run -N 2 -n 16 build/amg -P 2 2 2 -n 240 240 240"]}, "expect": {"contains": "Invalid number of processors"}},
+ {"tool": "workload_amg2023_check", "args": {"commands": ""}, "expect": {"json": {"status": "inconclusive"}}}
+]

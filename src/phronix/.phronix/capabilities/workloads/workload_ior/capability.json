@@ -1,0 +1,11 @@
+{
+ "name": "workload_ior",
+ "description": "IOR 4.0.0 (LLNL parallel I/O benchmark, Autotools) with dftracer: build quirks (autoreconf -I config, -fcommon, -fuse-ld=bfd, --with-hdf5=yes), annotated link chain, dftracer MPI+HDF5 install on Tuolumne, annotation pitfalls, VAST/Lustre ROMIO findings, dfanalyzer worker race; predictor renders the recipe, validator checks a command list. Load for ior, 'duplicate symbol: posix_aiori', 'X_AC_META: command not found', USE_HDF5_AIORI, GLIBCXX_3.4.26, romio hints on VAST.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["explore", "smoke", "instrument", "baseline", "optimize"],
+ "tools": ["workload_ior_recipe", "workload_ior_check"],
+ "pvc": {"predictor": ["workload_ior_recipe"], "validator": ["workload_ior_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill workload-ior"}]
+}

@@ -1,0 +1,56 @@
+{
+ "name": "workload_ipic3d",
+ "version": 2,
+ "enabled": true,
+ "description": "iPIC3D: MPI topology for a rank count, run-ready input deck + check, CMake configure arguments, check of the known source fixes, and the Rabbit storage mapping of its outputs.",
+ "tools": [
+  "ipic3d_topology",
+  "ipic3d_input",
+  "ipic3d_input_check",
+  "ipic3d_cmake_args",
+  "ipic3d_source_check",
+  "ipic3d_rabbit_mapping"
+ ],
+ "review": [
+  "line 233: writes or deletes files (write_text)"
+ ],
+ "layer": "project",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1793859402.5805848,
+   "by": "haridev",
+   "proposal": "a04ae636c180",
+   "why": "iPIC3D was built, annotated, traced and optimized on Rabbits across ten campaigns; topology, deck edits, configure flags, source fixes and storage mapping were rediscovered by hand each time (and the prose skill held them only as text). They are fixed rules, so they are tools now, with the judgement and the error history in the skill.",
+   "sha1": "8aa3b86fc604"
+  },
+  {
+   "version": 2,
+   "ts": 1793934371.4527996,
+   "by": "instructed in chat: parallelization as a capability for all capabilities",
+   "proposal": "2ebf561f6d9b",
+   "why": "parallelization as a capability: independent probes run through rabbit_agent.parallel.run_parallel and the Parallel plan says which calls are independent and which stay sequential",
+   "sha1": "8aa3b86fc604"
+  }
+ ],
+ "stages": [
+  "scope",
+  "smoke",
+  "instrument",
+  "baseline",
+  "match",
+  "opt"
+ ],
+ "pvc": {
+  "predictor": [
+   "ipic3d_topology",
+   "ipic3d_input",
+   "ipic3d_cmake_args",
+   "ipic3d_rabbit_mapping"
+  ],
+  "validator": [
+   "ipic3d_input_check",
+   "ipic3d_source_check"
+  ]
+ }
+}

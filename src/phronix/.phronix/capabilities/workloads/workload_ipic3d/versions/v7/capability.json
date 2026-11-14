@@ -1,0 +1,100 @@
+{
+ "name": "workload_ipic3d",
+ "version": 7,
+ "enabled": true,
+ "description": "iPIC3D: MPI topology for a rank count, run-ready input deck + check, CMake configure arguments, check of the known source fixes, and the Rabbit storage mapping of its outputs.",
+ "tools": [
+  "ipic3d_topology",
+  "ipic3d_input",
+  "ipic3d_input_check",
+  "ipic3d_cmake_args",
+  "ipic3d_source_check",
+  "ipic3d_source_fix",
+  "ipic3d_rabbit_mapping"
+ ],
+ "review": [
+  "line 297: writes or deletes files (write_text)",
+  "line 314: writes or deletes files (write_text)",
+  "line 414: writes or deletes files (write_text)"
+ ],
+ "layer": "project",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1793859402.5805848,
+   "by": "haridev",
+   "proposal": "a04ae636c180",
+   "why": "iPIC3D was built, annotated, traced and optimized on Rabbits across ten campaigns; topology, deck edits, configure flags, source fixes and storage mapping were rediscovered by hand each time (and the prose skill held them only as text). They are fixed rules, so they are tools now, with the judgement and the error history in the skill.",
+   "sha1": "8aa3b86fc604"
+  },
+  {
+   "version": 2,
+   "ts": 1793934371.4527996,
+   "by": "instructed in chat: parallelization as a capability for all capabilities",
+   "proposal": "2ebf561f6d9b",
+   "why": "parallelization as a capability: independent probes run through rabbit_agent.parallel.run_parallel and the Parallel plan says which calls are independent and which stay sequential",
+   "sha1": "8aa3b86fc604"
+  },
+  {
+   "version": 3,
+   "ts": 1793943072.0287547,
+   "by": "haridev",
+   "proposal": "f4620e7a43b8",
+   "why": "Two campaigns fixed the iPIC3D tree by hand (sed on ParallelIO.cpp size() sites, Edits of CMakeLists, 24 hand edits of the annotated tree) although ipic3d_source_check existed: it only REPORTED, so the chat did not know the fix was one call away. Add ipic3d_source_fix (applies the deterministic size()->array_size rename, idempotent, dry-run by default) and say in the skill that fixes go through it and annotation fixes through ropt_instrument_annotate; record the new corner cases.",
+   "sha1": "c186e7a81308"
+  },
+  {
+   "version": 4,
+   "ts": 1793943380.6295447,
+   "by": "haridev",
+   "proposal": "848ab058e673",
+   "why": "A second concurrent fix: ipic3d_input writes the deck's SaveDirName/RestartDirName value but never created the directory on disk, so the first run against a fresh PFS path aborted with H5Fcreate 'No such file or directory' (confirmed 2026-11-05 lesson, already in this capability's Corner cases but not yet enforced by a tool). Capability-first blocks a manual mkdir for run setup, so the fix belongs in ipic3d_input itself: it now mkdir -p's any absolute, non-Rabbit save_dir/restart_dir it is given, and ipic3d_input_check verifies the directory actually exists. Built on top of the current v3 (keeps ipic3d_source_fix/session_deps additions) rather than replacing it.",
+   "sha1": "22ffd6ecb185"
+  },
+  {
+   "version": 5,
+   "ts": 1793943538.7495465,
+   "by": "haridev",
+   "proposal": "4a7fc6176d45",
+   "why": "ipic3d_input writes the deck's SaveDirName/RestartDirName value but never created the directory on disk, so the first run against a fresh PFS path aborted with H5Fcreate 'No such file or directory' (confirmed 2026-11-05 lesson). Capability-first now blocks a manual mkdir for run setup, so the fix belongs in the tool: ipic3d_input now mkdir -p's any absolute, non-Rabbit save_dir/restart_dir it is given, and ipic3d_input_check verifies the directory actually exists (not just that it isn't NFS).",
+   "sha1": "38647ea5a494"
+  },
+  {
+   "version": 6,
+   "ts": 1793946585.9263973,
+   "by": "haridev",
+   "proposal": "4a81b995eafb",
+   "why": "Demo campaign re-ran its baseline TWICE because the generated deck was wrong: first WriteMethod=shdf5 (fields/moments go into per-process proc<rank>.hdf, no collective VTK), then pvtk without FieldOutputTag/MomentsOutputTag (no VTK written). ipic3d_input now defaults to all_io=true: pvtk, tags, particle + restart output and output cycles inside the few demo cycles, Save/RestartDirName from the arguments; ipic3d_input_check flags shdf5, empty tags, FieldOutputCycle<=0, particle/restart off (io_paths). Also restores ipic3d_source_fix, which v5 dropped by building on v2 (the skill still told agents to use it).",
+   "sha1": "150ec817d02e"
+  },
+  {
+   "version": 7,
+   "ts": 1793947107.8997457,
+   "by": "haridev",
+   "proposal": "58f72a4b4322",
+   "why": "ipic3d_source_check reports two CMakeLists.txt fixes (hdf5:: TARGET guard, PUBLIC HDF5 link in iPIC3Dlib) but only ipic3d_source_fix (the ParallelIO.cpp size() rename) could apply anything -- a fresh clone's build failure left no tool to fix the other two, and capability-first blocks a manual Edit of CMakeLists.txt. Extend ipic3d_source_fix to also apply these two deterministic CMakeLists.txt patches (regex-based, idempotent): wrap the two add_library(hdf5::hdf5...) blocks in if(NOT TARGET ...), and add PUBLIC ${HDF5_C_LIBRARIES} next to the existing PRIVATE ${HDF5_C_HL_TARGET} HDF5 link (switching PRIVATE to PUBLIC) in the iPIC3Dlib target_link_libraries call.",
+   "sha1": "ca3b98a142bc"
+  }
+ ],
+ "stages": [
+  "scope",
+  "smoke",
+  "instrument",
+  "baseline",
+  "match",
+  "opt"
+ ],
+ "pvc": {
+  "predictor": [
+   "ipic3d_topology",
+   "ipic3d_input",
+   "ipic3d_cmake_args",
+   "ipic3d_rabbit_mapping",
+   "ipic3d_source_fix"
+  ],
+  "validator": [
+   "ipic3d_input_check",
+   "ipic3d_source_check"
+  ]
+ }
+}

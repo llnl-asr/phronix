@@ -1,0 +1,122 @@
+[
+ {
+  "tool": "phronix_verification_plan",
+  "args": {
+   "goal": "a corrector for the lesson 'compose needs cmake >= 3.24'"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_verification_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_verification_check",
+  "args": {
+   "record": {
+    "claim": "the dftracer build flag is spelled --jobs",
+    "assumptions": [
+     "cmake installed"
+    ],
+    "inputs": [
+     "build script"
+    ],
+    "constraints": [
+     "build script contains --jobs"
+    ],
+    "invariants": [
+     "build script unchanged"
+    ],
+    "outputs": [],
+    "deterministic": true,
+    "ran": true,
+    "verdict": "pass"
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_verification_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_verification_plan",
+  "args": {
+   "goal": "a corrector for the lesson 'compose needs cmake >= 3.24'",
+   "facts": {
+    "red_result": true
+   }
+  },
+  "expect": {
+   "contains": "Diagnose the red result"
+  }
+ },
+ {
+  "tool": "phronix_verification_check",
+  "args": {
+   "record": {
+    "claim": "the service works",
+    "constraints": [
+     "cmake installed"
+    ],
+    "deterministic": true,
+    "ran": false,
+    "verdict": "pass"
+   }
+  },
+  "expect": {
+   "contains": "move it"
+  }
+ },
+ {
+  "tool": "phronix_verification_check",
+  "args": {
+   "record": {
+    "claim": "flag is --jobs",
+    "constraints": [],
+    "outputs": [],
+    "deterministic": true,
+    "ran": true,
+    "verdict": "pass"
+   }
+  },
+  "expect": {
+   "contains": "cannot fail"
+  }
+ },
+ {
+  "tool": "phronix_verification_check",
+  "args": {
+   "record": {
+    "claim": "flag is --jobs",
+    "constraints": [
+     "x"
+    ],
+    "deterministic": true,
+    "ran": true,
+    "verdict": "fail"
+   }
+  },
+  "expect": {
+   "contains": "one of the four causes"
+  }
+ }
+]

@@ -1,0 +1,109 @@
+[
+ {
+  "tool": "phronix_memory_plan",
+  "args": {
+   "goal": "record that we chose Postgres over MySQL for the extension ecosystem"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_memory_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_memory_check",
+  "args": {
+   "record": {
+    "name": "migration-approvals",
+    "type": "feedback",
+    "description": "Always ask before running a database migration on staging; decided 2026-09-01 after a migration locked staging for an hour",
+    "body": "Ask before any staging migration.\nWhy: a migration locked staging for an hour.\nHow to apply: before running migrate on staging, ask the user. See [[staging-environment]].",
+    "links": [
+     "[[staging-environment]]"
+    ],
+    "layer": "project"
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_memory_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_memory_plan",
+  "args": {
+   "goal": "record that we chose Postgres over MySQL for the extension ecosystem",
+   "facts": {
+    "is_procedure": true
+   }
+  },
+  "expect": {
+   "contains": "write it to the skill/capability instead"
+  }
+ },
+ {
+  "tool": "phronix_memory_plan",
+  "args": {
+   "goal": "record that we chose Postgres over MySQL for the extension ecosystem",
+   "facts": {
+    "is_subject_pitfall": true
+   }
+  },
+  "expect": {
+   "contains": "LESSONS.md"
+  }
+ },
+ {
+  "tool": "phronix_memory_check",
+  "args": {
+   "record": {
+    "name": "Auth Work",
+    "type": "user",
+    "description": "Auth work",
+    "body": "x",
+    "links": [],
+    "layer": "project"
+   }
+  },
+  "expect": {
+   "contains": "type: user is rejected"
+  }
+ },
+ {
+  "tool": "phronix_memory_check",
+  "args": {
+   "record": {
+    "name": "rule-x",
+    "type": "feedback",
+    "description": "Never push directly to develop; agreed last week with the maintainers of the repository",
+    "body": "Use a PR. [[git-flow]]",
+    "links": [
+     "[[git-flow]]"
+    ],
+    "layer": "project"
+   }
+  },
+  "expect": {
+   "contains": "needs a 'Why:' line"
+  }
+ }
+]

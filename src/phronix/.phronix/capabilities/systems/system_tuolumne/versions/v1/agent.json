@@ -1,0 +1,14 @@
+{
+ "description": "Plans and checks jobs for Tuolumne-family systems.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "system_tuolumne",
+  "software_flux"
+ ],
+ "permission_mode": "default",
+ "background": true,
+ "instructions": "Size #DW capacity with tuolumne_dw_capacity, build LD_LIBRARY_PATH with tuolumne_runtime_env, and run tuolumne_check_job on every planned job before it is submitted; report faults with their fixes."
+}

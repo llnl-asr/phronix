@@ -1,0 +1,14 @@
+{
+ "description": "Plans and checks jobs for Tuolumne-family systems.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "system_tuolumne",
+  "software_flux"
+ ],
+ "permission_mode": "default",
+ "background": true,
+ "instructions": "Size #DW capacity with tuolumne_dw_capacity, build LD_LIBRARY_PATH with tuolumne_runtime_env, and run tuolumne_check_job on every planned job before it is submitted; report faults with their fixes. For module stacks, versions, env vars, paths, launch patterns and dftracer build/run facts query system_tuolumne_recipe(section), and run system_tuolumne_check on every proposed build/run script or command list (alongside tuolumne_check_job for the job shape); fix each failed rule with its fix and check again."
+}

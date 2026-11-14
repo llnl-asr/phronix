@@ -1,0 +1,192 @@
+---
+name: phronix_validate_ideas
+description: Judge a research plan's ideas: keep those that could change the outcome, are answerable in two minutes by trying something, are independent and not already settled; judge the SET for overlap (same file/function = one idea), judge the decomposition (sufficient, ordered, checkable, includes not-breaking-things), record survivors with research_set_aspects and state the count (target three). Load after a plan stage, when ideas cluster on one function (pylint-7114), or when a validation pass wanders.
+---
+Cross-references: [[phronix_research_plan]], [[phronix_validate_exploration]], [[phronix_explore_idea]]
+
+# Judging whether a plan's ideas are worth exploring
+
+Converted from the dftracer-agents skill `phronix-validate-ideas` (subject: judge whether a plan's ideas are worth exploring). Source description: Judge whether a plan's ideas are worth exploring — keep the ones that could actually change the outcome, drop the rest, and say plainly how many good ones remain.
+
+Its labels (`I1`, `R1`, `X1`, ...) and `[[phronix-...]]` links are kept as written: a `[[phronix-a-b]]` link is now the capability `phronix_a_b`.
+
+# Validating the ideas a plan produced
+
+The plan is a prediction: that these are the questions worth two minutes each.
+You are the corrector. Your job is to say which of them are actually worth it,
+and you have no budget — this is reading and judging, not investigating.
+
+Three good ideas is the target. Fewer means the plan runs again.
+
+## Index
+
+| Label | Section | Covers |
+| --- | --- | --- |
+| `I1` | Instructions | What makes an idea good |
+| `I2` | Instructions | What to do with a bad one |
+| `I2b` | Instructions | Judge the SET, not only each idea |
+| `I2c` | Instructions | Judge the decomposition: do these steps solve it? |
+| `I3` | Instructions | Three, and say the number |
+| `X1` | References | Judge from what you were given, and stop |
+| `X2` | References | Do not explore, and do not solve |
+| `R1` | Rules | Why the corrector is unbudgeted and the predictor is not |
+
+## Instructions
+
+### I1 — What makes an idea good
+
+**It could change what we do.** An idea whose answer leads to the same patch
+either way is not worth exploring. "Which file is this in" is usually already
+known or trivially found; "does the fix have to handle the relative form too"
+changes the patch.
+
+**It is answerable in two minutes by trying something.** An idea that needs the
+whole test suite run, or a survey of the library's history, will come back
+empty and the slot is wasted.
+
+**It is independent of the others.** They are explored in parallel, so an idea
+that only makes sense after another's answer will be explored with the wrong
+input.
+
+**It is not already settled.** If the store or the task description answers it,
+exploring it spends a slot re-deriving a known answer.
+
+### I2 — What to do with a bad one
+
+Drop it, and say why in one line. Do not rewrite it into a different idea —
+that is the plan's job, and the plan gets another turn if you leave it short.
+
+Record the surviving ideas with `research_set_aspects`, in priority order. The
+list you write IS the list that gets explored, so an idea you leave in is one
+you are committing two minutes to.
+
+### I2b — Judge the SET, not only each idea
+
+An idea can pass every test in `I1` and still be worthless in the list it is in.
+Before you count, ask: **would any two of these be investigated in the same
+place?** If so they are one idea with two names, and keeping both spends two
+slots, two explorations and two trials on one reading of the problem.
+
+Check the `where` each idea names. Same file — often the same function — means
+overlap. Send the list back asking for an idea somewhere else, and say which two
+clashed and where; "be more diverse" gets you a rename.
+
+Measured on `pylint-dev__pylint-7114`: four ideas survived this stage —
+`module-name-conflict-resolution`, `init-file-fallback`, `module-search-order`,
+`expand_modules` — and every resulting patch changed `get_python_path` in
+`pylint/lint/expand_modules.py`. The combination built from them rewrote the
+same loop. Three tries, five containers each, nothing passed. Each idea was
+defensible alone; the SET was one idea.
+
+An idea with no `where` cannot be checked. Ask for one rather than guessing —
+that is a cheap question and this is what it buys.
+
+### I2c — Judge the decomposition: do these STEPS solve the problem?
+
+The plan should hand you an ordered method, not a bag of rival guesses — see
+[[phronix-research-plan]] `I5b`. Judge it as a method:
+
+* **Jointly sufficient.** If every step were done correctly, would the problem be
+  solved? Name what is missing rather than approving a plan with a hole in it.
+* **Ordered.** Does step 3 depend on step 2 having happened? A step that could go
+  anywhere is usually not a step.
+* **Separately checkable.** Could you tell whether step 2 was done right without
+  doing step 4? If not, they are one step.
+* **Includes not breaking things.** The last step is usually "the cases that
+  already work still work". A plan without it invites a fix that passes the
+  target test and breaks five others.
+
+A step is not judged on whether it is a good idea — it is judged on whether it
+belongs in the method. "Change how modules resolve" is a wish; "decide whether
+`a` is a package or a namespace package" is a step, because you can tell when it
+is done.
+
+### I3 — Three, and say the number
+
+End by stating how many good ideas remain. If it is fewer than three, the plan
+stage runs again and is told what you rejected, so name the rejections
+specifically enough that the next plan does not simply repeat them.
+
+Do not pad to three. Two good ideas and an honest count beats three where the
+third is filler — filler is explored at the same cost as substance, and its
+finding then dilutes the solution.
+
+## Rules
+
+### R1 — Why the corrector is unbudgeted and the predictor is not
+
+Generating ideas is open-ended: an agent will read the whole repository looking
+for one, so it gets a clock. Judging a list of three is bounded by the list —
+there is nothing to run away into. Putting a clock on it would only ever cut
+the cheap half of the loop.
+
+### Using the tools (capability)
+
+- Render the procedure with `phronix_validate_ideas_plan` (goal + facts), work through the checklist in order, then submit the record (fields: `ideas`, `decomposition`, `recorded`, `count`) to `phronix_validate_ideas_check`; a step is done only when the check passes.
+
+## References
+
+### X1 — Judge from what you were given, and stop
+
+You have the ideas and the record. That is enough to say which are worth two
+minutes, and it is nearly all you should look at.
+
+A lookup or two is fine — the task's own record, a skill that plainly covers
+this problem. Wandering is not: listing every skill, recalling every memory,
+loading three skills in turn, reaching for a probe. Measured, a validation pass
+did exactly that for fifteen minutes and was killed before it recorded
+anything, having judged nothing at all.
+
+**If you have read enough to have an opinion, record it and finish.** An
+unrecorded judgement is worth less than a quick one.
+
+### X2 — Do not explore, and do not solve
+
+You are judging the questions, not answering them. If you find yourself opening
+files to decide whether an idea is good, the idea is probably fine and you are
+doing the next stage's work at its expense.
+
+## Constraints
+
+- No clock, but no investigating: judging only (R1, X2).
+- Do not rewrite a bad idea into a new one: that is the plan's job (I2).
+- Do not pad to three (I3).
+
+## Corner cases
+
+- 'Be more diverse' gets you a rename: name the two that clashed and where (I2b).
+- 'Change how modules resolve' is a wish; 'decide whether a is a package or a namespace package' is a step (I2c).
+- A plan without the 'cases that already work still work' step invites a fix that passes the target and breaks five others (I2c).
+- Opening files to decide whether an idea is good means the idea is probably fine and you are doing the next stage's work (X2).
+
+## Parallel plan
+
+Independent calls go out together in one message: predictor calls on different inputs, and lookups such as knowledge_search or lesson_search, do not depend on each other. Sequential, and why: the validator runs after the predictor whose result it rules on, and the corrector only after the validator's verdict. Larger fan-outs build on [[tools_parallel]] (parallel_plan / parallel_call / parallel_validate).
+
+## Corrector
+
+- Predictor `phronix_validate_ideas_plan`, validator `phronix_validate_ideas_check`. A failed verdict comes here: repair the record (or the step that produced it), then plan and validate again. The same failure twice stops the loop: change approach, or ask the user.
+- `ideas_judged` failed: keep or drop every idea with a one-line reason (I2)
+- `kept_have_where` failed: an idea with no where cannot be checked for overlap: ask for one (I2b)
+- `no_overlap` failed: two kept ideas investigate the same place: they are one idea; send the list back naming which two clashed and where (I2b)
+- `decomposition_judged` failed: judge the steps as a method: sufficient, ordered, checkable, includes not breaking things (I2c)
+- `recorded` failed: record survivors with research_set_aspects in priority order (I2)
+- `count_stated` failed: state how many good ideas remain, 0-3; do not pad (I3)
+- `goal is required` from the planner: restate the concrete target (the task, file, run or stage) and plan again.
+- A check that is wrong about a correct record: reproduce it with a new entry in checks.json and `capability_update` this capability; never loosen the record to pass.
+
+## Self-heal
+
+- A validation pass that has read enough to have an opinion records it and finishes (X1).
+- A tool here failed or ruled wrongly: follow `capability_builder`'s Self-heal (reproduce with a check, `capability_update`, user approval) rather than working around it.
+
+## Self-learn
+
+- What is explored while applying this procedure (a new workload, software, tool, system or way of doing it) becomes a capability: see capability_builder (Rules).
+- A plan pattern that keeps producing overlapping ideas is a lesson for [[phronix-research-plan]].
+- A new pitfall of this procedure: `lesson_add` it to this capability with its evidence (a run, a log line, the user's words).
+
+## What works
+
+- Per-idea four tests + set overlap by where + decomposition check + research_set_aspects + honest count (2026-09-15).
+- `phronix_validate_ideas_plan` -> follow the checklist -> `phronix_validate_ideas_check` pass is the verified loop for this procedure (checks.json, conversion 2026-11-13).

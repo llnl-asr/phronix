@@ -1,0 +1,28 @@
+{
+ "name": "phronix_agent_authoring",
+ "description": "The harness-neutral agent template: schema, shared sections, capability levels instead of model ids, tool scoping, the four harness dialects, and why rendered files must never be edited. Load before creating an agent or changing how one behaves, when an edit to .claude/agents/*.md (or .opencode/.github/.codex) was silently reverted, when a template names a skill that does not exist, when a template pins a model id, or when a rule must reach every agent.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_agent_authoring_plan",
+  "phronix_agent_authoring_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_agent_authoring_plan"
+  ],
+  "validator": [
+   "phronix_agent_authoring_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-agent-authoring (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

@@ -1,0 +1,159 @@
+[
+ {
+  "tool": "tools_pydftracer_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "tools_pydftracer"
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_recipe",
+  "args": {
+   "section": "api"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "api",
+     "error",
+     "install",
+     "package",
+     "stale_api",
+     "venv",
+     "verify"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": "from dftracer.logger import dftracer_fn"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_stale_logger_api": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": "from dftracer.python import dftracer, dft_fn as DFTracerFn"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_stale_logger_api": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": "cat > $VENV/lib/python3.11/site-packages/dftracer/logger.py <<EOF"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_logger_shim": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": "python -c \"import dftracer\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "import_check_not_bare": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": "pip install pydftracer\npython -c \"from dftracer.python import dftracer, dft_fn\""
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "typing_extensions_with_install": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": "pip install pydftracer typing_extensions\npython -c \"from dftracer.python import dftracer, dft_fn\""
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "typing_extensions_with_install": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": "pip install pydftracer typing_extensions\npython app.py --smoke"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "verify_dftracer_python_import": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "tools_pydftracer_check",
+  "args": {
+   "commands": "pip install pydftracer typing_extensions\npython -c \"from dftracer.python import dftracer, dft_fn\"\npython app.py --smoke"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

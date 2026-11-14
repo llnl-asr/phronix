@@ -1,0 +1,201 @@
+[
+ {
+  "tool": "software_posix_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_posix"
+   }
+  }
+ },
+ {
+  "tool": "software_posix_recipe",
+  "args": {
+   "section": "bottleneck_map"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "bottleneck_map",
+     "dftracer",
+     "l1",
+     "l2",
+     "l3_lustre",
+     "l3_near_node_flash",
+     "l3_readahead",
+     "l3_scheduler",
+     "l3_vm",
+     "slope_metrics"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_posix_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export DFTRACER_DATA_DIR=all"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "data_dir_not_all": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export DFTRACER_DATA_DIR=/"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "data_dir_not_all": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export FS_TYPE=vast\nlfs setstripe -c 8 traces/"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "lfs_only_on_lustre": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export FS_TYPE=vast\nexport MALLOC_ARENA_MAX=2"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "lfs_only_on_lustre": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export FS_TYPE=vast\nexport ROMIO_HINTS_LINE='romio_ds_write disable'"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_ds_write_disable_vast": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export FS_TYPE=vast"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_ds_write_disable_vast": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export FS_TYPE=lustre\nsudo blockdev --setra 4096 /dev/nvme0n1"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "readahead_only_local": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export FS_TYPE=lustre\nlfs setstripe -c 8 traces/"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "readahead_only_local": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "LD_PRELOAD=${PREFIX}/lib/libdftracer_preload.so ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "preload_needs_data_dir": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export DFTRACER_DATA_DIR=/\nLD_PRELOAD=${PREFIX}/lib/libdftracer_preload.so ./app"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "preload_needs_data_dir": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_posix_check",
+  "args": {
+   "commands": "export FS_TYPE=lustre\nlfs setstripe -c 16 -S 4m /p/lustre5/$USER/traces/\nexport MALLOC_ARENA_MAX=2\nexport DFTRACER_DATA_DIR=/p/lustre5/$USER/data:/tmp\nLD_PRELOAD=${PREFIX}/lib/libdftracer_preload.so ./app"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

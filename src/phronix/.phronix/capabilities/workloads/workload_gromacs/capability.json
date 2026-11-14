@@ -1,0 +1,11 @@
+{
+ "name": "workload_gromacs",
+ "description": "GROMACS (molecular dynamics, CMake) build recipe for Tuolumne: CMake 3.28+, -DGMX_BUILD_MANUAL=OFF, HDF5 1.14 from source, MPI/HIP flags; predictor renders it, validator checks a command list. Load for gromacs, gmx mdrun, 'Could not import extension sphinx_copybutton', gromacs_pdf build errors, HDF5 1.10.5 rejected.",
+ "version": 1,
+ "enabled": true,
+ "stages": ["explore", "smoke", "instrument", "baseline"],
+ "tools": ["workload_gromacs_recipe", "workload_gromacs_check"],
+ "pvc": {"predictor": ["workload_gromacs_recipe"], "validator": ["workload_gromacs_check"]},
+ "topic": "workloads",
+ "history": [{"version": 1, "ts": 1794606917, "by": "conversion", "why": "converted from dftracer-agents skill workload-gromacs"}]
+}

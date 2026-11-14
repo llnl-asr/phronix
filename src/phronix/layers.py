@@ -511,7 +511,36 @@ def capability_files(start: Optional[Path] = None) -> Dict[str, Path]:
     names stay unique across the tree and a later layer still shadows an
     earlier one.
     """
-    return merged_files("capabilities", "**/*.py", start)
+    out: Dict[str, Path] = {}
+    for layer in layers(start):
+        base = layer.dir("capabilities")
+        if base.is_dir():
+            out.update(_capability_entries(base))
+    return out
+
+
+#: The file that makes a directory a capability bundle (see :mod:`phronix.engine.capstore`): ``tool.py`` beside its
+#: ``SKILL.md``, ``LESSONS.md``, ``WORKED.md``, ``agent.json``, ``checks.json`` and ``versions/``.
+BUNDLE_MARKER = "capability.json"
+
+
+def _capability_entries(base: Path) -> Dict[str, Path]:
+    """One layer's capabilities, keyed ``<name>.py``: a bundle directory is served from its ``tool.py`` (and nothing
+    inside it is a capability of its own: ``versions/`` and ``docs/`` hold copies and helpers); any other module
+    is a single-file capability, as before bundles existed."""
+    out: Dict[str, Path] = {}
+    for top, dirs, files in os.walk(base):
+        here = Path(top)
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith("."))
+        if BUNDLE_MARKER in files and here != base:
+            if (here / "tool.py").is_file():
+                out[f"{here.name}.py"] = here / "tool.py"
+            dirs[:] = []
+            continue
+        for f in sorted(files):
+            if f.endswith(".py") and not f.startswith("."):
+                out[f] = here / f
+    return out
 
 
 def verifier_files(start: Optional[Path] = None) -> Dict[str, Path]:

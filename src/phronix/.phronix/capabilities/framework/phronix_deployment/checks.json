@@ -1,0 +1,106 @@
+[
+ {
+  "tool": "phronix_deployment_plan",
+  "args": {
+   "goal": "the project root of a new app"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_deployment_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_deployment_check",
+  "args": {
+   "record": {
+    "project": "myapp",
+    "deploy_result": "written",
+    "conflicts_overwritten": false,
+    "committed_paths": [
+     ".phronix/skills/x/SKILL.md"
+    ],
+    "port_source": "status",
+    "collector_bounced": false
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_deployment_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_deployment_plan",
+  "args": {
+   "goal": "the project root of a new app",
+   "facts": {
+    "ci": true
+   }
+  },
+  "expect": {
+   "contains": "--check"
+  }
+ },
+ {
+  "tool": "phronix_deployment_plan",
+  "args": {
+   "goal": "the project root of a new app",
+   "facts": {
+    "long_session": true
+   }
+  },
+  "expect": {
+   "contains": "PHRONIX_STACK_MAX_AGE=0"
+  }
+ },
+ {
+  "tool": "phronix_deployment_check",
+  "args": {
+   "record": {
+    "project": "myapp",
+    "deploy_result": "written",
+    "committed_paths": [
+     ".claude/agents/learner.md"
+    ],
+    "port_source": "config"
+   }
+  },
+  "expect": {
+   "contains": "commit .phronix/ only"
+  }
+ },
+ {
+  "tool": "phronix_deployment_check",
+  "args": {
+   "record": {
+    "project": "myapp",
+    "deploy_result": "written",
+    "conflicts_overwritten": true,
+    "port_source": "env",
+    "collector_bounced": true
+   }
+  },
+  "expect": {
+   "contains": "lose the accounting"
+  }
+ }
+]

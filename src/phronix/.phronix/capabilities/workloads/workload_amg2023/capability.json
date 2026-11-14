@@ -1,0 +1,33 @@
+{
+ "name": "workload_amg2023",
+ "description": "AMG2023 (LLNL/AMG2023, thin C driver over hypre) CPU MPI+OpenMP recipe: hypre >= 2.27 (v2.32.0) built in the session with a HYPRE_config.h check, out-of-source CMake with -DHYPRE_PREFIX, -ldftracer_core, 3-function annotation scope with INIT/FINI around hypre_MPI_Init/Finalize, weak-scaling sizing and the measured event inventory; predictor renders it, validator checks a command list. Load for AMG2023, \"Invalid number of processors or processor topology\", missing DFTRACER_C_INIT.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_amg2023_recipe",
+  "workload_amg2023_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_amg2023_recipe"
+  ],
+  "validator": [
+   "workload_amg2023_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-amg2023"
+  }
+ ]
+}

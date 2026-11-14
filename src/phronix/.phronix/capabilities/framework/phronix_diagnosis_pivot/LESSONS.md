@@ -1,0 +1,4 @@
+# Lessons: phronix_diagnosis_pivot
+
+- [L-5abb2e94] three attempts added a CLI column, each improving the logic (unconditional, conditional, host-vs-subdomain), all failing -> every one named the column `Domain` while the tests asserted `Subdomain` and `Host`; refinement continued past the evidence -> read the assertion literally (I3); the differing word is the bug (2026-09-15, dftracer-agents phronix-diagnosis-pivot X1/I3)
+- [L-6db6a5c5] every block the learner wrote was about the wrong file; the knowledge base grew more detailed and confident about the wrong area -> each attempt saw only that its own patch failed, never that three patches in the same function had failed -> after two identical failures name the shared assumption (I1) and pivot (I4) (2026-09-15, dftracer-agents phronix-diagnosis-pivot X1)

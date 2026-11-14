@@ -1,0 +1,7 @@
+[
+ {"tool": "workload_genesis_leaf_contract_recipe", "args": {}, "expect": {"contains": "COMPACTION_NOT_RUN.md"}},
+ {"tool": "workload_genesis_leaf_contract_check", "args": {"commands": ["python3 genesis_readme.py <archive>/amg/tuolumne > README.md"]}, "expect": {"json": {"status": "fail"}}},
+ {"tool": "workload_genesis_leaf_contract_check", "args": {"commands": ["genesis_validate_leaf.py <archive>/amg/tuolumne --sets=9", "python3 genesis_readme.py <archive>/amg/tuolumne > README.md"]}, "expect": {"json": {"status": "pass"}}},
+ {"tool": "workload_genesis_leaf_contract_check", "args": {"commands": []}, "expect": {"json": {"status": "inconclusive"}}},
+ {"tool": "workload_genesis_leaf_contract_leaf_check", "args": {"archive_root": "no-such-archive"}, "expect": {"json": {"status": "inconclusive"}}}
+]

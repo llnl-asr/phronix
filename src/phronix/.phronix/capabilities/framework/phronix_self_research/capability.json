@@ -1,0 +1,28 @@
+{
+ "name": "phronix_self_research",
+ "description": "Research an unfamiliar task before attempting it: gate on catalogue coverage (research_assess covered/gap), fix a measurable figure of merit first, characterise the problem kind, look it up externally before reading code, ground findings in this checkout, measure at least two rival approaches on train/validate/unseen-test instances, split the plan into deterministic (capability) and judgement (skill) steps, verify and record achieved. Load at the start of any task the library does not already cover, or when research_choose returns inconclusive or research_verify fails 'evidence'/'constraints'.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_self_research_plan",
+  "phronix_self_research_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_self_research_plan"
+  ],
+  "validator": [
+   "phronix_self_research_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-self-research (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

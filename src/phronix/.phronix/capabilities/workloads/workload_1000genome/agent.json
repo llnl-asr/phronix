@@ -1,0 +1,8 @@
+{
+ "description": "Renders and checks the 1000genome-workflow recipe (PMC execution, sizing, annotation scope, optimization gates); never runs the workflow.",
+ "level": "level_1",
+ "tools": ["Read", "Grep"],
+ "skills": ["workload_1000genome"],
+ "permission_mode": "default",
+ "instructions": "Read the skill. Render the recipe with workload_1000genome_recipe, check any proposed command list with workload_1000genome_check, and follow the Corrector section for each failed check. Do not run workflows or jobs."
+}

@@ -1,0 +1,132 @@
+[
+ {
+  "tool": "phronix_trial_reconcile_plan",
+  "args": {
+   "goal": "four candidates for pallets__flask-4045"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_trial_reconcile_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_trial_reconcile_check",
+  "args": {
+   "record": {
+    "ranking_finding": "metric ranked B first; C solved it",
+    "passed": [
+     "C"
+    ],
+    "candidates": [
+     "A",
+     "B",
+     "C"
+    ],
+    "branch": "one",
+    "corner_cases": [
+     "A converted only Blueprint.__init__, not the two add_url_rule sites: 1/2"
+    ],
+    "step_reached": "step 3 (add_url_rule sites)",
+    "links": [
+     "[[cand-a]]",
+     "[[cand-b]]",
+     "[[cand-c]]"
+    ],
+    "outcome": "2/2",
+    "cost": "~40k tokens, 6 min",
+    "transfer": "all three sites pattern applies to other name checks",
+    "instructions": [
+     "In blueprints.py raise ValueError in __init__ and both add_url_rule sites"
+    ]
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_trial_reconcile_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_trial_reconcile_plan",
+  "args": {
+   "goal": "four candidates for pallets__flask-4045",
+   "facts": {
+    "none_passed": true
+   }
+  },
+  "expect": {
+   "contains": "claim that could be false"
+  }
+ },
+ {
+  "tool": "phronix_trial_reconcile_plan",
+  "args": {
+   "goal": "four candidates for pallets__flask-4045",
+   "facts": {
+    "one_passed": true
+   }
+  },
+  "expect": {
+   "contains": "winner's steps are the spine"
+  }
+ },
+ {
+  "tool": "phronix_trial_reconcile_check",
+  "args": {
+   "record": {
+    "ranking_finding": "r",
+    "branch": "none",
+    "corner_cases": [
+     "x"
+    ],
+    "step_reached": "s",
+    "links": [
+     "[[a]]"
+    ],
+    "transfer": "t"
+   }
+  },
+  "expect": {
+   "contains": "do not refine the least-bad"
+  }
+ },
+ {
+  "tool": "phronix_trial_reconcile_check",
+  "args": {
+   "record": {
+    "ranking_finding": "r",
+    "branch": "several",
+    "step_reached": "s",
+    "links": [
+     "cand-a"
+    ],
+    "transfer": "t",
+    "instructions": [
+     "x"
+    ]
+   }
+  },
+  "expect": {
+   "contains": "link every candidate skill"
+  }
+ }
+]

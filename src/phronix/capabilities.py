@@ -203,7 +203,7 @@ def duplicates(source: str, name: str = "") -> List[Dict[str, str]]:
     with the same body and different names has been handed a decision nobody
     meant to give it.
     """
-    from phronix.layers import layers
+    from phronix.layers import _capability_entries, layers
 
     wanted = _fingerprint(source)
     found: List[Dict[str, str]] = []
@@ -219,16 +219,18 @@ def duplicates(source: str, name: str = "") -> List[Dict[str, str]]:
         # `add_flask_cli_routes.py` and `flask_cli_routes_fix.py` across three
         # categories — the same procedure four times, each needing to be
         # maintained and chosen between.
-        for path in sorted(directory.rglob("*.py")):
-            if path.stem == name or path.stem in seen:
+        # A bundle is one capability (its tool.py); its versions/ are history, not twins.
+        for key, path in sorted(_capability_entries(directory).items()):
+            stem = Path(key).stem
+            if stem == name or stem in seen:
                 continue
             try:
                 other = path.read_text(errors="replace")
             except OSError:
                 continue
             if _fingerprint(other) == wanted:
-                seen.add(path.stem)
-                found.append({"name": path.stem, "layer": layer.name,
+                seen.add(stem)
+                found.append({"name": stem, "layer": layer.name,
                               "file": str(path)})
     return found
 
@@ -411,12 +413,20 @@ def new(
                           f"instead of building a second copy."),
                 "existing": twins, "use": twins[0]["name"]}
 
-    dest = directory / f"{name}.py"
-    if dest.exists() and not overwrite:
-        return {"status": "exists", "file": str(dest), "layer": target.name,
+    # A capability is a bundle: <name>/tool.py beside the files that make it
+    # learnable and checkable (phronix.engine.capstore): capability.json,
+    # SKILL.md, LESSONS.md, WORKED.md, agent.json, checks.json. A single-file
+    # module of the same name from before bundles is the same capability.
+    bundle = directory / name
+    dest = bundle / "tool.py"
+    legacy = directory / f"{name}.py"
+    if (dest.exists() or legacy.exists()) and not overwrite:
+        return {"status": "exists", "file": str(dest if dest.exists() else legacy), "layer": target.name,
                 "hint": "pass overwrite=True to replace it"}
 
-    dest.write_text(text)
+    write_bundle(bundle, name, description, text)
+    if legacy.exists():
+        legacy.unlink()
     # Remembered in this process, so a from-scratch run can call what it just
     # built. Written to disk as well, always: the run's own store keeps it, and
     # what a run may CARRY is a separate decision made when it ends.
@@ -431,12 +441,101 @@ def new(
     return {
         "status": "ok",
         "file": str(dest),
+        "dir": str(bundle),
         "layer": target.name,
         "scaffolded": source is None,
         "verification": _verification_status(name),
         "next": "restart the phronix MCP server to load this capability "
                 "(a running server holds tool closures captured at registration time)",
     }
+
+
+def tool_names(source: str) -> List[str]:
+    """The ``@mcp.tool()`` functions *source* registers, in order."""
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    out: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for d in node.decorator_list:
+                call = d.func if isinstance(d, ast.Call) else d
+                if isinstance(call, ast.Attribute) and call.attr == "tool":
+                    out.append(node.name)
+    return out
+
+
+SKILL_SKELETON = """---
+name: {name}
+description: {description}
+---
+
+# {name}
+
+{description}
+
+## Rules
+
+## Constraints
+
+## Corner cases
+
+## Parallel plan
+
+Independent calls go out together in one message; a validator runs after the predictor it rules on.
+
+## Corrector
+
+## Self-heal
+
+## Self-learn
+
+What is explored here becomes a capability: extend this one, or capability_new for what does not fit.
+
+## What works
+"""
+
+
+def write_bundle(bundle: Path, name: str, description: str, code: str) -> None:
+    """Write (or rewrite the code of) a capability bundle. An existing bundle keeps its skill, lessons, worked
+    entries, checks and history; its version goes up by one with the old code kept in ``versions/``."""
+    import json
+    import time
+
+    bundle.mkdir(parents=True, exist_ok=True)
+    meta_path = bundle / "capability.json"
+    tools = tool_names(code)
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        old = bundle / "tool.py"
+        v = int(meta.get("version", 1))
+        if old.exists():
+            snap = bundle / "versions" / f"v{v}"
+            snap.mkdir(parents=True, exist_ok=True)
+            (snap / "tool.py").write_text(old.read_text())
+        meta.update({"version": v + 1, "tools": tools, "description": description or meta.get("description", "")})
+        meta.setdefault("history", []).append({"version": v + 1, "ts": int(time.time()), "by": "capability_new",
+                                               "why": "code replaced"})
+    else:
+        meta = {"name": name, "description": description, "version": 1, "enabled": True, "stages": [],
+                "tools": tools, "pvc": {"predictor": tools, "validator": []},
+                "history": [{"version": 1, "ts": int(time.time()), "by": "capability_new", "why": description}]}
+    (bundle / "tool.py").write_text(code)
+    meta_path.write_text(json.dumps(meta, indent=1) + "\n")
+    defaults = {
+        "SKILL.md": SKILL_SKELETON.format(name=name, description=description or name),
+        "LESSONS.md": f"# Lessons: {name}\n",
+        "WORKED.md": f"# What worked: {name}\n",
+        "agent.json": json.dumps({"description": description, "level": "level_1", "tools": ["Read"],
+                                  "skills": [name], "permission_mode": "default", "instructions": ""}, indent=1) + "\n",
+        "checks.json": "[]\n",
+    }
+    for f, text in defaults.items():
+        if not (bundle / f).exists():
+            (bundle / f).write_text(text)
 
 
 def _verification_status(name: str) -> Dict[str, Any]:

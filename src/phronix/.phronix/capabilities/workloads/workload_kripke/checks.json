@@ -1,0 +1,51 @@
+[
+ {
+  "tool": "workload_kripke_recipe",
+  "args": {
+   "variant": "hip"
+  },
+  "expect": {
+   "contains": "ENABLE_CHAI"
+  }
+ },
+ {
+  "tool": "workload_kripke_check",
+  "args": {
+   "commands": [
+    "cmake <src>/cmake/kripke -DENABLE_MPI=On -DENABLE_OPENMP=On"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_kripke_check",
+  "args": {
+   "commands": [
+    "git clone --recursive <repo> src",
+    "git submodule update --init --recursive",
+    "cmake src/cmake/kripke -DKRIPKE_SOURCE_ROOT=src -DENABLE_MPI=On -DENABLE_OPENMP=On -DRAJA_ENABLE_EXERCISES=Off",
+    "flux run -N2 -n8 ./kripke.exe --zones 96,96,96 --niter 15 --procs 2,2,2"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_kripke_check",
+  "args": {
+   "commands": []
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

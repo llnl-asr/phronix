@@ -1,0 +1,47 @@
+[
+ {
+  "tool": "workload_smith_recipe",
+  "args": {},
+  "expect": {
+   "contains": "SMITH_ENABLE_CODEVELOP"
+  }
+ },
+ {
+  "tool": "workload_smith_check",
+  "args": {
+   "commands": [
+    "cmake -S smith -B build -DSMITH_ENABLE_BENCHMARKS=ON"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "fail"
+   }
+  }
+ },
+ {
+  "tool": "workload_smith_check",
+  "args": {
+   "commands": [
+    "cmake -S smith -B build-fresh -DSMITH_ENABLE_CODEVELOP=ON -DCMAKE_CXX_FLAGS=--gcc-toolchain=/opt/rh/gcc-toolset-13/root/usr -DSUPERLUDIST_DIR=<p>",
+    "./build-fresh/examples/composable_thermo_mechanics"
+   ]
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "workload_smith_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ }
+]

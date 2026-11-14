@@ -1,0 +1,250 @@
+"""phronix_validate_exploration: judge whether the explored ideas actually answered their questions (framework process capability, converted from dftracer-agents skill phronix-validate-exploration).
+
+phronix_validate_exploration_plan renders the procedure as an ordered checklist (predictor); phronix_validate_exploration_check rules on the record the
+procedure produced (validator). Both are deterministic and never run anything."""
+import json
+import re
+
+SKILL = 'phronix-validate-exploration'
+VALIDATOR = 'phronix_validate_exploration_check'
+FACTS = ["findings_sufficient"]
+STEPS = [{'id': 'I1',
+  'step': 'For each finding of {goal} ask: was it tried (not only reasoned)? does it say what happened, in numbers? what it rules in and out? was it '
+          'cut off?',
+  'done_when': 'each finding has the four answers'},
+ {'id': 'I3',
+  'step': 'Mark a tried-and-did-not-work or turned-out-irrelevant idea complete: a negative result answered its question.',
+  'done_when': 'no negative result sent back'},
+ {'id': 'I2',
+  'step': "For each failing finding say which of the four is missing, specifically enough for the next pass (not 'thin').",
+  'done_when': 'each send-back has a specific reason'},
+ {'id': 'I4',
+  'step': 'If the findings let the solution be built, say so and stop; send back only what would change the solution.',
+  'done_when': 'verdict recorded',
+  'when': 'findings_sufficient'},
+ {'id': 'X1',
+  'step': 'Do not take a missing measurement yourself and do not write a fix: name the gap and record the verdict.',
+  'done_when': 'no measurements, patches or code in the verdict'}]
+RULES = [{'id': 'R1', 'rule': "Exists because 'explored and answered' and 'explored and ran out' both arrive as a filed finding."},
+ {'id': 'X1', 'rule': 'Do not fill the gap yourself: measuring is exploring and is budgeted.'},
+ {'id': 'X2', 'rule': 'Do not write the fix: no patches, no diffs, no code.'}]
+RECORD_FIELDS = ['findings', 'patches', 'measurements_taken']
+CHECKS = [{'check': 'findings_judged',
+  'kind': 'each_has',
+  'field': 'findings',
+  'keys': ['idea', 'verdict'],
+  'fix': 'judge every finding: verdict complete or again (I1)'},
+ {'check': 'verdicts_known',
+  'kind': 'each_if',
+  'field': 'findings',
+  'then': {'key': 'verdict', 'test': 'one_of', 'values': ['complete', 'again']},
+  'fix': "verdict is 'complete' or 'again'"},
+ {'check': 'sendback_missing',
+  'kind': 'each_if',
+  'field': 'findings',
+  'if': {'key': 'verdict', 'equals': 'again'},
+  'then': {'key': 'missing', 'test': 'regex', 'pattern': '^(tried|happened|rules|cut)'},
+  'fix': "every 'again' names what is missing: what was tried, what happened, what it rules out, or that it was cut off (I1, I2)"},
+ {'check': 'sendback_reasons',
+  'kind': 'each_if',
+  'field': 'findings',
+  'if': {'key': 'verdict', 'equals': 'again'},
+  'then': {'key': 'reason', 'test': 'min_len', 'n': 15},
+  'fix': "every 'again' names what is missing (tried|happened|rules|cut off) and a reason specific enough for the next pass, e.g. 'tried the "
+         "absolute form only, never the relative one' (I2)"},
+ {'check': 'negatives_complete',
+  'kind': 'each_if',
+  'field': 'findings',
+  'if': {'key': 'negative', 'equals': True},
+  'then': {'key': 'verdict', 'test': 'one_of', 'values': ['complete']},
+  'fix': 'a tried-and-did-not-work idea is finished; do not send it back for being disappointing (I3)'},
+ {'check': 'no_patches',
+  'kind': 'max_items',
+  'field': 'patches',
+  'n': 0,
+  'fix': 'no patches, diffs or code: record that the finding is complete and stop (X2)'},
+ {'check': 'no_measurements',
+  'kind': 'false',
+  'field': 'measurements_taken',
+  'fix': 'do not take the measurement yourself; name the gap for the explorer (X1)'}]
+
+
+def _get(rec, field):
+    cur = rec
+    for part in field.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def _filled(v):
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return bool(v.strip())
+    if isinstance(v, (list, dict, tuple)):
+        return len(v) > 0
+    return True
+
+
+def _applies(rec, c):
+    w = c.get("when")
+    if not w:
+        return True
+    v = _get(rec, w["field"])
+    if "equals" in w:
+        return v == w["equals"]
+    if "in" in w:
+        return v in w["in"]
+    if "filled" in w:
+        return _filled(v) == bool(w["filled"])
+    return True
+
+
+def _one(rec, c):
+    """Run one declarative check; returns (ok, detail)."""
+    kind = c["kind"]
+    field = c.get("field", "*")
+    v = rec if field == "*" else _get(rec, field)
+    if kind == "nonempty":
+        return _filled(v), (f"{field} present" if _filled(v) else f"{field} missing or empty")
+    if kind == "one_of":
+        return v in c["values"], f"{field}={v!r}; allowed {c['values']}"
+    if kind == "min_items":
+        n = len(v) if isinstance(v, (list, tuple, dict)) else 0
+        return n >= c["n"], f"{field} has {n} item(s), needs >= {c['n']}"
+    if kind == "max_items":
+        n = len(v) if isinstance(v, (list, tuple, dict)) else 0
+        return n <= c["n"], f"{field} has {n} item(s), allowed <= {c['n']}"
+    if kind == "min_len":
+        n = len(v) if isinstance(v, str) else 0
+        return n >= c["n"], f"{field} is {n} characters, needs >= {c['n']}"
+    if kind == "regex":
+        s = v if isinstance(v, str) else json.dumps(v, default=str)
+        ok = v is not None and re.search(c["pattern"], s, re.I | re.M) is not None
+        return ok, (f"{field} matches {c['pattern']!r}" if ok else f"{field} does not match {c['pattern']!r}")
+    if kind == "absent":
+        s = v if isinstance(v, str) else json.dumps(v, default=str)
+        m = re.search(c["pattern"], s or "", re.I | re.M)
+        return m is None, ("not found" if m is None else f"found {m.group(0)[:60]!r} in {field}")
+    if kind == "date":
+        ok = isinstance(v, str) and re.match(r"^\d{4}-\d{2}-\d{2}", v) is not None
+        return ok, f"{field}={v!r} (YYYY-MM-DD)"
+    if kind == "true":
+        return v is True, f"{field}={v!r}, must be true"
+    if kind == "false":
+        return v is False or v is None, f"{field}={v!r}, must be false or absent"
+    if kind == "number":
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool)
+        lo, hi = c.get("min"), c.get("max")
+        ok = ok and (lo is None or v >= lo) and (hi is None or v <= hi)
+        return ok, f"{field}={v!r} must be a number in [{lo}, {hi}]"
+    if kind == "each_has":
+        items = v if isinstance(v, list) else []
+        bad = [i for i, it in enumerate(items) if not (isinstance(it, dict) and all(_filled(it.get(k)) for k in c["keys"]))]
+        ok = bool(items) and not bad
+        return ok, (f"every {field} item has {c['keys']}" if ok else f"{field} items {bad or 'none'} lack one of {c['keys']}")
+    if kind == "each_regex":
+        items = v if isinstance(v, list) else []
+        bad = [str(it)[:40] for it in items if not re.search(c["pattern"], it if isinstance(it, str) else json.dumps(it, default=str), re.I)]
+        ok = bool(items) and not bad
+        return ok, (f"every {field} item matches {c['pattern']!r}" if ok else f"{field} items not matching {c['pattern']!r}: {bad or 'none given'}")
+    if kind in ("each_if", "unique"):
+        items = [it for it in (v if isinstance(v, list) else []) if isinstance(it, dict) and _match(it, c.get("if"))]
+        if kind == "unique":
+            vals = [json.dumps(it.get(c["key"]), sort_keys=True, default=str) for it in items if _filled(it.get(c["key"]))]
+            dup = sorted({x for x in vals if vals.count(x) > 1})
+            return not dup, ("distinct " + c["key"] if not dup else f"{field} items share {c['key']}: {', '.join(dup)[:120]}")
+        t = c["then"]
+        bad = [i for i, it in enumerate(items) if not _test(it.get(t["key"]), t)]
+        sel = f" with {c['if']['key']} {c['if'].get('equals', c['if'].get('in', c['if'].get('regex')))!r}" if c.get("if") else ""
+        return not bad, (f"{len(items)} {field} item(s){sel} satisfy {t['key']} {t['test']}" if not bad
+                         else f"{field} item(s) {bad}{sel} fail {t['key']} {t['test']} {t.get('pattern', t.get('values', ''))!r}")
+    return False, f"unknown check kind {kind!r}"
+
+
+def _match(item, cond):
+    if not cond:
+        return True
+    v = item.get(cond["key"])
+    if "equals" in cond:
+        return v == cond["equals"]
+    if "in" in cond:
+        return v in cond["in"]
+    if "regex" in cond:
+        return isinstance(v, str) and re.search(cond["regex"], v) is not None
+    return _filled(v)
+
+
+def _test(v, t):
+    """Predicate on one item's value: nonempty, true, number, regex, absent, one_of, min_len."""
+    test = t["test"]
+    if test == "nonempty":
+        return _filled(v)
+    if test == "true":
+        return v is True
+    if test == "number":
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+    if test == "one_of":
+        return v in t["values"]
+    if test == "min_len":
+        return isinstance(v, str) and len(v) >= t["n"]
+    s = v if isinstance(v, str) else ("" if v is None else json.dumps(v, default=str))
+    found = re.search(t["pattern"], s, re.I | re.M) is not None
+    return found if test == "regex" else not found
+
+
+def _plan(goal, facts):
+    if not isinstance(goal, str) or not goal.strip():
+        return {"status": "error", "error": "goal is required: say concretely what this procedure is being applied to"}
+    if facts is not None and not isinstance(facts, dict):
+        return {"status": "error", "error": "facts must be an object of named booleans/values, e.g. {" + ", ".join(repr(k) + ": true" for k in FACTS[:2]) + "}"}
+    facts = facts or {}
+    unknown = sorted(k for k in facts if k not in FACTS)
+    out, skipped = [], []
+    for s in STEPS:
+        if s.get("when") and not facts.get(s["when"]):
+            skipped.append({"id": s["id"], "because": f"fact {s['when']} is not set"})
+            continue
+        if s.get("unless") and facts.get(s["unless"]):
+            skipped.append({"id": s["id"], "because": f"fact {s['unless']} is set"})
+            continue
+        out.append({"n": len(out) + 1, "id": s["id"], "step": s["step"].replace("{goal}", goal.strip()), "done_when": s["done_when"]})
+    return {"status": "ok", "skill": SKILL, "goal": goal.strip(), "checklist": out, "skipped": skipped, "rules": RULES,
+            "record_fields": RECORD_FIELDS, "validator": VALIDATOR, "unknown_facts": unknown}
+
+
+def _check(record):
+    if isinstance(record, str):
+        try:
+            record = json.loads(record)
+        except ValueError:
+            return {"status": "fail", "checks": [{"check": "record_json", "ok": False, "detail": "record is not JSON",
+                                                   "fix": "pass the record as an object with the fields " + ", ".join(RECORD_FIELDS)}]}
+    if not isinstance(record, dict):
+        return {"status": "fail", "checks": [{"check": "record_object", "ok": False, "detail": f"record is {type(record).__name__}",
+                                               "fix": "pass the record as an object with the fields " + ", ".join(RECORD_FIELDS)}]}
+    res = []
+    for c in CHECKS:
+        if not _applies(record, c):
+            res.append({"check": c["check"], "ok": True, "detail": "not applicable", "fix": ""})
+            continue
+        ok, detail = _one(record, c)
+        res.append({"check": c["check"], "ok": ok, "detail": detail, "fix": "" if ok else c["fix"]})
+    if not record:
+        return {"status": "inconclusive", "checks": res, "problem": "empty record: nothing to rule on"}
+    return {"status": "pass" if all(r["ok"] for r in res) else "fail", "checks": res}
+
+
+def register(mcp):
+    @mcp.tool()
+    def phronix_validate_exploration_plan(goal: str, facts: dict = None) -> dict:
+        "Render the exploration-validation procedure as an ordered checklist: per finding the four completeness questions, specific reasons for send-backs, negatives count as complete, let through what suffices. Use it before applying the phronix-validate-exploration procedure so its steps are followed in order and none is skipped. Args: goal (required: what the procedure is applied to, concretely), facts (optional object; known keys: findings_sufficient (the findings between them let the solution be built); a fact switches its conditional steps on or off). Deterministic: renders, never runs anything. Returns {status, skill, goal, checklist: [{n, id, step, done_when}], skipped, rules, record_fields, validator, unknown_facts}, or {status: error, error} when goal is empty. Validate the finished record with phronix_validate_exploration_check."
+        return _plan(goal, facts)
+
+    @mcp.tool()
+    def phronix_validate_exploration_check(record: dict) -> dict:
+        "Check an exploration verdict: every finding judged complete or sent back, every send-back names which of tried/happened/rules-in-out/cut-off is missing and specifically, negative results not sent back for being negative, and no patches or new measurements in the verdict. Use it after the procedure, on the record it produced, before the step is called done. Arg: record (object; fields findings, patches, measurements_taken). Deterministic. Returns {status: pass|fail|inconclusive, checks: [{check, ok, detail, fix}]}; inconclusive for an empty record. Each failed check names its fix; the skill's Corrector says how to repair and re-run."
+        return _check(record)

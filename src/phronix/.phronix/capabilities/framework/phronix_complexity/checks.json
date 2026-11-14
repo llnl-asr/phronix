@@ -1,0 +1,122 @@
+[
+ {
+  "tool": "phronix_complexity_plan",
+  "args": {
+   "goal": "agent phronix-learner"
+  },
+  "expect": {
+   "contains": "\"id\": \"I5\""
+  }
+ },
+ {
+  "tool": "phronix_complexity_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_complexity_check",
+  "args": {
+   "record": {
+    "subject": "phronix-learner",
+    "measured_level": "level_2",
+    "declared_level": "level_3",
+    "intrinsic": "moderate",
+    "drivers": [
+     {
+      "signal": "tool_coverage",
+      "contribution": -0.226,
+      "counts": "19/21 tools are MCP capabilities"
+     },
+     {
+      "signal": "reasoning_demand",
+      "contribution": 0.3,
+      "counts": "15 rules + 12 instructions"
+     }
+    ],
+    "drift": "down",
+    "action": "agent_define(model_level=level_2)"
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_complexity_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_complexity_plan",
+  "args": {
+   "goal": "agent phronix-learner",
+   "facts": {
+    "store_changed": true
+   }
+  },
+  "expect": {
+   "contains": "complexity_reassess"
+  }
+ },
+ {
+  "tool": "phronix_complexity_plan",
+  "args": {
+   "goal": "agent phronix-learner",
+   "facts": {
+    "intrinsic_hard": true
+   }
+  },
+  "expect": {
+   "contains": "intrinsic floor"
+  }
+ },
+ {
+  "tool": "phronix_complexity_check",
+  "args": {
+   "record": {
+    "subject": "planner",
+    "measured_level": "level_3",
+    "declared_level": "level_2",
+    "drivers": [
+     {
+      "signal": "reasoning_demand",
+      "contribution": 0.3
+     }
+    ],
+    "drift": "up",
+    "action": "",
+    "model_id": "claude-opus"
+   }
+  },
+  "expect": {
+   "contains": "never pin a model id"
+  }
+ },
+ {
+  "tool": "phronix_complexity_check",
+  "args": {
+   "record": {
+    "subject": "planner",
+    "measured_level": "level_3",
+    "declared_level": "level_3",
+    "drivers": [],
+    "drift": "none"
+   }
+  },
+  "expect": {
+   "contains": "not just the verdict"
+  }
+ }
+]

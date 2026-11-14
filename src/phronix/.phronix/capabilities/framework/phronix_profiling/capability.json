@@ -1,0 +1,28 @@
+{
+ "name": "phronix_profiling",
+ "description": "Profile an agent session: export the OTEL env before launching the harness, bind the run once, bracket every step with its model level (same step id on retries), and read the per-step report (unattributed share, retries, cross_check.events_dropped). Load before profiling a session or interpreting a profile_report, or when the profile is empty, most cost is unattributed, or events were dropped.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_profiling_plan",
+  "phronix_profiling_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_profiling_plan"
+  ],
+  "validator": [
+   "phronix_profiling_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-profiling (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

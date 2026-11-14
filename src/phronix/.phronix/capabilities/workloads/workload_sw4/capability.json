@@ -1,0 +1,33 @@
+{
+ "name": "workload_sw4",
+ "description": "SW4 (geodynamics/sw4) 4th-order 3D seismic wave propagation (C++ .C + Fortran-77, MPI+OpenMP): minimal Cray Makefile build (libsci, no proj/hdf5), '#pragma ivdep' Cray clang error, the .C-extension annotator trap, include/INIT placement bugs, the getDepth exclusion, LOH.1 run sizing. Load for sw4, LOH.1, 'expected a for, while, or do-while loop to follow ivdep', getDepth event blowup.",
+ "version": 1,
+ "enabled": true,
+ "stages": [
+  "explore",
+  "smoke",
+  "instrument",
+  "baseline"
+ ],
+ "tools": [
+  "workload_sw4_recipe",
+  "workload_sw4_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "workload_sw4_recipe"
+  ],
+  "validator": [
+   "workload_sw4_check"
+  ]
+ },
+ "topic": "workloads",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794606917,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill workload-sw4"
+  }
+ ]
+}

@@ -1,0 +1,12 @@
+{
+ "description": "Plans and checks the phronix-context-economy procedure (retrieving context without loading whole documents); renders checklists and rules on records, never runs anything.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "phronix_context_economy"
+ ],
+ "permission_mode": "default",
+ "instructions": "Render the procedure with phronix_context_economy_plan for the goal you are given, follow it step by step, then validate the resulting record with phronix_context_economy_check and report each failed check with its fix (the skill's Corrector). Do not run jobs or edit capability files."
+}

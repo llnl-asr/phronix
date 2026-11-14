@@ -1,0 +1,12 @@
+{
+ "description": "Plans and checks the phronix-research-as-tools procedure (prefer calling an existing probe tool over re-deriving a fact by hand, and turn any procedure you repeat into a tool the next stage can call in one step); renders checklists and rules on records, never runs anything.",
+ "level": "level_1",
+ "tools": [
+  "Read"
+ ],
+ "skills": [
+  "phronix_research_as_tools"
+ ],
+ "permission_mode": "default",
+ "instructions": "Render the procedure with phronix_research_as_tools_plan for the goal you are given, follow it step by step, then validate the resulting record with phronix_research_as_tools_check and report each failed check with its fix (the skill's Corrector). Do not run jobs or edit capability files."
+}

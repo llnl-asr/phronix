@@ -1,0 +1,28 @@
+{
+ "name": "phronix_task_research",
+ "description": "Turn one task's open failure into a fix: read tracker.md (Open, Established, Ruled out) and the failed attempt's summary, diagnose the specific error, and write the fix (exact change, why this form, what must keep passing) into the task's ONE solution skill plus a lesson; validate with research_validate, layout_check and solution_check. Load for a revision pass after an attempt partly failed, on '400 ContextWindowExceededError' from reading the whole conversation, or when tries repeat what is ruled out.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_task_research_plan",
+  "phronix_task_research_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_task_research_plan"
+  ],
+  "validator": [
+   "phronix_task_research_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill phronix-task-research (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

@@ -1,0 +1,283 @@
+[
+ {
+  "tool": "software_rocm_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_rocm"
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_recipe",
+  "args": {
+   "section": "ddp_under_flux"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "ddp_under_flux",
+     "hip_tracing_build",
+     "init_order",
+     "jax_apu",
+     "mi300a_memory",
+     "observer_effect",
+     "rccl",
+     "rocm_tree_matching",
+     "torch_profiler",
+     "tuning_levers_mi300a_2026_08_05"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "DFTRACER_ENABLE_HIP_TRACING=ON pip install --no-binary dftracer dftracer"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "hip_tracing_needs_rocm_prefix": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "export ROCM_PATH=/opt/rocm-6.2.4\nexport CMAKE_PREFIX_PATH=$ROCM_PATH:$CMAKE_PREFIX_PATH\nDFTRACER_ENABLE_HIP_TRACING=ON pip install --no-binary dftracer dftracer"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "hip_tracing_needs_rocm_prefix": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "export NCCL_NET=libfabric"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_nccl_net_guess": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "export LD_LIBRARY_PATH=<aws-ofi-rccl>/lib:$LD_LIBRARY_PATH"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_nccl_net_guess": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "prof = torch.profiler.profile(schedule=torch.profiler.schedule(wait=2, warmup=1, active=5, repeat=2), on_trace_ready=trace_handler, record_shapes=True)"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "torch_profiler_single_window": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "prof = torch.profiler.profile(schedule=torch.profiler.schedule(wait=2, warmup=1, active=5, repeat=1), on_trace_ready=trace_handler, record_shapes=True)"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "torch_profiler_single_window": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "prof = torch.profiler.profile(on_trace_ready=trace_handler)"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "torch_profiler_record_shapes": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "prof = torch.profiler.profile(on_trace_ready=trace_handler, record_shapes=True, profile_memory=True)"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "torch_profiler_record_shapes": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "flux run -N 2 -n 8 --exclusive python train.py --backend rccl"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "rccl_working_env": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "module load rccl/working-env\nflux run -N 2 -n 8 --exclusive python train.py --backend rccl"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "rccl_working_env": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "module load rccl/working-env\nflux run -N 2 -n 8 --exclusive python train.py --backend rccl"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "rccl_plugin_on_ld_library_path": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "export LD_LIBRARY_PATH=<aws-ofi-rccl>/lib:$LD_LIBRARY_PATH\npython train.py --backend rccl"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "rccl_plugin_on_ld_library_path": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "flux run -N 1 -n 1 python train.py"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "flux_ddp_exclusive": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "flux run -N 1 -n 1 --exclusive python train.py"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "flux_ddp_exclusive": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "export HSA_ENABLE_INTERRUPT=0"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_hsa_interrupt_off": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "rocm-smi --setperflevel high"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_rocm_smi_perflevel": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_rocm_check",
+  "args": {
+   "commands": "module load rocm/6.2.4\nmodule load rccl/working-env\nexport ROCM_PATH=/opt/rocm-6.2.4\nexport HIP_PATH=$ROCM_PATH\nexport CMAKE_PREFIX_PATH=$ROCM_PATH:$CMAKE_PREFIX_PATH\nexport LD_LIBRARY_PATH=<aws-ofi-rccl>/lib:$LD_LIBRARY_PATH\nDFTRACER_ENABLE_HIP_TRACING=ON pip install --no-binary dftracer dftracer\nunset PMI_RANK PMI_SIZE PMI_FD PALS_APID PALS_APINFO PALS_NODEID PALS_RANKID PALS_SPOOL_DIR LDCS_RANKINFO\nflux run -N 1 -n 1 --exclusive python train.py --backend rccl"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

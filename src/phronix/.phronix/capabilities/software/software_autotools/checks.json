@@ -1,0 +1,170 @@
+[
+ {
+  "tool": "software_autotools_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "software_autotools"
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_recipe",
+  "args": {
+   "section": "annotated"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "annotated",
+     "build_install",
+     "configure",
+     "detect",
+     "lesson_tagging",
+     "switch_compiler"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "./configure --prefix=$PREFIX --with-dftracer=$DFT_PREFIX"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_with_dftracer_flag": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "PKG_CONFIG_PATH=$DFT_PREFIX/lib/pkgconfig ./configure --prefix=$PREFIX --disable-dependency-tracking"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_with_dftracer_flag": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "./configure --prefix=$PREFIX"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "disable_dependency_tracking": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "./configure --prefix=$PREFIX --disable-dependency-tracking"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "disable_dependency_tracking": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "./configure --disable-dependency-tracking"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "configure_has_prefix": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "./configure --prefix=$PREFIX --disable-dependency-tracking"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "configure_has_prefix": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "LDFLAGS=-L$DFT_PREFIX/lib ./configure --prefix=$PREFIX --disable-dependency-tracking"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "ldflags_rpath_with_dftracer_lib": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "LDFLAGS=\"-L$DFT_PREFIX/lib -Wl,-rpath,$DFT_PREFIX/lib\" ./configure --prefix=$PREFIX --disable-dependency-tracking"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "ldflags_rpath_with_dftracer_lib": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "software_autotools_check",
+  "args": {
+   "commands": "autoreconf -fi\nexport PKG_CONFIG_PATH=$DFT_PREFIX/lib/pkgconfig CPPFLAGS=-I$DFT_PREFIX/include\nexport LDFLAGS=\"-L$DFT_PREFIX/lib -Wl,-rpath,$DFT_PREFIX/lib\"\n./configure --prefix=$PREFIX --disable-dependency-tracking --with-mpi\nmake -j8\nmake install"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

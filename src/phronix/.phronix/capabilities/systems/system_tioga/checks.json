@@ -1,0 +1,336 @@
+[
+ {
+  "tool": "system_tioga_recipe",
+  "args": {},
+  "expect": {
+   "json": {
+    "status": "ok",
+    "capability": "system_tioga"
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_recipe",
+  "args": {
+   "section": "build"
+  },
+  "expect": {
+   "json": {
+    "status": "ok",
+    "sections": [
+     "build",
+     "carries_over_from_tuolumne",
+     "cores_per_rank",
+     "dftracer_service",
+     "filesystems",
+     "gpu_profiling",
+     "hardware",
+     "modules",
+     "papi",
+     "queues"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_recipe",
+  "args": {
+   "section": "no_such_section"
+  },
+  "expect": {
+   "contains": "unknown section"
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": ""
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux alloc -q pall -N4 -t 6h"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_pall_queue": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux alloc -q pdebug -N2 -t 6h"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_pall_queue": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "cmake -S . -B build -DCMAKE_HIP_ARCHITECTURES=gfx942"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_gfx942": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "cmake -S . -B build -DCMAKE_HIP_ARCHITECTURES=gfx90a"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_gfx942": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux alloc -q pdebug -N16 -t 6h"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "pdebug_max8": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux alloc -q pdebug -N2 -t 6h"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "pdebug_max8": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "cmake -S . -B build -DDFTRACER_BUILD_VARIORUM=AUTO"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_variorum_auto": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "cmake -S . -B build -DDFTRACER_BUILD_VARIORUM=ALWAYS"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_variorum_auto": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux run -N2 dftracer_service start"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "service_start_via_submit": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux submit -N2 --requires=host:$HOSTS dftracer_service start"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "service_start_via_submit": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux submit -N2 dftracer_service start"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "service_hosts_pinned": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux submit -N2 --requires=host:$HOSTS dftracer_service start"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "service_hosts_pinned": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "ln -sfn /p/lustre5/$USER/data ${SESSION}/dataset"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_lustre5": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "ln -sfn /p/lustre1/$USER/data ${SESSION}/dataset"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_lustre5": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "export DFTRACER_PAPI_EVENTS=PAPI_TOT_CYC,PAPI_L2_TCM"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "no_tuolumne_only_presets": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "export DFTRACER_PAPI_EVENTS=PAPI_TOT_CYC,PAPI_L2_DCM"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "no_tuolumne_only_presets": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux alloc -q pdebug -N2 -t 6h"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "queue_status_checked": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux queue status\nflux alloc -q pdebug -N2 -t 6h"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "queue_status_checked": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux queue status\nflux alloc -q pdebug -N2 -t 6h"
+  },
+  "expect": {
+   "json": {
+    "status": "fail",
+    "verdicts": {
+     "resource_list_checked": "fail"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux queue status\nflux resource list\nflux alloc -q pdebug -N2 -t 6h"
+  },
+  "expect": {
+   "json": {
+    "verdicts": {
+     "resource_list_checked": "pass"
+    }
+   }
+  }
+ },
+ {
+  "tool": "system_tioga_check",
+  "args": {
+   "commands": "flux queue list\nflux queue status\nflux resource list\nmodule load rocm/6.4.2 rocmcc/6.4.2-cce-20.0.0-magic cray-mpich/9.0.1 papi/7.2.0.2\ncmake -S . -B build -DCMAKE_HIP_ARCHITECTURES=gfx90a -DDFTRACER_BUILD_VARIORUM=ALWAYS\nexport DFTRACER_PAPI_EVENTS=PAPI_TOT_CYC,PAPI_TOT_INS,PAPI_L2_DCM\nflux alloc -q pdebug -N2 -t 6h\nflux submit -N2 --requires=host:$HOSTS dftracer_service start\nflux run -N2 --tasks-per-node=8 -c 7 --requires=host:$HOSTS ./app /p/lustre1/$USER/data\nflux run -N2 --requires=host:$HOSTS dftracer_service stop"
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ }
+]

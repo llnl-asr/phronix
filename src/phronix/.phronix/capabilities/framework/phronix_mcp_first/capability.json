@@ -1,0 +1,28 @@
+{
+ "name": "phronix_mcp_first",
+ "description": "Never hand-roll what an MCP tool already does; when an MCP tool fails, repair the tool so the next run succeeds instead of working around it with Bash. Load before any pipeline step that calls an MCP tool, and the moment one fails ('Unsupported build tool: unknown', 'Unknown build tool', 'dftracer pip install failed', any tool error), or when tempted to drive pip/git/cmake by hand for a job a tool covers.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "phronix_mcp_first_plan",
+  "phronix_mcp_first_check"
+ ],
+ "pvc": {
+  "predictor": [
+   "phronix_mcp_first_plan"
+  ],
+  "validator": [
+   "phronix_mcp_first_check"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "ts": 1794614400.0,
+   "by": "conversion",
+   "why": "converted from dftracer-agents skill mcp-first (process skill; predictor renders its procedure, validator checks its record)"
+  }
+ ]
+}

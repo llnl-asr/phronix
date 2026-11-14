@@ -1,0 +1,120 @@
+[
+ {
+  "tool": "phronix_capability_authoring_plan",
+  "args": {
+   "goal": "a tool that counts TODO markers in a source tree"
+  },
+  "expect": {
+   "contains": "\"id\": \"I1\""
+  }
+ },
+ {
+  "tool": "phronix_capability_authoring_plan",
+  "args": {
+   "goal": ""
+  },
+  "expect": {
+   "contains": "goal is required"
+  }
+ },
+ {
+  "tool": "phronix_capability_authoring_check",
+  "args": {
+   "record": {
+    "name": "count_todos",
+    "byte_identical": true,
+    "overlapping_tools": [],
+    "docstring": "Count TODO/FIXME markers under path, grouped by file. Use before a cleanup pass. Args: path. Returns {status, counts}.",
+    "error_examples": [
+     "{'status': 'error', 'error': 'x is not a directory'}"
+    ],
+    "hardcoded_paths": [],
+    "judgement_calls": [],
+    "silent_defaults": [],
+    "single_command_wrapper": false,
+    "layer": "project",
+    "restart_stated": true,
+    "verifier": "count_todos on a fixture tree with 3 markers"
+   }
+  },
+  "expect": {
+   "json": {
+    "status": "pass"
+   }
+  }
+ },
+ {
+  "tool": "phronix_capability_authoring_check",
+  "args": {
+   "record": {}
+  },
+  "expect": {
+   "json": {
+    "status": "inconclusive"
+   }
+  }
+ },
+ {
+  "tool": "phronix_capability_authoring_plan",
+  "args": {
+   "goal": "a tool that counts TODO markers in a source tree",
+   "facts": {
+    "judgement_needed": true
+   }
+  },
+  "expect": {
+   "contains": "write it as a skill instead"
+  }
+ },
+ {
+  "tool": "phronix_capability_authoring_plan",
+  "args": {
+   "goal": "a tool that counts TODO markers in a source tree",
+   "facts": {
+    "running_server": true
+   }
+  },
+  "expect": {
+   "contains": "not callable until the server restarts"
+  }
+ },
+ {
+  "tool": "phronix_capability_authoring_check",
+  "args": {
+   "record": {
+    "name": "run_ls",
+    "byte_identical": true,
+    "overlapping_tools": [],
+    "docstring": "Runs ls.",
+    "error_examples": [
+     "failed"
+    ],
+    "hardcoded_paths": [],
+    "judgement_calls": [],
+    "silent_defaults": [],
+    "single_command_wrapper": true,
+    "layer": "bundled",
+    "restart_stated": false,
+    "verifier": ""
+   }
+  },
+  "expect": {
+   "contains": "never a bare 'failed'"
+  }
+ },
+ {
+  "tool": "phronix_capability_authoring_check",
+  "args": {
+   "record": {
+    "name": "pick",
+    "byte_identical": false,
+    "overlapping_tools": [
+     "choose_fix"
+    ]
+   }
+  },
+  "expect": {
+   "contains": "it is a skill, not a capability"
+  }
+ }
+]
