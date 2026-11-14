@@ -84,8 +84,50 @@ def _counts(repo: Path, a: str, b: str) -> Tuple[int, int]:
 
 
 def _scopes(only: Optional[str] = None) -> List[Scope]:
-    """The upstream scopes, or the one named ``only``."""
-    return [s for s in _cfg.S.upstream if not only or s.project == only]
+    """The upstream scopes, or the one named ``only``; naming this project gives its own scope (its own checkout is
+    pulled and pushed the same way)."""
+    out = [s for s in _cfg.S.upstream if not only or s.project == only]
+    me = _cfg.S.scope
+    if only and only == _cfg.S.project and me is not None and _cfg.S.project_root is not None:
+        out.append(me)
+    return out
+
+
+def _is_self(scope: Scope) -> bool:
+    return _cfg.S.scope is not None and scope is _cfg.S.scope
+
+
+def _repo(scope: Scope) -> Optional[Path]:
+    """The checkout of a scope: an upstream's clone, or this project's own checkout."""
+    if _is_self(scope):
+        return repo_of(_cfg.S.project_root) if _cfg.S.project_root is not None else None
+    return repo_of(scope.cap_dir)
+
+
+def _own_dir(scope: Scope) -> Path:
+    """What an agent changes in this project's own checkout: its .agents directory (capabilities, skills, decisions)."""
+    return scope.cap_dir.parent if scope.cap_dir.parent.name == ".agents" else scope.cap_dir
+
+
+def commit_own(message: str = "") -> Dict:
+    """Commit what the agents changed in this project's own capabilities and skills (lessons, worked entries, new
+    versions), on its integration branch, as one local commit, so Pull latest and Push carry it like an upstream
+    contribution. Code changes are never committed here."""
+    me = _cfg.S.scope
+    repo = _repo(me) if me is not None else None
+    if repo is None:
+        return {}
+    rel = os.path.relpath(_own_dir(me).resolve(), repo.resolve())
+    changed = [l[3:] for l in _git(repo, "status", "--porcelain", "--", rel).stdout.splitlines() if l.strip()]
+    if not changed:
+        return {}
+    on, want = _git(repo, "branch", "--show-current").stdout.strip(), integration_branch(repo, me)
+    if on != want:
+        return {"files": len(changed), "commit": "", "note": f"not committed: the checkout is on {on or 'a detached HEAD'}, not {want}"}
+    _git(repo, "add", "-A", "--", rel, check=True)
+    _git(repo, "commit", "-q", "--no-verify", "-m",
+         message or f"{_cfg.S.project}: lessons, worked entries and capability updates", "--", rel, check=True)
+    return {"files": len(changed), "commit": _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()}
 
 
 # ------------------------------------------------------------------------------- writing a contribution
@@ -305,8 +347,10 @@ def _pull_repo(repo: Path, branch: str, upstream_name: str, resolve: bool, fetch
     if _git(repo, "rev-parse", "--verify", "-q", remote).returncode:
         out.update(status="no_remote_branch", note=f"no {remote}")
         return out
-    if _git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
-        out.update(status="dirty", note="uncommitted changes in the clone: commit or discard them first")
+    dirty = _git(repo, "status", "--porcelain", "--untracked-files=no").stdout.splitlines()
+    if dirty:
+        out.update(status="dirty", note="uncommitted changes in the checkout (commit or discard them first): "
+                   + ", ".join(l[3:] for l in dirty[:5]) + (" ..." if len(dirty) > 5 else ""))
         return out
     local, behind = _counts(repo, "HEAD", remote)
     out.update(local_commits=local, behind=behind)
@@ -330,14 +374,17 @@ def update(pull: bool = True, resolve: bool = True, only: Optional[str] = None) 
     ``rebase_resolved``, ``rebase_merged_by_agent``, ``conflicts`` and ``contribution``."""
     rep: Dict = {"project": _cfg.S.project, "upstream": []}
     for sc in _scopes(only):
-        repo = repo_of(sc.cap_dir)
+        repo = _repo(sc)
         if repo is None:
             rep["upstream"].append({"project": sc.project, "note": "installed from a package, not a clone"})
             continue
+        committed = commit_own() if _is_self(sc) else {}
         r = _pull_repo(repo, integration_branch(repo, sc), sc.project, resolve, fetch=pull)
         item: Dict = {"project": sc.project, "rebase": r.pop("status", None)}
         for k, v in r.items():
             item[f"rebase_{k}" if k in ("resolved", "merged_by_agent", "error") else k] = v
+        if committed:
+            item["committed"] = committed
         item["contribution"] = _contribution(repo, sc)
         rep["upstream"].append(item)
     return rep
@@ -350,8 +397,9 @@ def rebase(scope: Scope, resolve: bool = True) -> Dict:
 
 
 def pull(project: str, resolve: bool = True) -> Dict:
-    """Pull latest for one repository: this project's own checkout (fast-forward only) or an upstream clone."""
-    if project == _cfg.S.project:
+    """Pull latest for one repository, this project's own checkout or an upstream clone: its local commits (for this
+    project, the agents' capability changes first committed) replayed on origin/<branch>, conflicts merged."""
+    if project == _cfg.S.project and not _scopes(project):
         own = repo_of(_cfg.S.project_root) if _cfg.S.project_root else None
         return {"project": project, "repo": _ff(own) if own else {"note": "not a git checkout"}}
     if not _scopes(project):
@@ -423,7 +471,7 @@ def switch_to_branch(project: str, force: bool = False) -> Dict:
     sc = _scopes(project)
     if not sc:
         return {"project": project, "error": f"no upstream {project}"}
-    repo = repo_of(sc[0].cap_dir)
+    repo = _repo(sc[0])
     if repo is None:
         return {"project": project, "error": "installed from a package, not a clone"}
     branch = integration_branch(repo, sc[0])
@@ -485,7 +533,7 @@ def refresh(only: Optional[str] = None) -> Dict:
     push, open the pull request, nothing). Changes nothing else."""
     rep: Dict = {"project": _cfg.S.project, "upstream": []}
     for sc in _scopes(only):
-        repo = repo_of(sc.cap_dir)
+        repo = _repo(sc)
         item: Dict = {"project": sc.project}
         if repo is None:
             item["note"] = "installed from a package, not a clone"
@@ -520,14 +568,15 @@ def repos(fetch: bool = False) -> Dict:
     clone (its branch, whether that is its integration branch, behind origin, local contribution commits, their push
     state and pull-request link). ``fetch`` asks the remotes first; otherwise it only reads."""
     rows: List[Dict] = []
+    me = _cfg.S.scope
     own = repo_of(_cfg.S.project_root) if _cfg.S.project_root else None
-    if own is not None:
+    if own is not None and me is None:
         if fetch:
             _git(own, "fetch", "-q", "--prune", "origin")
         rows.append({"project": _cfg.S.project, "role": "this project", "actions": ["pull"], **_checkout_info(own)})
-    for sc in _cfg.S.upstream:
-        repo = repo_of(sc.cap_dir)
-        row: Dict = {"project": sc.project, "role": "upstream"}
+    for sc in ([me] if own is not None and me is not None else []) + list(_cfg.S.upstream):
+        repo = _repo(sc)
+        row: Dict = {"project": sc.project, "role": "this project" if _is_self(sc) else "upstream"}
         if repo is None:
             row.update(note="installed from a package, not a clone", actions=[])
             rows.append(row)
@@ -539,6 +588,9 @@ def repos(fetch: bool = False) -> Dict:
         row.update(contribution=c, integration_branch=c["branch"], on_integration_branch=row["branch"] == c["branch"])
         if c.get("pull_request"):
             row["pull_request"] = c["pull_request"]
+        if _is_self(sc):                        # the agents' changes not yet committed (Pull latest / Push commit them)
+            rel = os.path.relpath(_own_dir(sc).resolve(), repo.resolve())
+            row["pending_changes"] = len([l for l in _git(repo, "status", "--porcelain", "--", rel).stdout.splitlines() if l.strip()])
         row["actions"] = ["pull", "push"] + (["switch"] if not row["on_integration_branch"] or c.get("can_switch") else [])
         rows.append(row)
     return {"project": _cfg.S.project, "repos": rows}
