@@ -344,3 +344,29 @@ def close(qid: str, what: str) -> Dict[str, Any]:
     q.update(status="answered", done=what)
     _qsave(qs)
     return {"status": "ok", "id": qid}
+
+
+# ---------------------------------------------------------------- the background consolidation runs (phronix.engine.background)
+def fingerprint(rep: Dict[str, Any], part: str) -> str:
+    """Identity of the work open in one part: its groups and, for lessons, the answers the user wrote for the agent. A
+    background consolidation run starts only when this changes (or when forced)."""
+    import hashlib
+    ids = sorted(",".join(sorted(g["ids"])) for g in rep.get(part) or [])
+    if part == "lessons":
+        ids += sorted(q["id"] for q in questions("for_agent"))
+    return hashlib.sha1("|".join(ids).encode()).hexdigest()[:12] if ids else ""
+
+
+ASK = {
+    "lessons": ("Consolidate the lessons. First call consolidation_answers: act on each answer the user wrote, then "
+                "consolidation_close it. Then call consolidation_report and read every member of each lessons group in full "
+                "with lesson_get. For overlapping lessons, propose one merged lesson with lesson_merge. Lessons that "
+                "contradict each other, or that you cannot settle alone: do not pick one yourself - call consolidation_ask "
+                "with one plain question, 2-4 concrete options (keep, supersede, merge, drop) and the one you recommend "
+                "with its evidence, so the user can answer it in the Lessons panel. Every conflict group must end as a "
+                "question, a merge or a keep, never only in your report. A group that is different on purpose: consolidation_keep."),
+    "capabilities": ("Consolidate the capabilities. Call consolidation_report and read the capabilities groups, then each "
+                     "capability with capability_get. For an overlap, propose moving what is shared to the better home "
+                     "with capability_update; never disable one. Conflicting rules: do not pick one; list them in your "
+                     "report for the user. A group that is different on purpose: consolidation_keep."),
+}

@@ -1,0 +1,8 @@
+[
+ {"tool": "exploration_complete", "args": {"goal": "build x", "verification": ""}, "expect": {"contains": "verification"}},
+ {"tool": "exploration_list", "args": {}, "expect": {"json": {"status": "ok"}}},
+ {"tool": "exploration_mark", "args": {"ids": ["nope"], "outcome": "maybe"}, "expect": {"contains": "outcome must be"}},
+ {"tool": "exploration_validate", "args": {}, "expect": {"contains": "\"status\""}},
+ {"tool": "slow_steps", "args": {}, "expect": {"json": {"status": "ok", "slow": []}}},
+ {"tool": "slow_step_mark", "args": {"tool": "t", "outcome": "inherent"}, "expect": {"contains": "say why"}}
+]
