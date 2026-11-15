@@ -290,6 +290,35 @@ python -m phronix.engine update --bootstrap <the project's configure hook>
 fast-forwards the clones, rebases each contribution branch on its upstream, and
 prints the push command and the pull-request link.
 
+## The background learner
+
+Whatever the agent works out by hand becomes a capability. Hooks
+(`phronix.engine.explore_hook`) record every manual call in the foreground — a
+shell command, a Python script, a read, an edit — per chat, across turns and
+sub-agents, and queue it at its success point (the agent calls
+`exploration_complete`, or the turn ends with the last steps passing). Every
+foreground turn is queued too: what the user said there is learning as well.
+
+Two background agents (`phronix.engine.background`) work through that:
+
+* the **learner** claims a batch of the queue and turns each record into a new or
+  updated capability or a lesson, then closes it with `exploration_mark`; it also
+  reviews tools whose calls are slow and makes their capabilities parallelize;
+* **consolidation** runs when `phronix.engine.consolidate.report` finds new overlap
+  or conflict among lessons or capabilities, and merges them.
+
+By default they are automatic: what passes its checks is applied, the store is
+kept consistent (one copy of each fact, no contradicting rules), and the user is
+asked only what the evidence cannot decide. `PHRONIX_LEARN_APPROVAL=review`
+(`<PREFIX>_LEARN_APPROVAL` in a project) makes everything wait for approval.
+
+A plain install runs them itself: `phronix sync hooks` installs the recorder,
+whose Stop hook starts `phronix-learner kick` (headless Claude Code) when work is
+due, at most every `PHRONIX_LEARN_S` seconds. `phronix-learner status` shows the
+queue and the runs; `PHRONIX_LEARNER=0` leaves the hooks out. A project with a
+web UI (moirai-agents, rabbit-agent) renders the same hooks with its own
+bootstrap and starts the runs from its server; only the panels are its own.
+
 ## Four harnesses, one definition
 
 Agents are defined once, as harness-neutral YAML, and rendered into each
@@ -349,6 +378,7 @@ phronix privacy  scan|redact|suspects
 phronix capability list|new
 phronix contribute --list    # what could be promoted into the bundled layer
 phronix serve                # run the MCP server
+phronix-learner status|kick  # the background learner and consolidation
 ```
 
 Each also exists as its own console script (`phronix-install-skills`,

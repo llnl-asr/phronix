@@ -2840,15 +2840,25 @@ def test_linking_is_harness_setup_and_idempotent(tmp_path):
     assert link_harness(tree, harness="nope")["status"] == "unknown-harness"
 
 
-def test_agents_are_staged_where_opencode_will_look(tmp_path):
+def test_agents_are_staged_where_opencode_will_look(tmp_path, monkeypatch):
     """opencode resolves --agent against the directory it was pointed at.
 
     That is the task's checkout, not the phronix project, so the rendered
     definitions were invisible and a stale home copy answered instead.
     """
+    import functools
     from pathlib import Path
 
+    import phronix.agents as agents
     from tests.benchmark.arms import OpenCodeArm
+
+    # The project's .opencode is rendered output (gitignored): a fresh checkout
+    # has none until `phronix sync agents` runs. Render it here, so the test does
+    # not depend on what the developer's tree happens to hold.
+    project = tmp_path / "project"
+    agents.sync_agents(target_root=project)
+    monkeypatch.setattr(agents, "link_harness",
+                        functools.partial(agents.link_harness, source_root=project))
 
     checkout = tmp_path / "repo"
     (checkout / ".git" / "info").mkdir(parents=True)

@@ -1,0 +1,31 @@
+{
+ "name": "phronix_exploration",
+ "description": "Foreground -> background learning: everything the agent does by hand (Bash, Python scripts, reads, edits) and every foreground turn is recorded and queued for the background learner, which turns it into capabilities and lessons. Load to mark the success point of a manual exploration (exploration_complete), or when you are the background learner working through the queue.",
+ "version": 1,
+ "enabled": true,
+ "stages": [],
+ "tools": [
+  "exploration_complete",
+  "exploration_list",
+  "exploration_mark",
+  "exploration_validate",
+  "slow_steps",
+  "slow_step_mark"
+ ],
+ "pvc": {
+  "predictor": [
+   "exploration_mark"
+  ],
+  "validator": [
+   "exploration_validate"
+  ]
+ },
+ "topic": "framework",
+ "history": [
+  {
+   "version": 1,
+   "by": "phronix",
+   "why": "moved from rabbit-agent (explore.py, capability forge) and moirai-agents (background learner) into phronix, so every project built on the engine sends its foreground work to one background learner"
+  }
+ ]
+}

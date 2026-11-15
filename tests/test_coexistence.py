@@ -69,9 +69,15 @@ def test_sync_writes_every_script_it_advertises(tmp_path: Path) -> None:
     installing only the first -- so every Edit was gated on a file that was
     never created.
     """
+    import importlib.util
     hooks.sync_claude_hooks(tmp_path)
     for command in _commands(tmp_path):
-        script = tmp_path / command.split()[-1]
+        argv = command.split()
+        if "-m" in argv:                       # a module (the learner's recorder): it must be importable
+            mod = argv[argv.index("-m") + 1]
+            assert importlib.util.find_spec(mod), f"advertised but not importable: {command}"
+            continue
+        script = tmp_path / argv[-1]
         assert script.is_file(), f"advertised but not installed: {command}"
 
 

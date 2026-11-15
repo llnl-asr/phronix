@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # Namespaced, not the generic "inject_context.py": a project may already run
 # another framework whose hook has the obvious name. Sharing the filename
@@ -290,6 +290,55 @@ def _is_ours(entry: Any) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# The background learner: what the agent does in the foreground -> capabilities
+# ---------------------------------------------------------------------------
+LEARNER_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop")
+
+
+def _explore_cmds(entry: Any) -> List[str]:
+    if not isinstance(entry, dict):
+        return []
+    return [str(h.get("command", "")) for h in entry.get("hooks", []) if isinstance(h, dict)
+            and "phronix.engine.explore_hook" in str(h.get("command", ""))]
+
+
+def _is_our_learner(entry: Any) -> bool:
+    """A standalone recorder entry phronix rendered (a project's own carries --bootstrap)."""
+    cmds = _explore_cmds(entry)
+    return bool(cmds) and not any("--bootstrap" in c for c in cmds)
+
+
+def render_learner_hooks() -> Dict[str, list]:
+    """The recorder hooks of a standalone install: every manual call and turn is queued, and the main agent's Stop
+    starts the background learner and consolidation (phronix.engine.background) when they are due. Run with the
+    python phronix is installed in."""
+    import sys
+    from phronix.engine.explore_hook import settings
+    return settings([sys.executable], "", guard=False, kick=True)
+
+
+def _sync_learner_hooks(hooks: Dict[str, Any]) -> bool:
+    """Merge the standalone learner hooks; True when they were already current. A project that manages its own
+    learner (its entries carry --bootstrap, e.g. moirai-agents or rabbit-agent, whose web UI runs the background
+    agents) keeps its hooks and gets none of ours. PHRONIX_LEARNER=0 removes ours."""
+    import os
+    managed = any(_explore_cmds(e) and not _is_our_learner(e) for ev in LEARNER_EVENTS for e in hooks.get(ev) or [])
+    want = {} if managed or os.environ.get("PHRONIX_LEARNER", "1") == "0" else render_learner_hooks()
+    current = True
+    for ev in LEARNER_EVENTS:
+        existing = hooks.get(ev) or []
+        kept = [e for e in existing if not _is_our_learner(e)]
+        new = kept + want.get(ev, [])
+        if new != existing:
+            current = False
+            if new:
+                hooks[ev] = new
+            else:
+                hooks.pop(ev, None)
+    return current
+
+
 def sync_claude_hooks(root: Path) -> str:
     """Merge the UserPromptSubmit hook into settings.json, preserving other hooks.
 
@@ -326,7 +375,8 @@ def sync_claude_hooks(root: Path) -> str:
     existing = hooks.get("UserPromptSubmit") or []
     ours = [e for e in existing if _is_ours(e)]
     others = [e for e in existing if not _is_ours(e)]
-    if ours == [entry] and existing == others + ours:
+    learner_current = _sync_learner_hooks(hooks)
+    if ours == [entry] and existing == others + ours and learner_current:
         return script_status
 
     hooks["UserPromptSubmit"] = others + [entry]
