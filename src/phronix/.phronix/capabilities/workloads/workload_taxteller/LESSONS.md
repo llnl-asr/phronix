@@ -12,3 +12,5 @@
 
 
 - [L-fc0a1c65] Taxteller moirai smoke rerun 319376 was cancelled by the agent after 5 min (RUNNING 00:05:19 on mammoth30): SEQSCREEN x2 exit 1 (enable-podman race, session overlay now sets SEQSCREEN maxForks = 1) and zero hook activities in the trace (venv python symlink hop /usr/tce/packages/python/python-3.12.2 not bound into the containers). Before the next 4 h pbatch submission: builder fix for tools_nextflow_annotate applied, annotation re-applied and validated, job script binds the whole python chain, and ask the user first. After submit, verify within ~10 min that the trace has FASTP/MINIMAP_A activity records.
+
+- [L-3800e8ce] The background waiter loop (230 x 30 s, about 2 h) can end while a pbatch job is still PENDING: taxteller moirai smoke 319409 submitted about 19:35 was still PENDING (Resources) at 21:26 on mammoth. When the waiter returns with the job PENDING, say so and re-arm it; do not read the exit code 1 as a job failure. Check with sacct -j <id> (State) before reporting.
